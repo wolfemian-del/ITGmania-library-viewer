@@ -120,9 +120,8 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
             "Lifts": radar[12] if len(radar) > 12 else "",
             **{name: number(score.get("tap_" + name)) if score else "" for name in TAP_FIELDS},
             "Max combo": number(score.get("MaxCombo")) if score else "",
-            **{name: tech[i] if i < len(tech) and tech[i] >= 0 else "" for i, name in
-               zip(("Crossovers", "HalfCrossovers", "FullCrossovers", "Footswitches", "UpFootswitches",
-                    "DownFootswitches", "Sideswitches", "Jacks", "Brackets", "Doublesteps"), range(10))},
+            **{name: tech[i] if i < len(tech) and tech[i] >= 0 else ""
+               for i, name in enumerate(TECH_FIELDS)},
         })
     return rows
 
