@@ -193,6 +193,30 @@ class LibraryApp:
                         font=("Segoe UI Semibold", 9))
         style.map("Treeview", background=[("selected", "#285c74")], foreground=[("selected", "white")])
         style.configure("TCombobox", fieldbackground="#202b38", background="#202b38", foreground="#ecf3f9")
+        style.map(
+            "TCombobox",
+            fieldbackground=[
+                ("readonly", "focus", "#202b38"),
+                ("readonly", "pressed", "#202b38"),
+                ("readonly", "#202b38"),
+                ("focus", "#202b38"),
+                ("pressed", "#202b38"),
+                ("active", "#202b38"),
+            ],
+            foreground=[
+                ("disabled", "#8794a3"),
+                ("readonly", "focus", "#ecf3f9"),
+                ("readonly", "pressed", "#ecf3f9"),
+                ("readonly", "#ecf3f9"),
+                ("focus", "#ecf3f9"),
+                ("pressed", "#ecf3f9"),
+                ("active", "#ecf3f9"),
+            ],
+            selectbackground=[("readonly", "#287c78"), ("focus", "#287c78")],
+            selectforeground=[("readonly", "#ffffff"), ("focus", "#ffffff")],
+            background=[("pressed", "#202b38"), ("active", "#202b38")],
+            arrowcolor=[("disabled", "#8794a3"), ("!disabled", "#ecf3f9")],
+        )
         style.configure("Horizontal.TProgressbar", troughcolor="#222d3b", background="#4fc3b0")
         self.root.option_add("*TCombobox*Listbox.background", "#202b38")
         self.root.option_add("*TCombobox*Listbox.foreground", "#ecf3f9")
