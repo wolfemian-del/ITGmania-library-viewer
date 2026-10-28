@@ -21,6 +21,7 @@ The app starts with the usual Windows ITGmania cache location filled in when it 
 - Use **View → Columns** to show or hide columns by category; **View → Reset column layout** restores the defaults.
 - Scroll horizontally for the full set of score, radar, and ITGmania tech-count columns.
 - **Export CSV** writes the full library (not just the filtered rows) for use in other tools.
+- Select charts with Ctrl/Shift-click and choose **Build course…** to create an ordered course queue. You can add more charts, remove entries, reorder them, and save a new `.CRS` file.
 
 The table includes chart meter, peak NPS, radar note counts, the player's highest `PercentDP` score for the chart, grade, play count, last played date, best-score tap judgments and combo, and cached tech counts. `Stats.xml` scores are matched to cached charts by song directory, steps type, and difficulty.
 

@@ -111,7 +111,7 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
         display_name = tags.get("CHARTNAME") or tags.get("DESCRIPTION", "")
         rows.append({
             "Title": song_tags.get("TITLE", path.stem), "Artist": song_tags.get("ARTIST", ""),
-            "Pack": pack, "Type": chart_type, "Difficulty": difficulty,
+            "Pack": pack, "Type": chart_type, "Difficulty": difficulty, "Course path": song_dir,
             "Meter": number(tags.get("METER")), "Chart": display_name,
             "Score": number(score.get("Score")) if score else "",
             "Grade": GRADE_NAMES.get(score.get("Grade", ""), score.get("Grade", "")),
@@ -251,9 +251,10 @@ class LibraryApp:
                        font=("Segoe UI", 9)).pack(side="left", padx=9)
         self._button(bar, "Load / refresh", self.load_data, primary=True).pack(side="left", padx=4)
         self._button(bar, "Export CSV", self.export_csv).pack(side="left", padx=4)
+        self._button(bar, "Build course…", self.open_course_builder).pack(side="left", padx=4)
         frame = tk.Frame(self.root, bg="#10151d")
         frame.pack(fill="both", expand=True, padx=18, pady=(0, 8))
-        self.tree = ttk.Treeview(frame, columns=HEADERS, show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(frame, columns=HEADERS, show="headings", selectmode="extended")
         for col in HEADERS:
             self.tree.heading(col, text=col, command=lambda c=col: self.sort_by(c))
             width = 130 if col in ("Title", "Artist", "Pack") else 92
@@ -577,6 +578,7 @@ class LibraryApp:
         else:
             visible.sort(key=lambda r: str(r[self.sort_col]).casefold(), reverse=self.sort_reverse)
         self.tree.delete(*self.tree.get_children())
+        self.tree_item_rows = {}
         self._insert_batch(visible, 0, generation)
         self.count_label.set(f"{len(visible):,} charts shown · {len(self.rows):,} total")
 
@@ -591,7 +593,8 @@ class LibraryApp:
                 if isinstance(value, float):
                     value = f"{value:g}"
                 values.append(value)
-            self.tree.insert("", "end", values=values)
+            item = self.tree.insert("", "end", values=values)
+            self.tree_item_rows[item] = row
         if stop < len(rows):
             self.root.after(1, lambda: self._insert_batch(rows, stop, generation))
 
@@ -616,6 +619,167 @@ class LibraryApp:
             writer.writeheader()
             writer.writerows(self.rows)
         self.status.set(f"Exported {len(self.rows):,} charts to {path}")
+
+    def open_course_builder(self):
+        if getattr(self, "course_window", None) is not None and self.course_window.winfo_exists():
+            self.course_window.lift()
+            return
+
+        window = tk.Toplevel(self.root)
+        self.course_window = window
+        window.title("Build a course")
+        window.geometry("900x620")
+        window.minsize(700, 440)
+        window.configure(bg="#10151d")
+        window.transient(self.root)
+        self.course_entries: list[dict] = []
+
+        tk.Label(window, text="Build a new course", fg="#f2f6fa", bg="#10151d",
+                 font=("Segoe UI Semibold", 17)).pack(anchor="w", padx=18, pady=(16, 2))
+        tk.Label(window, text="Select charts in the library, then add them here and arrange the course order.",
+                 fg="#9eacbb", bg="#10151d", font=("Segoe UI", 9)).pack(anchor="w", padx=18, pady=(0, 12))
+
+        title_row = tk.Frame(window, bg="#10151d", padx=18)
+        title_row.pack(fill="x", pady=(0, 10))
+        tk.Label(title_row, text="Course title", width=13, anchor="w", fg="#bdc9d5", bg="#10151d",
+                 font=("Segoe UI", 9)).pack(side="left")
+        self.course_title_var = tk.StringVar()
+        tk.Entry(title_row, textvariable=self.course_title_var, bg="#202b38", fg="#ecf3f9",
+                 insertbackground="white", relief="flat", font=("Segoe UI", 10),
+                 highlightthickness=1, highlightbackground="#2c3948", highlightcolor="#4fc3b0").pack(
+                     side="left", fill="x", expand=True)
+
+        queue_frame = tk.Frame(window, bg="#10151d")
+        queue_frame.pack(fill="both", expand=True, padx=18)
+        columns = ("Pack", "Title", "Type", "Difficulty", "Meter")
+        self.course_tree = ttk.Treeview(queue_frame, columns=columns, show="headings", selectmode="extended")
+        widths = {"Pack": 180, "Title": 300, "Type": 130, "Difficulty": 120, "Meter": 80}
+        for column in columns:
+            self.course_tree.heading(column, text=column)
+            self.course_tree.column(column, width=widths[column], minwidth=65, stretch=column == "Title",
+                                    anchor="w" if column in ("Pack", "Title") else "center")
+        queue_scroll = ttk.Scrollbar(queue_frame, orient="vertical", command=self.course_tree.yview)
+        self.course_tree.configure(yscrollcommand=queue_scroll.set)
+        self.course_tree.grid(row=0, column=0, sticky="nsew")
+        queue_scroll.grid(row=0, column=1, sticky="ns")
+        queue_frame.grid_rowconfigure(0, weight=1)
+        queue_frame.grid_columnconfigure(0, weight=1)
+
+        controls = tk.Frame(window, bg="#10151d", padx=18, pady=12)
+        controls.pack(fill="x")
+        self._button(controls, "Add selected charts", self.add_selected_to_course, primary=True).pack(side="left")
+        self._button(controls, "Remove", self.remove_course_entries).pack(side="left", padx=(8, 0))
+        self._button(controls, "Move up", lambda: self.move_course_entry(-1)).pack(side="left", padx=(8, 0))
+        self._button(controls, "Move down", lambda: self.move_course_entry(1)).pack(side="left", padx=(8, 0))
+        self.course_count_var = tk.StringVar(value="0 charts")
+        tk.Label(controls, textvariable=self.course_count_var, fg="#9eacbb", bg="#10151d",
+                 font=("Segoe UI", 9)).pack(side="left", padx=12)
+        self._button(controls, "Save new .CRS…", self.export_course, primary=True).pack(side="right")
+
+        self.add_selected_to_course()
+
+    def add_selected_to_course(self):
+        if not getattr(self, "course_entries", None):
+            self.course_entries = []
+        added = 0
+        for item in self.tree.selection():
+            row = getattr(self, "tree_item_rows", {}).get(item)
+            if row is not None:
+                self.course_entries.append(row)
+                added += 1
+        if added:
+            self.refresh_course_queue()
+
+    def refresh_course_queue(self, selected_indices=None):
+        self.course_tree.delete(*self.course_tree.get_children())
+        for index, row in enumerate(self.course_entries):
+            self.course_tree.insert("", "end", iid=str(index), values=(
+                row.get("Pack", ""), row.get("Title", ""), row.get("Type", ""),
+                row.get("Difficulty", ""), row.get("Meter", ""),
+            ))
+        self.course_count_var.set(f"{len(self.course_entries)} charts")
+        selected_indices = selected_indices or []
+        valid = [index for index in selected_indices if 0 <= index < len(self.course_entries)]
+        if valid:
+            self.course_tree.selection_set(*(str(index) for index in valid))
+            self.course_tree.focus(str(valid[0]))
+            self.course_tree.see(str(valid[0]))
+
+    def remove_course_entries(self):
+        indices = sorted((int(item) for item in self.course_tree.selection()), reverse=True)
+        for index in indices:
+            del self.course_entries[index]
+        self.refresh_course_queue()
+
+    def move_course_entry(self, direction):
+        moving = {int(item) for item in self.course_tree.selection()}
+        if direction < 0:
+            for index in sorted(moving):
+                if index > 0 and index - 1 not in moving:
+                    self.course_entries[index - 1], self.course_entries[index] = (
+                        self.course_entries[index], self.course_entries[index - 1])
+                    moving.remove(index)
+                    moving.add(index - 1)
+        else:
+            for index in sorted(moving, reverse=True):
+                if index + 1 < len(self.course_entries) and index + 1 not in moving:
+                    self.course_entries[index + 1], self.course_entries[index] = (
+                        self.course_entries[index], self.course_entries[index + 1])
+                    moving.remove(index)
+                    moving.add(index + 1)
+        self.refresh_course_queue(sorted(moving))
+
+    def export_course(self):
+        title = self.course_title_var.get().strip()
+        if not title:
+            messagebox.showerror("Course title required", "Enter a title for this course.", parent=self.course_window)
+            return
+        if not self.course_entries:
+            messagebox.showerror("No charts added", "Add at least one chart to the course.", parent=self.course_window)
+            return
+        if any(not row.get("Course path") or not row.get("Difficulty") for row in self.course_entries):
+            messagebox.showerror("Missing chart data", "One or more selected charts are missing a song path or difficulty.",
+                                 parent=self.course_window)
+            return
+        text_fields = [title] + [row["Course path"] for row in self.course_entries]
+        if any(any(char in value for char in (";", ":", "\r", "\n")) for value in text_fields):
+            messagebox.showerror(
+                "Unsupported course text",
+                "Course titles and song paths cannot contain semicolons, colons, or newlines.",
+                parent=self.course_window,
+            )
+            return
+
+        types = sorted({row.get("Type", "") for row in self.course_entries if row.get("Type")})
+        if len(types) > 1:
+            description = (
+                "This course contains multiple chart types:\n\n" + "\n".join(types) +
+                "\n\nA .CRS entry stores the song and difficulty, not its specific chart type. "
+                "ITGmania may resolve an entry to a different chart type when the course is played.\n\n"
+                "Save the course anyway?"
+            )
+            if not messagebox.askyesno("Mixed chart types", description, parent=self.course_window):
+                return
+
+        safe_name = re.sub(r'[<>:"/\\|?*]+', "_", title).strip(" .") or "Course"
+        path = filedialog.asksaveasfilename(
+            parent=self.course_window, title="Save new course", defaultextension=".crs",
+            filetypes=[("ITGmania course files", "*.crs")], initialfile=safe_name + ".crs",
+            confirmoverwrite=True,
+        )
+        if not path:
+            return
+        lines = [f"#COURSE:{title};"]
+        lines.extend(f"#SONG:{row['Course path']}:{row['Difficulty']}:;" for row in self.course_entries)
+        try:
+            with open(path, "w", encoding="utf-8", newline="") as handle:
+                handle.write("\n".join(lines) + "\n")
+        except OSError as exc:
+            messagebox.showerror("Could not save course", str(exc), parent=self.course_window)
+            return
+        self.status.set(f"Saved course with {len(self.course_entries)} charts to {path}")
+        messagebox.showinfo("Course saved", f"Saved {title} with {len(self.course_entries)} charts.\n\n{path}",
+                            parent=self.course_window)
 
 
 def main():
