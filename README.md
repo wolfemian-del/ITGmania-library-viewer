@@ -27,3 +27,5 @@ The table includes chart meter, peak NPS, radar note counts, the player's highes
 ## Data paths
 
 The cache folder is commonly `%APPDATA%\ITGmania\Cache\Songs`. `Stats.xml` lives inside a player profile's save folder. The app does not edit either source.
+
+The app remembers the selected data paths, column order, visibility, and widths in `%APPDATA%\ITGmania Library Visualizer\settings.json` on Windows. On other platforms it uses the standard per-user configuration directory.

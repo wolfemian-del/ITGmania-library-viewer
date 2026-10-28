@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import re
+import sys
 import threading
 import tkinter as tk
 import xml.etree.ElementTree as ET
@@ -134,15 +136,43 @@ class LibraryApp:
         self.root.minsize(900, 550)
         self.root.configure(bg="#10151d")
         self.rows: list[dict] = []
-        self.cache_var = tk.StringVar(value=str(Path(os.getenv("APPDATA", "")) / "ITGmania" / "Cache" / "Songs"))
-        self.stats_var = tk.StringVar(value=str(Path.cwd() / "Stats.xml" if (Path.cwd() / "Stats.xml").exists() else ""))
+        self.settings_path = self._settings_file_path()
+        self.saved_settings = self._read_settings()
+        default_cache = Path(os.getenv("APPDATA", str(Path.home() / "AppData" / "Roaming"))) / "ITGmania" / "Cache" / "Songs"
+        default_stats = Path.cwd() / "Stats.xml"
+        self.cache_var = tk.StringVar(value=self.saved_settings.get("cache_dir", str(default_cache)))
+        self.stats_var = tk.StringVar(value=self.saved_settings.get(
+            "stats_file", str(default_stats) if default_stats.is_file() else ""))
         self.search_var = tk.StringVar()
         self.pack_var = tk.StringVar(value="All packs")
         self.type_var = tk.StringVar(value="All types")
         self.diff_var = tk.StringVar(value="All difficulties")
         self.scored_var = tk.BooleanVar(value=False)
-        self.column_order = list(HEADERS)
-        self.column_visibility = {column: tk.BooleanVar(value=True) for column in HEADERS}
+        saved_order = self.saved_settings.get("column_order", [])
+        if not isinstance(saved_order, list):
+            saved_order = []
+        valid_order = []
+        for column in saved_order:
+            if column in HEADERS and column not in valid_order:
+                valid_order.append(column)
+        self.column_order = valid_order + [column for column in HEADERS if column not in valid_order]
+        saved_visibility = self.saved_settings.get("column_visibility", {})
+        if not isinstance(saved_visibility, dict):
+            saved_visibility = {}
+        self.column_visibility = {
+            column: tk.BooleanVar(value=saved_visibility.get(column)
+                                  if isinstance(saved_visibility.get(column), bool) else True)
+            for column in HEADERS
+        }
+        if not any(variable.get() for variable in self.column_visibility.values()):
+            self.column_visibility[HEADERS[0]].set(True)
+        saved_widths = self.saved_settings.get("column_widths", {})
+        if not isinstance(saved_widths, dict):
+            saved_widths = {}
+        self.column_widths = {
+            column: self._valid_column_width(saved_widths.get(column), column) for column in HEADERS
+        }
+        self.default_column_widths = {}
         self.sort_col = "Pack"
         self.sort_reverse = False
         self._style()
@@ -205,6 +235,8 @@ class LibraryApp:
                 width = 105
             if col == "Chart":
                 width = 150
+            self.default_column_widths[col] = width
+            width = self.column_widths[col] or width
             self.tree.column(col, width=width, minwidth=55, stretch=False, anchor="w" if col in
                              ("Title", "Artist", "Pack", "Chart") else "center")
         vs = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
@@ -217,6 +249,10 @@ class LibraryApp:
         frame.grid_columnconfigure(0, weight=1)
         self.tree.bind("<ButtonPress-1>", self._column_drag_start, add="+")
         self.tree.bind("<ButtonRelease-1>", self._column_drag_end, add="+")
+        self.tree.bind("<ButtonRelease-1>", self._save_settings, add="+")
+        visible_columns = [column for column in self.column_order if self.column_visibility[column].get()]
+        if visible_columns:
+            self.tree.configure(displaycolumns=visible_columns)
         self.progress = ttk.Progressbar(self.root, mode="indeterminate", style="Horizontal.TProgressbar")
         self.progress.pack(fill="x", padx=18, pady=(0, 4))
         footer = tk.Frame(self.root, bg="#10151d", padx=18, pady=7)
@@ -268,6 +304,55 @@ class LibraryApp:
         self.root.bind("<Control-f>", lambda _event: self.focus_search())
         self.root.bind("<Escape>", lambda _event: self.clear_search())
 
+    @staticmethod
+    def _settings_file_path():
+        appdata = os.getenv("APPDATA")
+        if appdata:
+            config_root = Path(appdata)
+        elif os.name == "nt":
+            config_root = Path.home() / "AppData" / "Roaming"
+        elif sys.platform == "darwin":
+            config_root = Path.home() / "Library" / "Application Support"
+        else:
+            config_root = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config"))
+        return config_root / "ITGmania Library Visualizer" / "settings.json"
+
+    @staticmethod
+    def _valid_column_width(value, column):
+        try:
+            width = int(value)
+        except (TypeError, ValueError):
+            return None
+        return width if 55 <= width <= 2000 else None
+
+    def _read_settings(self):
+        try:
+            with self.settings_path.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _save_settings(self, _event=None):
+        if not hasattr(self, "tree"):
+            return
+        settings = {
+            "cache_dir": self.cache_var.get(),
+            "stats_file": self.stats_var.get(),
+            "column_order": self.column_order,
+            "column_visibility": {column: variable.get() for column, variable in self.column_visibility.items()},
+            "column_widths": {column: self.tree.column(column, "width") for column in HEADERS},
+        }
+        temporary = self.settings_path.with_suffix(".tmp")
+        try:
+            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+            with temporary.open("w", encoding="utf-8") as handle:
+                json.dump(settings, handle, indent=2)
+            os.replace(temporary, self.settings_path)
+        except OSError as exc:
+            if hasattr(self, "status"):
+                self.status.set(f"Could not save settings: {exc}")
+
     def focus_search(self):
         self.search_entry.focus_set()
         self.search_entry.selection_range(0, "end")
@@ -282,12 +367,16 @@ class LibraryApp:
             self.column_visibility[changed_column].set(True)
             return
         self.tree.configure(displaycolumns=visible)
+        self._save_settings()
 
     def reset_column_layout(self):
         self.column_order = list(HEADERS)
         for variable in self.column_visibility.values():
             variable.set(True)
+        for column, width in self.default_column_widths.items():
+            self.tree.column(column, width=width)
         self.tree.configure(displaycolumns=self.column_order)
+        self._save_settings()
 
     def _column_drag_start(self, event):
         if self.tree.identify_region(event.x, event.y) == "heading":
@@ -317,6 +406,7 @@ class LibraryApp:
         self.column_order.insert(insert_at, source)
         visible = [column for column in self.column_order if self.column_visibility[column].get()]
         self.tree.configure(displaycolumns=visible)
+        self._save_settings()
         return "break"
 
     def _displayed_column_at(self, x, y):
@@ -371,6 +461,7 @@ class LibraryApp:
         path = filedialog.askdirectory(title="Select the ITGmania Cache/Songs folder")
         if path:
             self.cache_var.set(path)
+            self._save_settings()
 
     def choose_stats(self):
         path = filedialog.askopenfilename(title="Select player Stats.xml", filetypes=[("Stats.xml", "Stats.xml"),
@@ -378,6 +469,7 @@ class LibraryApp:
                                                                                        ("All files", "*.*")])
         if path:
             self.stats_var.set(path)
+            self._save_settings()
 
     def load_data(self):
         cache, stats = Path(self.cache_var.get()), Path(self.stats_var.get())
@@ -387,6 +479,7 @@ class LibraryApp:
         if not stats.is_file():
             messagebox.showerror("Stats.xml not found", "Select the player's Stats.xml file.")
             return
+        self._save_settings()
         self.progress.start(12)
         self.status.set("Reading chart cache and player scores…")
         threading.Thread(target=self._load_worker, args=(cache, stats), daemon=True).start()
