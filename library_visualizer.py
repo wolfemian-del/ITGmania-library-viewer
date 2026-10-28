@@ -17,6 +17,7 @@ from tkinter import filedialog, messagebox, ttk
 TECH_FIELDS = ("Crossovers", "HalfCrossovers", "FullCrossovers", "Footswitches",
                "UpFootswitches", "DownFootswitches", "Sideswitches", "Jacks",
                "Brackets", "Doublesteps")
+DIFFICULTY_ORDER = ("Beginner", "Easy", "Medium", "Hard", "Challenge", "Edit")
 RADAR_FIELDS = ("Stream", "Voltage", "Air", "Freeze", "Chaos", "Notes",
                 "TapsAndHolds", "Jumps", "Holds", "Rolls", "Mines", "Hands",
                 "Lifts", "Fakes")
@@ -193,6 +194,10 @@ class LibraryApp:
         style.map("Treeview", background=[("selected", "#285c74")], foreground=[("selected", "white")])
         style.configure("TCombobox", fieldbackground="#202b38", background="#202b38", foreground="#ecf3f9")
         style.configure("Horizontal.TProgressbar", troughcolor="#222d3b", background="#4fc3b0")
+        self.root.option_add("*TCombobox*Listbox.background", "#202b38")
+        self.root.option_add("*TCombobox*Listbox.foreground", "#ecf3f9")
+        self.root.option_add("*TCombobox*Listbox.selectBackground", "#287c78")
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
 
     def _build(self):
         top = tk.Frame(self.root, bg="#10151d", padx=18, pady=14)
@@ -507,11 +512,18 @@ class LibraryApp:
         self.progress.stop()
         self.rows = rows
         for combo, var, label, key in ((self.pack_filter, self.pack_var, "All packs", "Pack"),
-                                       (self.type_filter, self.type_var, "All types", "Type"),
-                                       (self.diff_filter, self.diff_var, "All difficulties", "Difficulty")):
+                                       (self.type_filter, self.type_var, "All types", "Type")):
             values = [label] + sorted({str(r[key]) for r in rows if r[key]}, key=str.casefold)
             combo.configure(values=values)
             var.set(label)
+        difficulty_rank = {difficulty.casefold(): index for index, difficulty in enumerate(DIFFICULTY_ORDER)}
+        difficulties = sorted(
+            {str(row["Difficulty"]) for row in rows if row["Difficulty"]},
+            key=lambda difficulty: (difficulty_rank.get(difficulty.casefold(), len(DIFFICULTY_ORDER)),
+                                    difficulty.casefold()),
+        )
+        self.diff_filter.configure(values=["All difficulties"] + difficulties)
+        self.diff_var.set("All difficulties")
         self.status.set(f"Loaded {files:,} cache files and {len(rows):,} charts.")
         self.refresh_table()
 

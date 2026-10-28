@@ -15,7 +15,7 @@ The app starts with the usual Windows ITGmania cache location filled in when it 
 ## Browse
 
 - Search by title, artist, pack, chart name, type, or difficulty.
-- Filter by pack, steps type, and difficulty; show scored charts only.
+- Filter by pack, steps type, and difficulty; show scored charts only. Difficulties are listed in gameplay order from Beginner through Edit.
 - Click a column heading to sort. Click it again to reverse the order.
 - Drag column headings to reorder them, and drag the divider between headings to resize a column.
 - Use **View → Columns** to show or hide columns by category; **View → Reset column layout** restores the defaults.
