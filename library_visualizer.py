@@ -141,6 +141,8 @@ class LibraryApp:
         self.type_var = tk.StringVar(value="All types")
         self.diff_var = tk.StringVar(value="All difficulties")
         self.scored_var = tk.BooleanVar(value=False)
+        self.column_order = list(HEADERS)
+        self.column_visibility = {column: tk.BooleanVar(value=True) for column in HEADERS}
         self.sort_col = "Pack"
         self.sort_reverse = False
         self._style()
@@ -213,6 +215,8 @@ class LibraryApp:
         hs.grid(row=1, column=0, sticky="ew")
         frame.grid_rowconfigure(0, weight=1)
         frame.grid_columnconfigure(0, weight=1)
+        self.tree.bind("<ButtonPress-1>", self._column_drag_start, add="+")
+        self.tree.bind("<ButtonRelease-1>", self._column_drag_end, add="+")
         self.progress = ttk.Progressbar(self.root, mode="indeterminate", style="Horizontal.TProgressbar")
         self.progress.pack(fill="x", padx=18, pady=(0, 4))
         footer = tk.Frame(self.root, bg="#10151d", padx=18, pady=7)
@@ -220,8 +224,117 @@ class LibraryApp:
         self.count_label = tk.StringVar(value="0 charts")
         tk.Label(footer, textvariable=self.count_label, fg="#9eacbb", bg="#10151d",
                  font=("Segoe UI", 9)).pack(side="left")
-        tk.Label(footer, text="Click column headings to sort · Scroll horizontally for chart and score details",
+        tk.Label(footer, text="Drag headings to reorder · Drag dividers to resize · Scroll horizontally for details",
                  fg="#6f7e8e", bg="#10151d", font=("Segoe UI", 9)).pack(side="right")
+        self._build_menubar()
+
+    def _build_menubar(self):
+        menubar = tk.Menu(self.root, tearoff=False)
+
+        file_menu = tk.Menu(menubar, tearoff=False)
+        file_menu.add_command(label="Load / refresh library", command=self.load_data)
+        file_menu.add_command(label="Export CSV…", command=self.export_csv)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.root.destroy)
+        menubar.add_cascade(label="File", menu=file_menu)
+
+        edit_menu = tk.Menu(menubar, tearoff=False)
+        edit_menu.add_command(label="Find", accelerator="Ctrl+F", command=self.focus_search)
+        edit_menu.add_command(label="Clear search", accelerator="Esc", command=self.clear_search)
+        menubar.add_cascade(label="Edit", menu=edit_menu)
+
+        view_menu = tk.Menu(menubar, tearoff=False)
+        columns_menu = tk.Menu(view_menu, tearoff=False)
+        groups = (
+            ("Song & chart", ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Chart")),
+            ("Score", ("Score", "Grade", "Best %", "Plays", "Last played", "Max combo")),
+            ("Chart counts", ("Peak NPS", "Taps/Holds", "Jumps", "Holds", "Rolls", "Mines", "Hands", "Lifts")),
+            ("Tap judgments", TAP_FIELDS),
+            ("Tech counts", TECH_FIELDS),
+        )
+        for group, columns in groups:
+            group_menu = tk.Menu(columns_menu, tearoff=False)
+            for column in columns:
+                group_menu.add_checkbutton(
+                    label=column,
+                    variable=self.column_visibility[column],
+                    command=lambda col=column: self._column_visibility_changed(col),
+                )
+            columns_menu.add_cascade(label=group, menu=group_menu)
+        view_menu.add_cascade(label="Columns", menu=columns_menu)
+        view_menu.add_command(label="Reset column layout", command=self.reset_column_layout)
+        menubar.add_cascade(label="View", menu=view_menu)
+        self.root.configure(menu=menubar)
+        self.root.bind("<Control-f>", lambda _event: self.focus_search())
+        self.root.bind("<Escape>", lambda _event: self.clear_search())
+
+    def focus_search(self):
+        self.search_entry.focus_set()
+        self.search_entry.selection_range(0, "end")
+
+    def clear_search(self):
+        self.search_var.set("")
+        self.search_entry.focus_set()
+
+    def _column_visibility_changed(self, changed_column):
+        visible = [column for column in self.column_order if self.column_visibility[column].get()]
+        if not visible:
+            self.column_visibility[changed_column].set(True)
+            return
+        self.tree.configure(displaycolumns=visible)
+
+    def reset_column_layout(self):
+        self.column_order = list(HEADERS)
+        for variable in self.column_visibility.values():
+            variable.set(True)
+        self.tree.configure(displaycolumns=self.column_order)
+
+    def _column_drag_start(self, event):
+        if self.tree.identify_region(event.x, event.y) == "heading":
+            column = self._displayed_column_at(event.x, event.y)
+            self._dragged_column = column
+            self._drag_start_x = event.x
+        else:
+            self._dragged_column = None
+            self._drag_start_x = None
+
+    def _column_drag_end(self, event):
+        source = getattr(self, "_dragged_column", None)
+        start_x = getattr(self, "_drag_start_x", None)
+        self._dragged_column = None
+        self._drag_start_x = None
+        if source is None or start_x is None or abs(event.x - start_x) < 5:
+            return
+        target = self._displayed_column_at(event.x, event.y)
+        if target is None or target == source:
+            return
+        visible = [column for column in self.column_order if self.column_visibility[column].get()]
+        target_index = visible.index(target)
+        bounds = self._displayed_column_bounds(target_index)
+        insert_after = bounds is not None and event.x >= (bounds[0] + bounds[1]) / 2
+        self.column_order.remove(source)
+        insert_at = self.column_order.index(target) + int(insert_after)
+        self.column_order.insert(insert_at, source)
+        visible = [column for column in self.column_order if self.column_visibility[column].get()]
+        self.tree.configure(displaycolumns=visible)
+        return "break"
+
+    def _displayed_column_at(self, x, y):
+        if self.tree.identify_region(x, y) != "heading":
+            return None
+        display_id = self.tree.identify_column(x)
+        try:
+            index = int(display_id[1:]) - 1
+            visible = [column for column in self.column_order if self.column_visibility[column].get()]
+            return visible[index] if 0 <= index < len(visible) else None
+        except (ValueError, IndexError):
+            return None
+
+    def _displayed_column_bounds(self, index):
+        display_id = f"#{index + 1}"
+        matches = [x for x in range(self.tree.winfo_width())
+                   if self.tree.identify_column(x) == display_id]
+        return (matches[0], matches[-1] + 1) if matches else None
 
     def _path_row(self, parent, label, variable, command):
         row = tk.Frame(parent, bg="#171f2a")

@@ -17,6 +17,8 @@ The app starts with the usual Windows ITGmania cache location filled in when it 
 - Search by title, artist, pack, chart name, type, or difficulty.
 - Filter by pack, steps type, and difficulty; show scored charts only.
 - Click a column heading to sort. Click it again to reverse the order.
+- Drag column headings to reorder them, and drag the divider between headings to resize a column.
+- Use **View → Columns** to show or hide columns by category; **View → Reset column layout** restores the defaults.
 - Scroll horizontally for the full set of score, radar, and ITGmania tech-count columns.
 - **Export CSV** writes the full library (not just the filtered rows) for use in other tools.
 
