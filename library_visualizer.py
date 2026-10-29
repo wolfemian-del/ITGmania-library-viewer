@@ -743,6 +743,7 @@ class LibraryApp:
         self.course_count_var = tk.StringVar(value="0 charts · 0:00 total")
         tk.Label(controls, textvariable=self.course_count_var, fg="#9eacbb", bg="#10151d",
                  font=("Segoe UI", 9)).pack(side="left", padx=12)
+        self._button(controls, "Append to .CRS…", self.append_course).pack(side="right", padx=(0, 8))
         self._button(controls, "Save new .CRS…", self.export_course, primary=True).pack(side="right")
 
         self.add_selected_to_course()
@@ -800,26 +801,30 @@ class LibraryApp:
                     moving.add(index + 1)
         self.refresh_course_queue(sorted(moving))
 
-    def export_course(self):
-        title = self.course_title_var.get().strip()
-        if not title:
-            messagebox.showerror("Course title required", "Enter a title for this course.", parent=self.course_window)
-            return
+    def validate_course_entries(self, title=None):
+        title = (title or "").strip()
+        if title and any(char in title for char in (";", ":", "\r", "\n")):
+            messagebox.showerror(
+                "Unsupported course text",
+                "Course titles cannot contain semicolons, colons, or newlines.",
+                parent=self.course_window,
+            )
+            return False
         if not self.course_entries:
             messagebox.showerror("No charts added", "Add at least one chart to the course.", parent=self.course_window)
-            return
+            return False
         if any(not row.get("Course path") or not row.get("Difficulty") for row in self.course_entries):
             messagebox.showerror("Missing chart data", "One or more selected charts are missing a song path or difficulty.",
                                  parent=self.course_window)
-            return
-        text_fields = [title] + [row["Course path"] for row in self.course_entries]
+            return False
+        text_fields = [row["Course path"] for row in self.course_entries]
         if any(any(char in value for char in (";", ":", "\r", "\n")) for value in text_fields):
             messagebox.showerror(
                 "Unsupported course text",
-                "Course titles and song paths cannot contain semicolons, colons, or newlines.",
+                "Song paths cannot contain semicolons, colons, or newlines.",
                 parent=self.course_window,
             )
-            return
+            return False
 
         types = sorted({row.get("Type", "") for row in self.course_entries if row.get("Type")})
         if len(types) > 1:
@@ -830,7 +835,19 @@ class LibraryApp:
                 "Save the course anyway?"
             )
             if not messagebox.askyesno("Mixed chart types", description, parent=self.course_window):
-                return
+                return False
+        return True
+
+    def course_song_lines(self):
+        return [f"#SONG:{row['Course path']}:{row['Difficulty']}:;" for row in self.course_entries]
+
+    def export_course(self):
+        title = self.course_title_var.get().strip()
+        if not title:
+            messagebox.showerror("Course title required", "Enter a title for this course.", parent=self.course_window)
+            return
+        if not self.validate_course_entries(title):
+            return
 
         safe_name = re.sub(r'[<>:"/\\|?*]+', "_", title).strip(" .") or "Course"
         path = filedialog.asksaveasfilename(
@@ -840,8 +857,7 @@ class LibraryApp:
         )
         if not path:
             return
-        lines = [f"#COURSE:{title};"]
-        lines.extend(f"#SONG:{row['Course path']}:{row['Difficulty']}:;" for row in self.course_entries)
+        lines = [f"#COURSE:{title};", *self.course_song_lines()]
         try:
             with open(path, "w", encoding="utf-8", newline="") as handle:
                 handle.write("\n".join(lines) + "\n")
@@ -850,6 +866,59 @@ class LibraryApp:
             return
         self.status.set(f"Saved course with {len(self.course_entries)} charts to {path}")
         messagebox.showinfo("Course saved", f"Saved {title} with {len(self.course_entries)} charts.\n\n{path}",
+                            parent=self.course_window)
+
+    def append_course(self):
+        if not self.validate_course_entries():
+            return
+        path = filedialog.askopenfilename(
+            parent=self.course_window, title="Choose course to append to",
+            filetypes=[("ITGmania course files", "*.crs"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "rb") as handle:
+                existing = handle.read()
+            text = existing.decode("utf-8-sig")
+        except (OSError, UnicodeError) as exc:
+            messagebox.showerror("Could not read course", f"The course could not be read as UTF-8.\n\n{exc}",
+                                 parent=self.course_window)
+            return
+
+        if not re.search(r"#COURSE\s*:", text, re.IGNORECASE) or not re.search(r"#SONG\s*:", text, re.IGNORECASE):
+            messagebox.showerror("Not a readable course", "The selected file must contain #COURSE and at least one #SONG entry.",
+                                 parent=self.course_window)
+            return
+
+        last_song = list(re.finditer(r"#SONG\s*:", text, re.IGNORECASE))[-1]
+        trailing = text[last_song.end():]
+        risky = re.search(r"#(?:MODS|GAINSECONDS)\s*:", trailing, re.IGNORECASE)
+        if risky:
+            directive = risky.group(0).split(":", 1)[0]
+            messagebox.showwarning(
+                "Cannot append safely",
+                f"This course ends with {directive}, which may affect the chart entries being appended. "
+                "The existing course was left unchanged. Remove or resolve that directive in the course file, then try again.",
+                parent=self.course_window,
+            )
+            return
+
+        newline = b"\r\n" if b"\r\n" in existing else b"\n"
+        encoded_lines = newline.join(line.encode("utf-8") for line in self.course_song_lines())
+        try:
+            with open(path, "ab") as handle:
+                if existing and not existing.endswith((b"\n", b"\r")):
+                    handle.write(newline)
+                handle.write(encoded_lines)
+                handle.write(newline)
+        except OSError as exc:
+            messagebox.showerror("Could not append to course", str(exc), parent=self.course_window)
+            return
+
+        self.status.set(f"Appended {len(self.course_entries)} charts to {path}")
+        messagebox.showinfo("Course updated", f"Appended {len(self.course_entries)} charts.\n\n{path}",
                             parent=self.course_window)
 
 
