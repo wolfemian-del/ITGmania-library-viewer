@@ -35,6 +35,54 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(rows[0]["Best %"], 98.0)
         self.assertEqual(rows[0]["Plays"], 4)
 
+    def test_cache_radar_and_tech_counts_use_their_named_positions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "song.cache"
+            radar = list(range(len(app.RADAR_FIELDS))) * 2
+            tech = list(range(len(app.TECH_FIELDS))) * 2
+            cache_file.write_text(
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Challenge;\n"
+                f"#RADARVALUES:{','.join(map(str, radar))};\n"
+                f"#TECHCOUNTS:{','.join(map(str, tech))};\n",
+                encoding="utf-8",
+            )
+            row = app.parse_cache_file(cache_file, {})[0]
+
+        self.assertEqual(row["Taps/Holds"], 6)
+        self.assertEqual(row["Jumps"], 7)
+        self.assertEqual(row["Holds"], 8)
+        self.assertEqual(row["Mines"], 9)
+        self.assertEqual(row["Hands"], 10)
+        self.assertEqual(row["Rolls"], 11)
+        self.assertEqual(row["Lifts"], 12)
+        for index, field in enumerate(app.TECH_FIELDS):
+            self.assertEqual(row[field], index)
+
+    def test_cache_short_radar_and_tech_lists_leave_missing_values_blank(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "short.cache"
+            cache_file.write_text(
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Challenge;\n"
+                "#RADARVALUES:0,1,2,3,4,5,6,7,8,9,10;\n"
+                "#TECHCOUNTS:1,2;\n",
+                encoding="utf-8",
+            )
+            row = app.parse_cache_file(cache_file, {})[0]
+
+        self.assertEqual(row["Mines"], 9)
+        self.assertEqual(row["Hands"], 10)
+        self.assertEqual(row["Rolls"], "")
+        self.assertEqual(row["Lifts"], "")
+        self.assertEqual(row["Crossovers"], 1)
+        self.assertEqual(row["HalfCrossovers"], 2)
+        self.assertEqual(row["FullCrossovers"], "")
+
     def test_stats_index_reads_score_and_ignores_case_in_matching_key(self):
         with tempfile.TemporaryDirectory() as directory:
             stats_file = Path(directory) / "Stats.xml"

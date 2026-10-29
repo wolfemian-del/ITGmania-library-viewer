@@ -19,7 +19,7 @@ TECH_FIELDS = ("Crossovers", "HalfCrossovers", "FullCrossovers", "Footswitches",
                "Brackets", "Doublesteps")
 DIFFICULTY_ORDER = ("Beginner", "Easy", "Medium", "Hard", "Challenge", "Edit")
 RADAR_FIELDS = ("Stream", "Voltage", "Air", "Freeze", "Chaos", "Notes",
-                "TapsAndHolds", "Jumps", "Holds", "Rolls", "Mines", "Hands",
+                "TapsAndHolds", "Jumps", "Holds", "Mines", "Hands", "Rolls",
                 "Lifts", "Fakes")
 TAP_FIELDS = ("W1", "W2", "W3", "W4", "W5", "Miss")
 GRADE_NAMES = {
@@ -110,7 +110,8 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
         difficulty = tags.get("DIFFICULTY", "")
         if not chart_type or not difficulty:
             continue
-        radar = [number(v) for v in tags.get("RADARVALUES", "").split(",")]
+        radar_values = tags.get("RADARVALUES", "").split(",")
+        radar = {name: number(value) for name, value in zip(RADAR_FIELDS, radar_values)}
         tech = [number(v, -1) for v in tags.get("TECHCOUNTS", "").split(",")]
         key = (song_dir.casefold(), chart_type.casefold(), difficulty.casefold())
         score = scores.get(key, {})
@@ -126,10 +127,10 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
             "Grade": GRADE_NAMES.get(score.get("Grade", ""), score.get("Grade", "")),
             "Best %": round(percent, 2) if score else "", "Plays": number(score.get("plays")),
             "Last played": score.get("last_played", ""), "Peak NPS": number(tags.get("PEAKNPS")),
-            "Taps/Holds": radar[6] if len(radar) > 6 else "", "Jumps": radar[7] if len(radar) > 7 else "",
-            "Holds": radar[8] if len(radar) > 8 else "", "Rolls": radar[9] if len(radar) > 9 else "",
-            "Mines": radar[10] if len(radar) > 10 else "", "Hands": radar[11] if len(radar) > 11 else "",
-            "Lifts": radar[12] if len(radar) > 12 else "",
+            "Taps/Holds": radar.get("TapsAndHolds", ""), "Jumps": radar.get("Jumps", ""),
+            "Holds": radar.get("Holds", ""), "Rolls": radar.get("Rolls", ""),
+            "Mines": radar.get("Mines", ""), "Hands": radar.get("Hands", ""),
+            "Lifts": radar.get("Lifts", ""),
             **{name: number(score.get("tap_" + name)) if score else "" for name in TAP_FIELDS},
             "Max combo": number(score.get("MaxCombo")) if score else "",
             **{name: tech[i] if i < len(tech) and tech[i] >= 0 else ""
