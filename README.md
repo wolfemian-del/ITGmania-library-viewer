@@ -25,6 +25,8 @@ The app starts with the usual Windows ITGmania cache location filled in when it 
 
 The table includes chart meter, peak NPS, radar note counts, the player's highest `PercentDP` score for the chart, grade, play count, last played date, best-score tap judgments and combo, and cached tech counts. `Stats.xml` scores are matched to cached charts by song directory, steps type, and difficulty.
 
+The **Time** column shows cached song music length as `minutes:seconds`; CSV exports retain that value in seconds. The course builder shows each queued song's time and the summed course length.
+
 ## Data paths
 
 The cache folder is commonly `%APPDATA%\ITGmania\Cache\Songs`. `Stats.xml` lives inside a player profile's save folder. The app does not edit either source.

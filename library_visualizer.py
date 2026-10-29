@@ -28,11 +28,11 @@ GRADE_NAMES = {
     "Tier09": "A", "Tier10": "A-", "Tier11": "B+", "Tier12": "B",
     "Tier13": "B-", "Tier14": "C+", "Tier15": "C", "Tier16": "C-", "Tier17": "D",
 }
-HEADERS = ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Chart", "Score",
+HEADERS = ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "Chart", "Score",
            "Grade", "Best %", "Plays", "Last played", "Peak NPS", "Taps/Holds", "Jumps",
            "Holds", "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4", "W5",
            "Miss", "Max combo", *TECH_FIELDS)
-NUMERIC_COLUMNS = {"Meter", "Score", "Best %", "Plays", "Peak NPS", "Taps/Holds", "Jumps",
+NUMERIC_COLUMNS = {"Meter", "Time", "Score", "Best %", "Plays", "Peak NPS", "Taps/Holds", "Jumps",
                    "Holds", "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4",
                    "W5", "Miss", "Max combo", *TECH_FIELDS}
 
@@ -42,6 +42,13 @@ def number(value: str | None, default: float = 0) -> float:
         return float(value or default)
     except (TypeError, ValueError):
         return default
+
+
+def format_duration(seconds) -> str:
+    total = max(0, int(round(number(seconds))))
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
 
 
 def tag_map(text: str) -> dict[str, str]:
@@ -112,7 +119,9 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
         rows.append({
             "Title": song_tags.get("TITLE", path.stem), "Artist": song_tags.get("ARTIST", ""),
             "Pack": pack, "Type": chart_type, "Difficulty": difficulty, "Course path": song_dir,
-            "Meter": number(tags.get("METER")), "Chart": display_name,
+            "Meter": number(tags.get("METER")),
+            "Time": number(song_tags.get("MUSICLENGTH")) if song_tags.get("MUSICLENGTH") else "",
+            "Chart": display_name,
             "Score": number(score.get("Score")) if score else "",
             "Grade": GRADE_NAMES.get(score.get("Grade", ""), score.get("Grade", "")),
             "Best %": round(percent, 2) if score else "", "Plays": number(score.get("plays")),
@@ -157,6 +166,10 @@ class LibraryApp:
             if column in HEADERS and column not in valid_order:
                 valid_order.append(column)
         self.column_order = valid_order + [column for column in HEADERS if column not in valid_order]
+        if "Time" not in valid_order:
+            self.column_order.remove("Time")
+            meter_index = self.column_order.index("Meter")
+            self.column_order.insert(meter_index + 1, "Time")
         saved_visibility = self.saved_settings.get("column_visibility", {})
         if not isinstance(saved_visibility, dict):
             saved_visibility = {}
@@ -258,7 +271,7 @@ class LibraryApp:
         for col in HEADERS:
             self.tree.heading(col, text=col, command=lambda c=col: self.sort_by(c))
             width = 130 if col in ("Title", "Artist", "Pack") else 92
-            if col in ("Type", "Difficulty", "Meter", "Score", "Grade", "Best %", "Plays", "Jumps", "Holds",
+            if col in ("Type", "Difficulty", "Meter", "Time", "Score", "Grade", "Best %", "Plays", "Jumps", "Holds",
                        "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4", "W5", "Miss"):
                 width = 76
             if col == "Last played":
@@ -312,7 +325,7 @@ class LibraryApp:
         view_menu = tk.Menu(menubar, tearoff=False)
         columns_menu = tk.Menu(view_menu, tearoff=False)
         groups = (
-            ("Song & chart", ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Chart")),
+            ("Song & chart", ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "Chart")),
             ("Score", ("Score", "Grade", "Best %", "Plays", "Last played", "Max combo")),
             ("Chart counts", ("Peak NPS", "Taps/Holds", "Jumps", "Holds", "Rolls", "Mines", "Hands", "Lifts")),
             ("Tap judgments", TAP_FIELDS),
@@ -590,7 +603,9 @@ class LibraryApp:
             values = []
             for col in HEADERS:
                 value = row.get(col, "")
-                if isinstance(value, float):
+                if col == "Time" and value != "":
+                    value = format_duration(value)
+                elif isinstance(value, float):
                     value = f"{value:g}"
                 values.append(value)
             item = self.tree.insert("", "end", values=values)
@@ -651,9 +666,9 @@ class LibraryApp:
 
         queue_frame = tk.Frame(window, bg="#10151d")
         queue_frame.pack(fill="both", expand=True, padx=18)
-        columns = ("Pack", "Title", "Type", "Difficulty", "Meter")
+        columns = ("Pack", "Title", "Type", "Difficulty", "Meter", "Time")
         self.course_tree = ttk.Treeview(queue_frame, columns=columns, show="headings", selectmode="extended")
-        widths = {"Pack": 180, "Title": 300, "Type": 130, "Difficulty": 120, "Meter": 80}
+        widths = {"Pack": 180, "Title": 300, "Type": 130, "Difficulty": 120, "Meter": 80, "Time": 80}
         for column in columns:
             self.course_tree.heading(column, text=column)
             self.course_tree.column(column, width=widths[column], minwidth=65, stretch=column == "Title",
@@ -671,7 +686,7 @@ class LibraryApp:
         self._button(controls, "Remove", self.remove_course_entries).pack(side="left", padx=(8, 0))
         self._button(controls, "Move up", lambda: self.move_course_entry(-1)).pack(side="left", padx=(8, 0))
         self._button(controls, "Move down", lambda: self.move_course_entry(1)).pack(side="left", padx=(8, 0))
-        self.course_count_var = tk.StringVar(value="0 charts")
+        self.course_count_var = tk.StringVar(value="0 charts · 0:00 total")
         tk.Label(controls, textvariable=self.course_count_var, fg="#9eacbb", bg="#10151d",
                  font=("Segoe UI", 9)).pack(side="left", padx=12)
         self._button(controls, "Save new .CRS…", self.export_course, primary=True).pack(side="right")
@@ -696,8 +711,10 @@ class LibraryApp:
             self.course_tree.insert("", "end", iid=str(index), values=(
                 row.get("Pack", ""), row.get("Title", ""), row.get("Type", ""),
                 row.get("Difficulty", ""), row.get("Meter", ""),
+                format_duration(row.get("Time", 0)) if row.get("Time", "") != "" else "",
             ))
-        self.course_count_var.set(f"{len(self.course_entries)} charts")
+        total_seconds = sum(number(row.get("Time")) for row in self.course_entries)
+        self.course_count_var.set(f"{len(self.course_entries)} charts · {format_duration(total_seconds)} total")
         selected_indices = selected_indices or []
         valid = [index for index in selected_indices if 0 <= index < len(self.course_entries)]
         if valid:
