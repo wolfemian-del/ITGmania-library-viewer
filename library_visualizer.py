@@ -187,8 +187,15 @@ class LibraryApp:
             column: self._valid_column_width(saved_widths.get(column), column) for column in HEADERS
         }
         self.default_column_widths = {}
-        self.sort_col = "Pack"
-        self.sort_reverse = False
+        self.sort_keys = []
+        saved_sort_keys = self.saved_settings.get("sort_keys", [])
+        if isinstance(saved_sort_keys, list):
+            for item in saved_sort_keys:
+                if (isinstance(item, list) and len(item) == 2 and item[0] in HEADERS
+                        and isinstance(item[1], bool) and item[0] not in {col for col, _ in self.sort_keys}):
+                    self.sort_keys.append((item[0], item[1]))
+        if not self.sort_keys:
+            self.sort_keys = [("Pack", False)]
         self._style()
         self._build()
         self.search_var.trace_add("write", lambda *_: self.refresh_table())
@@ -292,10 +299,12 @@ class LibraryApp:
         frame.grid_columnconfigure(0, weight=1)
         self.tree.bind("<ButtonPress-1>", self._column_drag_start, add="+")
         self.tree.bind("<ButtonRelease-1>", self._column_drag_end, add="+")
+        self.tree.bind("<ButtonRelease-1>", self._shift_sort_click, add="+")
         self.tree.bind("<ButtonRelease-1>", self._save_settings, add="+")
         visible_columns = [column for column in self.column_order if self.column_visibility[column].get()]
         if visible_columns:
             self.tree.configure(displaycolumns=visible_columns)
+        self._update_sort_headings()
         self.progress = ttk.Progressbar(self.root, mode="indeterminate", style="Horizontal.TProgressbar")
         self.progress.pack(fill="x", padx=18, pady=(0, 4))
         footer = tk.Frame(self.root, bg="#10151d", padx=18, pady=7)
@@ -303,7 +312,7 @@ class LibraryApp:
         self.count_label = tk.StringVar(value="0 charts")
         tk.Label(footer, textvariable=self.count_label, fg="#9eacbb", bg="#10151d",
                  font=("Segoe UI", 9)).pack(side="left")
-        tk.Label(footer, text="Drag headings to reorder · Drag dividers to resize · Scroll horizontally for details",
+        tk.Label(footer, text="Click to sort · Shift-click adds sort keys · Drag headings to reorder · Drag dividers to resize",
                  fg="#6f7e8e", bg="#10151d", font=("Segoe UI", 9)).pack(side="right")
         self._build_menubar()
 
@@ -385,6 +394,7 @@ class LibraryApp:
             "column_order": self.column_order,
             "column_visibility": {column: variable.get() for column, variable in self.column_visibility.items()},
             "column_widths": {column: self.tree.column(column, "width") for column in HEADERS},
+            "sort_keys": [[column, descending] for column, descending in self.sort_keys],
         }
         temporary = self.settings_path.with_suffix(".tmp")
         try:
@@ -565,11 +575,18 @@ class LibraryApp:
         self.status.set(f"Loaded {files:,} cache files and {len(rows):,} charts.")
         self.refresh_table()
 
-    def refresh_table(self):
+    def refresh_table(self, preserve_selection=False):
         if not hasattr(self, "tree"):
             return
+        selected_rows = set()
+        if preserve_selection:
+            selected_rows = {
+                id(self.tree_item_rows[item]) for item in self.tree.selection()
+                if item in getattr(self, "tree_item_rows", {})
+            }
         self._render_generation = getattr(self, "_render_generation", 0) + 1
         generation = self._render_generation
+        self._update_sort_headings()
         needle = self.search_var.get().strip().casefold()
         pack, chart_type, diff = self.pack_var.get(), self.type_var.get(), self.diff_var.get()
         visible = []
@@ -585,19 +602,34 @@ class LibraryApp:
             if needle and needle not in " ".join(str(row[k]) for k in ("Title", "Artist", "Pack", "Chart", "Type", "Difficulty")).casefold():
                 continue
             visible.append(row)
-        if self.sort_col in NUMERIC_COLUMNS:
-            visible.sort(key=lambda r: (r[self.sort_col] == "", number(str(r[self.sort_col]), -1)),
-                         reverse=self.sort_reverse)
-        else:
-            visible.sort(key=lambda r: str(r[self.sort_col]).casefold(), reverse=self.sort_reverse)
+        for column, descending in reversed(self.sort_keys):
+            present = [row for row in visible if row.get(column) not in (None, "")]
+            missing = [row for row in visible if row.get(column) in (None, "")]
+            if column in NUMERIC_COLUMNS:
+                present.sort(key=lambda row: number(str(row.get(column))), reverse=descending)
+            else:
+                present.sort(key=lambda row: str(row.get(column, "")).casefold(), reverse=descending)
+            visible = present + missing
         self.tree.delete(*self.tree.get_children())
         self.tree_item_rows = {}
-        self._insert_batch(visible, 0, generation)
+        self._insert_batch(visible, 0, generation, selected_rows)
         self.count_label.set(f"{len(visible):,} charts shown · {len(self.rows):,} total")
 
-    def _insert_batch(self, rows, start, generation):
+    def _update_sort_headings(self):
+        priorities = {column: (index, descending) for index, (column, descending) in enumerate(self.sort_keys, 1)}
+        for column in HEADERS:
+            if column in priorities:
+                index, descending = priorities[column]
+                marker = "↓" if descending else "↑"
+                heading = f"{column} {marker}{index}"
+            else:
+                heading = column
+            self.tree.heading(column, text=heading)
+
+    def _insert_batch(self, rows, start, generation, selected_rows=None):
         if generation != self._render_generation:
             return
+        selected_rows = selected_rows or set()
         stop = min(start + 500, len(rows))
         for row in rows[start:stop]:
             values = []
@@ -610,15 +642,37 @@ class LibraryApp:
                 values.append(value)
             item = self.tree.insert("", "end", values=values)
             self.tree_item_rows[item] = row
+            if id(row) in selected_rows:
+                self.tree.selection_add(item)
         if stop < len(rows):
-            self.root.after(1, lambda: self._insert_batch(rows, stop, generation))
+            self.root.after(1, lambda: self._insert_batch(rows, stop, generation, selected_rows))
 
-    def sort_by(self, column):
-        if self.sort_col == column:
-            self.sort_reverse = not self.sort_reverse
+    def _shift_sort_click(self, event):
+        if not event.state & 0x0001 or self.tree.identify_region(event.x, event.y) != "heading":
+            return
+        column = self._displayed_column_at(event.x, event.y)
+        if column is not None:
+            self.sort_by(column, additive=True)
+            return "break"
+
+    def sort_by(self, column, additive=False):
+        keys = list(self.sort_keys)
+        existing_index = next((index for index, (name, _) in enumerate(keys) if name == column), None)
+        if additive:
+            if existing_index is None:
+                keys.append((column, False))
+            else:
+                name, descending = keys[existing_index]
+                keys[existing_index] = (name, not descending)
         else:
-            self.sort_col, self.sort_reverse = column, False
-        self.refresh_table()
+            if existing_index == 0:
+                name, descending = keys[0]
+                keys[0] = (name, not descending)
+            else:
+                keys = [(column, False)]
+        self.sort_keys = keys
+        self.refresh_table(preserve_selection=True)
+        self._save_settings()
 
     def export_csv(self):
         if not self.rows:
