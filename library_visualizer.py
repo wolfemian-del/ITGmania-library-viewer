@@ -138,6 +138,40 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
     return rows
 
 
+def looks_like_song_tree(cache: Path) -> bool:
+    """Return whether the selected folder resembles Songs/Pack/Song/*.sm|*.ssc."""
+    for pack in cache.iterdir():
+        if not pack.is_dir():
+            continue
+        for song in pack.iterdir():
+            if song.is_dir() and any(
+                chart.is_file() and chart.suffix.casefold() in {".sm", ".ssc"}
+                for chart in song.iterdir()
+            ):
+                return True
+    return False
+
+
+def course_append_bytes(existing: bytes, song_lines: list[str]) -> bytes:
+    """Validate an existing CRS and return only the bytes safe to append."""
+    text = existing.decode("utf-8-sig")
+    songs = list(re.finditer(r"#SONG\s*:", text, re.IGNORECASE))
+    if not re.search(r"#COURSE\s*:", text, re.IGNORECASE) or not songs:
+        raise ValueError("The selected file must contain #COURSE and at least one #SONG entry.")
+    risky = re.search(r"#(MODS|GAINSECONDS)\s*:", text[songs[-1].end():], re.IGNORECASE)
+    if risky:
+        raise ValueError(
+            f"This course ends with #{risky.group(1).upper()}, which may affect the chart entries being appended. "
+            "The existing course was left unchanged. Remove or resolve that directive in the course file, then try again."
+        )
+    if not song_lines:
+        raise ValueError("Add at least one chart before appending to a course.")
+
+    newline = b"\r\n" if b"\r\n" in existing else b"\n"
+    prefix = newline if existing and not existing.endswith((b"\n", b"\r")) else b""
+    return prefix + newline.join(line.encode("utf-8") for line in song_lines) + newline
+
+
 class LibraryApp:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -542,12 +576,25 @@ class LibraryApp:
             scores = stats_index(stats_file)
             rows = []
             files = [p for p in cache.iterdir() if p.is_file()]
+            skipped_files = 0
+            files_without_charts = 0
             for path in files:
                 try:
-                    rows.extend(parse_cache_file(path, scores))
+                    chart_rows = parse_cache_file(path, scores)
+                    if not chart_rows:
+                        files_without_charts += 1
+                    rows.extend(chart_rows)
                 except (OSError, UnicodeError):
-                    continue
-            self.root.after(0, lambda: self._loaded(rows, len(files)))
+                    skipped_files += 1
+            nested_song_tree = looks_like_song_tree(cache) if not files else False
+            self.root.after(0, lambda: self._loaded(
+                rows, len(files), skipped_files, files_without_charts, nested_song_tree))
+        except ET.ParseError as exc:
+            self.root.after(0, lambda message=str(exc): self._load_failed(
+                f"Stats.xml is malformed or incomplete and could not be parsed.\n\n{message}"))
+        except OSError as exc:
+            self.root.after(0, lambda message=str(exc): self._load_failed(
+                f"Could not read the selected cache folder or Stats.xml.\n\n{message}"))
         except Exception as exc:
             self.root.after(0, lambda message=str(exc): self._load_failed(message))
 
@@ -556,7 +603,7 @@ class LibraryApp:
         self.status.set("Could not load library.")
         messagebox.showerror("Could not load library", message)
 
-    def _loaded(self, rows, files):
+    def _loaded(self, rows, files, skipped_files=0, files_without_charts=0, nested_song_tree=False):
         self.progress.stop()
         self.rows = rows
         for combo, var, label, key in ((self.pack_filter, self.pack_var, "All packs", "Pack"),
@@ -572,7 +619,17 @@ class LibraryApp:
         )
         self.diff_filter.configure(values=["All difficulties"] + difficulties)
         self.diff_var.set("All difficulties")
-        self.status.set(f"Loaded {files:,} cache files and {len(rows):,} charts.")
+        if files == 0:
+            hint = " This looks like a regular Songs tree; select the flat Cache/Songs folder instead." \
+                if nested_song_tree else " Select the flat Cache/Songs folder."
+            self.status.set("No files found at this folder level." + hint)
+        else:
+            summary = f"Scanned {files:,} files · parsed {len(rows):,} charts"
+            if skipped_files:
+                summary += f" · skipped {skipped_files:,} unreadable"
+            if files_without_charts:
+                summary += f" · {files_without_charts:,} with no charts"
+            self.status.set(summary + ".")
         self.refresh_table()
 
     def refresh_table(self, preserve_selection=False):
@@ -881,38 +938,23 @@ class LibraryApp:
         try:
             with open(path, "rb") as handle:
                 existing = handle.read()
-            text = existing.decode("utf-8-sig")
         except (OSError, UnicodeError) as exc:
+            messagebox.showerror("Could not read course", str(exc), parent=self.course_window)
+            return
+        try:
+            addition = course_append_bytes(existing, self.course_song_lines())
+        except UnicodeError as exc:
             messagebox.showerror("Could not read course", f"The course could not be read as UTF-8.\n\n{exc}",
                                  parent=self.course_window)
             return
-
-        if not re.search(r"#COURSE\s*:", text, re.IGNORECASE) or not re.search(r"#SONG\s*:", text, re.IGNORECASE):
-            messagebox.showerror("Not a readable course", "The selected file must contain #COURSE and at least one #SONG entry.",
-                                 parent=self.course_window)
+        except ValueError as exc:
+            title = "Cannot append safely" if "ends with #" in str(exc) else "Not a readable course"
+            messagebox.showwarning(title, str(exc), parent=self.course_window)
             return
 
-        last_song = list(re.finditer(r"#SONG\s*:", text, re.IGNORECASE))[-1]
-        trailing = text[last_song.end():]
-        risky = re.search(r"#(?:MODS|GAINSECONDS)\s*:", trailing, re.IGNORECASE)
-        if risky:
-            directive = risky.group(0).split(":", 1)[0]
-            messagebox.showwarning(
-                "Cannot append safely",
-                f"This course ends with {directive}, which may affect the chart entries being appended. "
-                "The existing course was left unchanged. Remove or resolve that directive in the course file, then try again.",
-                parent=self.course_window,
-            )
-            return
-
-        newline = b"\r\n" if b"\r\n" in existing else b"\n"
-        encoded_lines = newline.join(line.encode("utf-8") for line in self.course_song_lines())
         try:
             with open(path, "ab") as handle:
-                if existing and not existing.endswith((b"\n", b"\r")):
-                    handle.write(newline)
-                handle.write(encoded_lines)
-                handle.write(newline)
+                handle.write(addition)
         except OSError as exc:
             messagebox.showerror("Could not append to course", str(exc), parent=self.course_window)
             return
