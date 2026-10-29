@@ -25,7 +25,7 @@ On Linux and macOS, choose the cache and profile paths with **Browse…**; the a
 
 - Search by title, artist, pack, chart name, type, or difficulty.
 - Filter by pack, steps type, and difficulty; show scored charts only. Difficulties are listed in gameplay order from Beginner through Edit.
-- Click a column heading to sort. Click it again to reverse the order.
+- Click a column heading to sort. Click it again to reverse the order. Difficulty sorts in gameplay order from Beginner through Edit.
 - Drag column headings to reorder them, and drag the divider between headings to resize a column.
 - Use **View → Columns** to show or hide columns by category; **View → Reset column layout** restores the defaults.
 - Scroll horizontally for the full set of score, radar, and ITGmania tech-count columns.

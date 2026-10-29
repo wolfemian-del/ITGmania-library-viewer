@@ -19,6 +19,7 @@ TECH_FIELDS = ("Crossovers", "HalfCrossovers", "FullCrossovers", "Footswitches",
                "UpFootswitches", "DownFootswitches", "Sideswitches", "Jacks",
                "Brackets", "Doublesteps")
 DIFFICULTY_ORDER = ("Beginner", "Easy", "Medium", "Hard", "Challenge", "Edit")
+DIFFICULTY_RANK = {difficulty.casefold(): index for index, difficulty in enumerate(DIFFICULTY_ORDER)}
 SEARCH_DEBOUNCE_MS = 200
 LIBRARY_CACHE_SCHEMA_VERSION = 1
 RADAR_FIELDS = ("Stream", "Voltage", "Air", "Freeze", "Chaos", "Notes",
@@ -52,6 +53,11 @@ def format_duration(seconds) -> str:
     hours, remainder = divmod(total, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
+
+
+def difficulty_sort_key(value):
+    difficulty = str(value or "")
+    return DIFFICULTY_RANK.get(difficulty.casefold(), len(DIFFICULTY_ORDER)), difficulty.casefold()
 
 
 def tag_map(text: str) -> dict[str, str]:
@@ -741,11 +747,9 @@ class LibraryApp:
             values = [label] + sorted({str(r[key]) for r in rows if r[key]}, key=str.casefold)
             combo.configure(values=values)
             var.set(label)
-        difficulty_rank = {difficulty.casefold(): index for index, difficulty in enumerate(DIFFICULTY_ORDER)}
         difficulties = sorted(
             {str(row["Difficulty"]) for row in rows if row["Difficulty"]},
-            key=lambda difficulty: (difficulty_rank.get(difficulty.casefold(), len(DIFFICULTY_ORDER)),
-                                    difficulty.casefold()),
+            key=difficulty_sort_key,
         )
         self.diff_filter.configure(values=["All difficulties"] + difficulties)
         self.diff_var.set("All difficulties")
@@ -808,6 +812,8 @@ class LibraryApp:
             missing = [row for row in visible if row.get(column) in (None, "")]
             if column in NUMERIC_COLUMNS:
                 present.sort(key=lambda row: number(str(row.get(column))), reverse=descending)
+            elif column == "Difficulty":
+                present.sort(key=lambda row: difficulty_sort_key(row.get(column, "")), reverse=descending)
             else:
                 present.sort(key=lambda row: str(row.get(column, "")).casefold(), reverse=descending)
             visible = present + missing
