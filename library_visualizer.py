@@ -18,6 +18,7 @@ TECH_FIELDS = ("Crossovers", "HalfCrossovers", "FullCrossovers", "Footswitches",
                "UpFootswitches", "DownFootswitches", "Sideswitches", "Jacks",
                "Brackets", "Doublesteps")
 DIFFICULTY_ORDER = ("Beginner", "Easy", "Medium", "Hard", "Challenge", "Edit")
+SEARCH_DEBOUNCE_MS = 200
 RADAR_FIELDS = ("Stream", "Voltage", "Air", "Freeze", "Chaos", "Notes",
                 "TapsAndHolds", "Jumps", "Holds", "Mines", "Hands", "Rolls",
                 "Lifts", "Fakes")
@@ -193,6 +194,7 @@ class LibraryApp:
         self.type_var = tk.StringVar(value="All types")
         self.diff_var = tk.StringVar(value="All difficulties")
         self.scored_var = tk.BooleanVar(value=False)
+        self._search_refresh_after_id = None
         saved_order = self.saved_settings.get("column_order", [])
         if not isinstance(saved_order, list):
             saved_order = []
@@ -233,7 +235,7 @@ class LibraryApp:
             self.sort_keys = [("Pack", False)]
         self._style()
         self._build()
-        self.search_var.trace_add("write", lambda *_: self.refresh_table())
+        self.search_var.trace_add("write", lambda *_: self._schedule_search_refresh())
         for var in (self.pack_var, self.type_var, self.diff_var, self.scored_var):
             var.trace_add("write", lambda *_: self.refresh_table())
         if Path(self.cache_var.get()).is_dir() and Path(self.stats_var.get()).is_file():
@@ -448,6 +450,17 @@ class LibraryApp:
     def clear_search(self):
         self.search_var.set("")
         self.search_entry.focus_set()
+
+    def _schedule_search_refresh(self):
+        """Refresh the table once the user pauses typing in the search box."""
+        if self._search_refresh_after_id is not None:
+            self.root.after_cancel(self._search_refresh_after_id)
+        self._search_refresh_after_id = self.root.after(
+            SEARCH_DEBOUNCE_MS, self._run_search_refresh)
+
+    def _run_search_refresh(self):
+        self._search_refresh_after_id = None
+        self.refresh_table()
 
     def _column_visibility_changed(self, changed_column):
         visible = [column for column in self.column_order if self.column_visibility[column].get()]
