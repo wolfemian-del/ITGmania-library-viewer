@@ -51,3 +51,5 @@ Run the parser and course-append regression tests with:
 ```powershell
 python -m unittest discover -s tests
 ```
+
+The UI-independent parsing and course helpers live in `library_data.py`; `tests/test_library_data.py` exercises them without importing Tkinter. The snapshot lifecycle tests exercise the app module.
