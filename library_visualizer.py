@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from datetime import datetime
 import json
 import os
 import re
@@ -19,6 +20,7 @@ TECH_FIELDS = ("Crossovers", "HalfCrossovers", "FullCrossovers", "Footswitches",
                "Brackets", "Doublesteps")
 DIFFICULTY_ORDER = ("Beginner", "Easy", "Medium", "Hard", "Challenge", "Edit")
 SEARCH_DEBOUNCE_MS = 200
+LIBRARY_CACHE_SCHEMA_VERSION = 1
 RADAR_FIELDS = ("Stream", "Voltage", "Air", "Freeze", "Chaos", "Notes",
                 "TapsAndHolds", "Jumps", "Holds", "Mines", "Hands", "Rolls",
                 "Lifts", "Fakes")
@@ -182,6 +184,7 @@ class LibraryApp:
         self.root.minsize(900, 550)
         self.root.configure(bg="#10151d")
         self.rows: list[dict] = []
+        self.loaded_source_paths = None
         self.settings_path = self._settings_file_path()
         self.saved_settings = self._read_settings()
         default_cache = Path(os.getenv("APPDATA", str(Path.home() / "AppData" / "Roaming"))) / "ITGmania" / "Cache" / "Songs"
@@ -238,8 +241,9 @@ class LibraryApp:
         self.search_var.trace_add("write", lambda *_: self._schedule_search_refresh())
         for var in (self.pack_var, self.type_var, self.diff_var, self.scored_var):
             var.trace_add("write", lambda *_: self.refresh_table())
-        if Path(self.cache_var.get()).is_dir() and Path(self.stats_var.get()).is_file():
-            self.load_data()
+        for var in (self.cache_var, self.stats_var):
+            var.trace_add("write", lambda *_: self._source_paths_changed())
+        self.load_cached_data()
 
     def _style(self):
         style = ttk.Style()
@@ -405,6 +409,104 @@ class LibraryApp:
         else:
             config_root = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config"))
         return config_root / "ITGmania Library Visualizer" / "settings.json"
+
+    @property
+    def library_cache_path(self):
+        return self.settings_path.with_name("library_cache.json")
+
+    @staticmethod
+    def _normalized_source_path(path):
+        return os.path.normcase(os.path.abspath(os.path.expanduser(str(path))))
+
+    def _save_library_cache(self, cache_dir, stats_file, rows, files, skipped_files,
+                            files_without_charts, nested_song_tree):
+        refreshed_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        payload = {
+            "schema_version": LIBRARY_CACHE_SCHEMA_VERSION,
+            "cache_dir": str(cache_dir),
+            "stats_file": str(stats_file),
+            "refreshed_at": refreshed_at,
+            "files": files,
+            "skipped_files": skipped_files,
+            "files_without_charts": files_without_charts,
+            "nested_song_tree": nested_song_tree,
+            "rows": rows,
+        }
+        path = self.library_cache_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        try:
+            with temporary.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+            os.replace(temporary, path)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+        return refreshed_at
+
+    def load_cached_data(self):
+        try:
+            with self.library_cache_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except FileNotFoundError:
+            self.status.set("No saved library snapshot yet. Choose your paths, then click Load / refresh.")
+            self.refresh_table()
+            return
+        except (OSError, json.JSONDecodeError) as exc:
+            self.status.set(f"Saved library snapshot could not be read ({exc}). Click Load / refresh to rebuild it.")
+            self.refresh_table()
+            return
+
+        valid_rows = isinstance(payload, dict) and isinstance(payload.get("rows"), list) \
+            and all(isinstance(row, dict) and all(key in row for key in (*HEADERS, "Course path"))
+                    for row in payload["rows"])
+        if (not valid_rows or payload.get("schema_version") != LIBRARY_CACHE_SCHEMA_VERSION
+                or not isinstance(payload.get("cache_dir"), str)
+                or not isinstance(payload.get("stats_file"), str)):
+            self.status.set("Saved library snapshot is invalid or outdated. Click Load / refresh to rebuild it.")
+            self.refresh_table()
+            return
+
+        paths_match = (
+            self._normalized_source_path(payload.get("cache_dir", ""))
+            == self._normalized_source_path(self.cache_var.get())
+            and self._normalized_source_path(payload.get("stats_file", ""))
+            == self._normalized_source_path(self.stats_var.get())
+        )
+        if not paths_match:
+            self.status.set("Saved library snapshot is for different data paths. Click Load / refresh to rebuild it.")
+            self.refresh_table()
+            return
+
+        self._loaded(
+            payload["rows"], self._nonnegative_int(payload.get("files")),
+            self._nonnegative_int(payload.get("skipped_files")),
+            self._nonnegative_int(payload.get("files_without_charts")),
+            payload.get("nested_song_tree") is True,
+            refreshed_at=payload.get("refreshed_at", "") if isinstance(payload.get("refreshed_at", ""), str) else "",
+            from_cache=True,
+            source_paths=(payload["cache_dir"], payload["stats_file"]),
+        )
+
+    @staticmethod
+    def _nonnegative_int(value):
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+    def _source_paths_changed(self):
+        if not self.loaded_source_paths:
+            return
+        current = (self.cache_var.get(), self.stats_var.get())
+        paths_match = all(
+            self._normalized_source_path(saved) == self._normalized_source_path(selected)
+            for saved, selected in zip(self.loaded_source_paths, current)
+        )
+        if paths_match:
+            stamp = self._format_refresh_time(getattr(self, "last_refreshed_at", ""))
+            self.status.set(f"Showing saved library snapshot · {len(self.rows):,} charts · last refreshed {stamp}.")
+        else:
+            self.status.set("Displayed library uses different data paths. Click Load / refresh to show the selected sources.")
 
     @staticmethod
     def _valid_column_width(value, column):
@@ -601,8 +703,18 @@ class LibraryApp:
                 except (OSError, UnicodeError):
                     skipped_files += 1
             nested_song_tree = looks_like_song_tree(cache) if not files else False
+            cache_error = ""
+            try:
+                refreshed_at = self._save_library_cache(
+                    cache, stats_file, rows, len(files), skipped_files,
+                    files_without_charts, nested_song_tree)
+            except (OSError, TypeError, ValueError) as exc:
+                refreshed_at = ""
+                cache_error = str(exc)
             self.root.after(0, lambda: self._loaded(
-                rows, len(files), skipped_files, files_without_charts, nested_song_tree))
+                rows, len(files), skipped_files, files_without_charts, nested_song_tree,
+                refreshed_at=refreshed_at, cache_error=cache_error,
+                source_paths=(str(cache), str(stats_file))))
         except ET.ParseError as exc:
             self.root.after(0, lambda message=str(exc): self._load_failed(
                 f"Stats.xml is malformed or incomplete and could not be parsed.\n\n{message}"))
@@ -617,9 +729,13 @@ class LibraryApp:
         self.status.set("Could not load library.")
         messagebox.showerror("Could not load library", message)
 
-    def _loaded(self, rows, files, skipped_files=0, files_without_charts=0, nested_song_tree=False):
+    def _loaded(self, rows, files, skipped_files=0, files_without_charts=0, nested_song_tree=False,
+                refreshed_at="", cache_error="", from_cache=False, source_paths=None):
         self.progress.stop()
         self.rows = rows
+        if source_paths:
+            self.loaded_source_paths = source_paths
+        self.last_refreshed_at = refreshed_at
         for combo, var, label, key in ((self.pack_filter, self.pack_var, "All packs", "Pack"),
                                        (self.type_filter, self.type_var, "All types", "Type")):
             values = [label] + sorted({str(r[key]) for r in rows if r[key]}, key=str.casefold)
@@ -633,7 +749,10 @@ class LibraryApp:
         )
         self.diff_filter.configure(values=["All difficulties"] + difficulties)
         self.diff_var.set("All difficulties")
-        if files == 0:
+        if from_cache:
+            stamp = self._format_refresh_time(refreshed_at)
+            self.status.set(f"Showing saved library snapshot · {len(rows):,} charts · last refreshed {stamp}.")
+        elif files == 0:
             hint = " This looks like a regular Songs tree; select the flat Cache/Songs folder instead." \
                 if nested_song_tree else " Select the flat Cache/Songs folder."
             self.status.set("No files found at this folder level." + hint)
@@ -644,7 +763,18 @@ class LibraryApp:
             if files_without_charts:
                 summary += f" · {files_without_charts:,} with no charts"
             self.status.set(summary + ".")
+        if not from_cache and refreshed_at:
+            self.status.set(self.status.get() + f" Snapshot refreshed {self._format_refresh_time(refreshed_at)}.")
+        if not from_cache and cache_error:
+            self.status.set(self.status.get() + f" Local snapshot not saved: {cache_error}")
         self.refresh_table()
+
+    @staticmethod
+    def _format_refresh_time(value):
+        try:
+            return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M")
+        except (TypeError, ValueError):
+            return "unknown"
 
     def refresh_table(self, preserve_selection=False):
         if not hasattr(self, "tree"):
