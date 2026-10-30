@@ -6,8 +6,20 @@ import library_data as data
 
 
 class ParsingTests(unittest.TestCase):
-    def test_split_path_normalizes_separators_and_prefix(self):
+    def test_split_path_normalizes_root_relative_paths(self):
+        self.assertEqual(data.split_path("Songs/Pack/Song"), "Pack/Song")
+        self.assertEqual(data.split_path("/Songs/Pack/Song"), "Pack/Song")
         self.assertEqual(data.split_path("Songs\\Pack\\Song"), "Pack/Song")
+
+    def test_split_path_normalizes_filesystem_absolute_paths(self):
+        self.assertEqual(
+            data.split_path(r"C:\Games\ITGmania\Songs\Pack\Song"), "Pack/Song")
+        self.assertEqual(
+            data.split_path("/home/player/ITGmania/Songs/Pack/Song"), "Pack/Song")
+
+    def test_split_path_requires_songs_component(self):
+        path = r"C:\Games\MySongs\Pack\Song"
+        self.assertEqual(data.split_path(path), "C:/Games/MySongs/Pack/Song")
 
     def test_cache_chart_matches_stats_by_normalized_key(self):
         with tempfile.TemporaryDirectory() as directory:

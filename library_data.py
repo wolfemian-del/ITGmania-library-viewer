@@ -73,10 +73,18 @@ def tag_map(text: str) -> dict[str, str]:
 
 
 def split_path(value: str) -> str:
-    value = value.replace("\\", "/").strip("/")
-    if value.lower().startswith("songs/"):
-        value = value[6:]
-    return value
+    """Normalize an ITGmania song path to its path below the Songs directory.
+
+    Cache entries usually use ``/Songs/Pack/Song/file.sm`` while Stats.xml
+    commonly uses ``Songs/Pack/Song``. Some installations may instead store
+    a filesystem-absolute path, so strip the prefix through the *component*
+    named Songs wherever it occurs.
+    """
+    parts = value.replace("\\", "/").split("/")
+    for index, part in enumerate(parts):
+        if part.casefold() == "songs":
+            return "/".join(parts[index + 1:]).strip("/")
+    return "/".join(parts).strip("/")
 
 
 def stats_index(stats_file: Path) -> dict[tuple[str, str, str], dict]:
