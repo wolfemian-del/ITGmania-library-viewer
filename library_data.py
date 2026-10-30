@@ -22,21 +22,29 @@ GRADE_NAMES = {
     "Tier09": "A", "Tier10": "A-", "Tier11": "B+", "Tier12": "B",
     "Tier13": "B-", "Tier14": "C+", "Tier15": "C", "Tier16": "C-", "Tier17": "D",
 }
+COURSE_UNSAFE_CHARS = (";", ":", "\r", "\n")
 
 __all__ = [
+    "COURSE_UNSAFE_CHARS",
     "DIFFICULTY_ORDER",
     "RADAR_FIELDS",
     "TAP_FIELDS",
     "TECH_FIELDS",
     "course_append_bytes",
+    "course_song_line",
+    "course_song_lines",
+    "course_trailing_risk",
     "difficulty_sort_key",
     "format_duration",
+    "format_new_course",
     "looks_like_song_tree",
     "number",
     "parse_cache_file",
+    "parse_course_text",
     "split_path",
     "stats_index",
     "tag_map",
+    "validate_course_fields",
 ]
 
 
@@ -161,16 +169,98 @@ def looks_like_song_tree(cache: Path) -> bool:
     return False
 
 
+def course_song_line(course_path: str, difficulty: str) -> str:
+    """Format one #SONG entry for a CRS file."""
+    return f"#SONG:{course_path}:{difficulty}:;"
+
+
+def course_song_lines(rows: list[dict]) -> list[str]:
+    """Format #SONG lines from chart rows that already carry Course path and Difficulty."""
+    return [course_song_line(row["Course path"], row["Difficulty"]) for row in rows]
+
+
+def format_new_course(title: str, song_lines: list[str], newline: str = "\n") -> str:
+    """Build a complete new CRS document body (including a trailing newline)."""
+    lines = [f"#COURSE:{title};", *song_lines]
+    return newline.join(lines) + newline
+
+
+def _contains_unsafe_course_text(value: str) -> bool:
+    return any(char in value for char in COURSE_UNSAFE_CHARS)
+
+
+def validate_course_fields(rows: list[dict], title: str | None = None) -> str | None:
+    """Return a human-readable error if course fields are invalid, else None.
+
+    Does not decide mixed-type policy; callers that care about mixed chart types
+    should inspect the rows themselves after this returns None.
+    """
+    if title is not None:
+        cleaned = title.strip()
+        if cleaned and _contains_unsafe_course_text(cleaned):
+            return "Course titles cannot contain semicolons, colons, or newlines."
+    if not rows:
+        return "Add at least one chart to the course."
+    if any(not row.get("Course path") or not row.get("Difficulty") for row in rows):
+        return "One or more selected charts are missing a song path or difficulty."
+    if any(_contains_unsafe_course_text(str(row.get("Course path", ""))) for row in rows):
+        return "Song paths cannot contain semicolons, colons, or newlines."
+    return None
+
+
+def parse_course_text(text: str) -> dict:
+    """Parse CRS text into title, ordered song entries, and trailing-risk info.
+
+    Returns a dict with:
+      title: str | None
+      songs: list of {path, difficulty, raw} in file order
+      trailing_risk: 'MODS' | 'GAINSECONDS' | None
+      has_course: bool
+    """
+    course_match = re.search(r"#COURSE\s*:([^;]*);", text, re.IGNORECASE)
+    title = course_match.group(1).strip() if course_match else None
+    songs = []
+    for match in re.finditer(
+        r"#SONG\s*:([^:;\r\n]*):([^:;\r\n]*):([^;]*);", text, re.IGNORECASE
+    ):
+        songs.append({
+            "path": match.group(1).strip(),
+            "difficulty": match.group(2).strip(),
+            "raw": match.group(0),
+        })
+    song_starts = list(re.finditer(r"#SONG\s*:", text, re.IGNORECASE))
+    trailing_risk = None
+    if song_starts:
+        trailing_risk = course_trailing_risk(text)
+    return {
+        "title": title,
+        "songs": songs,
+        "trailing_risk": trailing_risk,
+        "has_course": course_match is not None,
+    }
+
+
+def course_trailing_risk(text: str) -> str | None:
+    """Return 'MODS' or 'GAINSECONDS' if that directive follows the last #SONG, else None."""
+    songs = list(re.finditer(r"#SONG\s*:", text, re.IGNORECASE))
+    if not songs:
+        return None
+    risky = re.search(r"#(MODS|GAINSECONDS)\s*:", text[songs[-1].end():], re.IGNORECASE)
+    if not risky:
+        return None
+    return risky.group(1).upper()
+
+
 def course_append_bytes(existing: bytes, song_lines: list[str]) -> bytes:
     """Validate an existing CRS and return only the bytes safe to append."""
     text = existing.decode("utf-8-sig")
-    songs = list(re.finditer(r"#SONG\s*:", text, re.IGNORECASE))
-    if not re.search(r"#COURSE\s*:", text, re.IGNORECASE) or not songs:
+    parsed = parse_course_text(text)
+    if not parsed["has_course"] or not list(re.finditer(r"#SONG\s*:", text, re.IGNORECASE)):
         raise ValueError("The selected file must contain #COURSE and at least one #SONG entry.")
-    risky = re.search(r"#(MODS|GAINSECONDS)\s*:", text[songs[-1].end():], re.IGNORECASE)
-    if risky:
+    risk = parsed["trailing_risk"]
+    if risk:
         raise ValueError(
-            f"This course ends with #{risky.group(1).upper()}, which may affect the chart entries being appended. "
+            f"This course ends with #{risk}, which may affect the chart entries being appended. "
             "The existing course was left unchanged. Remove or resolve that directive in the course file, then try again."
         )
     if not song_lines:
