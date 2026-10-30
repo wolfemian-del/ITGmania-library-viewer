@@ -94,6 +94,22 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(row["Crossovers"], 1)
         self.assertEqual(row["HalfCrossovers"], 2)
         self.assertEqual(row["FullCrossovers"], "")
+        self.assertEqual(row["Peak NPS"], "")
+
+    def test_cache_peak_nps_is_parsed_when_present(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "peak-nps.cache"
+            cache_file.write_text(
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Hard;\n"
+                "#PEAKNPS:12.5;\n",
+                encoding="utf-8",
+            )
+            row = data.parse_cache_file(cache_file, {})[0]
+
+        self.assertEqual(row["Peak NPS"], 12.5)
 
     def test_stats_index_reads_score_and_ignores_case_in_matching_key(self):
         with tempfile.TemporaryDirectory() as directory:
