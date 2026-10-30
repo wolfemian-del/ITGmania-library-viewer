@@ -13,12 +13,12 @@ class ParsingTests(unittest.TestCase):
 
     def test_split_path_normalizes_filesystem_absolute_paths(self):
         self.assertEqual(
-            data.split_path(r"C:\\Games\\ITGmania\\Songs\\Pack\\Song"), "Pack/Song")
+            data.split_path(r"C:\Games\ITGmania\Songs\Pack\Song"), "Pack/Song")
         self.assertEqual(
             data.split_path("/home/player/ITGmania/Songs/Pack/Song"), "Pack/Song")
 
     def test_split_path_requires_songs_component(self):
-        path = r"C:\\Games\\MySongs\\Pack\\Song"
+        path = r"C:\Games\MySongs\Pack\Song"
         self.assertEqual(data.split_path(path), "C:/Games/MySongs/Pack/Song")
 
     def test_cache_chart_matches_stats_by_normalized_key(self):
@@ -94,6 +94,7 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(row["Crossovers"], 1)
         self.assertEqual(row["HalfCrossovers"], 2)
         self.assertEqual(row["FullCrossovers"], "")
+        self.assertEqual(row["Peak NPS"], "")
 
     def test_cache_peak_nps_is_parsed_when_present(self):
         with tempfile.TemporaryDirectory() as directory:

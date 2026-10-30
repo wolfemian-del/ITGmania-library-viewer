@@ -18,9 +18,11 @@ from library_data import (
     DIFFICULTY_ORDER,
     TAP_FIELDS,
     TECH_FIELDS,
+    bpm_sort_key,
     course_append_bytes,
     difficulty_sort_key,
     format_duration,
+    grade_sort_key,
     looks_like_song_tree,
     number,
     parse_cache_file,
@@ -28,8 +30,8 @@ from library_data import (
 )
 
 SEARCH_DEBOUNCE_MS = 200
-LIBRARY_CACHE_SCHEMA_VERSION = 1
-HEADERS = ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "Chart", "Score",
+LIBRARY_CACHE_SCHEMA_VERSION = 2
+HEADERS = ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart", "Score",
            "Grade", "Best %", "Plays", "Last played", "Peak NPS", "Taps/Holds", "Jumps",
            "Holds", "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4", "W5",
            "Miss", "Max combo", *TECH_FIELDS)
@@ -72,6 +74,10 @@ class LibraryApp:
             self.column_order.remove("Time")
             meter_index = self.column_order.index("Meter")
             self.column_order.insert(meter_index + 1, "Time")
+        if "BPM" not in valid_order:
+            self.column_order.remove("BPM")
+            time_index = self.column_order.index("Time")
+            self.column_order.insert(time_index + 1, "BPM")
         saved_visibility = self.saved_settings.get("column_visibility", {})
         if not isinstance(saved_visibility, dict):
             saved_visibility = {}
@@ -181,7 +187,7 @@ class LibraryApp:
         for col in HEADERS:
             self.tree.heading(col, text=col, command=lambda c=col: self.sort_by(c))
             width = 130 if col in ("Title", "Artist", "Pack") else 92
-            if col in ("Type", "Difficulty", "Meter", "Time", "Score", "Grade", "Best %", "Plays", "Jumps", "Holds",
+            if col in ("Type", "Difficulty", "Meter", "Time", "BPM", "Score", "Grade", "Best %", "Plays", "Jumps", "Holds",
                        "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4", "W5", "Miss"):
                 width = 76
             if col == "Last played":
@@ -237,7 +243,7 @@ class LibraryApp:
         view_menu = tk.Menu(menubar, tearoff=False)
         columns_menu = tk.Menu(view_menu, tearoff=False)
         groups = (
-            ("Song & chart", ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "Chart")),
+            ("Song & chart", ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart")),
             ("Score", ("Score", "Grade", "Best %", "Plays", "Last played", "Max combo")),
             ("Chart counts", ("Peak NPS", "Taps/Holds", "Jumps", "Holds", "Rolls", "Mines", "Hands", "Lifts")),
             ("Tap judgments", TAP_FIELDS),
@@ -670,6 +676,10 @@ class LibraryApp:
                 present.sort(key=lambda row: number(str(row.get(column))), reverse=descending)
             elif column == "Difficulty":
                 present.sort(key=lambda row: difficulty_sort_key(row.get(column, "")), reverse=descending)
+            elif column == "BPM":
+                present.sort(key=bpm_sort_key, reverse=descending)
+            elif column == "Grade":
+                present.sort(key=lambda row: grade_sort_key(row.get(column, "")), reverse=descending)
             else:
                 present.sort(key=lambda row: str(row.get(column, "")).casefold(), reverse=descending)
             visible = present + missing
