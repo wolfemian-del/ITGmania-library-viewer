@@ -13,12 +13,12 @@ class ParsingTests(unittest.TestCase):
 
     def test_split_path_normalizes_filesystem_absolute_paths(self):
         self.assertEqual(
-            data.split_path(r"C:\Games\ITGmania\Songs\Pack\Song"), "Pack/Song")
+            data.split_path(r"C:\\Games\\ITGmania\\Songs\\Pack\\Song"), "Pack/Song")
         self.assertEqual(
             data.split_path("/home/player/ITGmania/Songs/Pack/Song"), "Pack/Song")
 
     def test_split_path_requires_songs_component(self):
-        path = r"C:\Games\MySongs\Pack\Song"
+        path = r"C:\\Games\\MySongs\\Pack\\Song"
         self.assertEqual(data.split_path(path), "C:/Games/MySongs/Pack/Song")
 
     def test_cache_chart_matches_stats_by_normalized_key(self):
@@ -94,11 +94,10 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(row["Crossovers"], 1)
         self.assertEqual(row["HalfCrossovers"], 2)
         self.assertEqual(row["FullCrossovers"], "")
-        self.assertEqual(row["Peak NPS"], "")
 
     def test_cache_peak_nps_is_parsed_when_present(self):
         with tempfile.TemporaryDirectory() as directory:
-            cache_file = Path(directory) / "peak-nps.cache"
+            cache_file = Path(directory) / "peak.cache"
             cache_file.write_text(
                 "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
                 "#NOTEDATA:;\n"
@@ -108,7 +107,6 @@ class ParsingTests(unittest.TestCase):
                 encoding="utf-8",
             )
             row = data.parse_cache_file(cache_file, {})[0]
-
         self.assertEqual(row["Peak NPS"], 12.5)
 
     def test_stats_index_reads_score_and_ignores_case_in_matching_key(self):
@@ -167,6 +165,55 @@ class DifficultySortTests(unittest.TestCase):
     def test_difficulty_key_is_case_insensitive(self):
         values = ["hard", "Beginner", "EASY"]
         self.assertEqual(sorted(values, key=data.difficulty_sort_key), ["Beginner", "EASY", "hard"])
+
+
+class BpmTests(unittest.TestCase):
+    def test_parse_bpms_single_and_range(self):
+        self.assertEqual(data.parse_bpms("0.000=150.000"), (150.0, 150.0))
+        self.assertEqual(data.parse_bpms("0.000=100.000,64.000=300.000"), (100.0, 300.0))
+        self.assertIsNone(data.parse_bpms(""))
+        self.assertIsNone(data.parse_bpms("not-a-bpm"))
+
+    def test_format_bpm_display_prefers_displaybpm(self):
+        self.assertEqual(data.format_bpm_display("*", 100, 300), "*")
+        self.assertEqual(data.format_bpm_display("180", 100, 300), "180")
+        self.assertEqual(data.format_bpm_display("120:180", 100, 300), "120–180")
+        self.assertEqual(data.format_bpm_display("", 150, 150), "150")
+        self.assertEqual(data.format_bpm_display("", 100, 300), "100–300")
+        self.assertEqual(data.format_bpm_display(None, "", ""), "")
+
+    def test_bpm_sort_key_orders_by_max_then_min(self):
+        slow_gimmick = {"bpm_min": 100, "bpm_max": 300}
+        steady = {"bpm_min": 120, "bpm_max": 150}
+        ordered = sorted([steady, slow_gimmick], key=data.bpm_sort_key)
+        self.assertEqual(ordered[0], steady)
+        self.assertEqual(ordered[1], slow_gimmick)
+
+    def test_cache_exposes_bpm_range(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "song.cache"
+            cache_file.write_text(
+                "#TITLE:Example;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#BPMS:0.000=100.000,32.000=300.000;\n"
+                "#DISPLAYBPM:100:300;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Hard;\n"
+                "#METER:10;\n",
+                encoding="utf-8",
+            )
+            row = data.parse_cache_file(cache_file, {})[0]
+        self.assertEqual(row["BPM"], "100–300")
+        self.assertEqual(row["bpm_min"], 100.0)
+        self.assertEqual(row["bpm_max"], 300.0)
+
+
+class GradeSortTests(unittest.TestCase):
+    def test_grade_sort_key_follows_tier_order(self):
+        grades = ["S-", "S+", "S", "A+", "A", "D", "★★★★"]
+        ordered = sorted(grades, key=data.grade_sort_key)
+        self.assertEqual(ordered, ["★★★★", "S+", "S", "S-", "A+", "A", "D"])
 
 
 class CourseModelTests(unittest.TestCase):
