@@ -7,7 +7,7 @@ import library_data as data
 
 class ParsingTests(unittest.TestCase):
     def test_split_path_normalizes_separators_and_prefix(self):
-        self.assertEqual(data.split_path(r"Songs\\Pack\\Song"), "Pack/Song")
+        self.assertEqual(data.split_path("Songs\\Pack\\Song"), "Pack/Song")
 
     def test_cache_chart_matches_stats_by_normalized_key(self):
         with tempfile.TemporaryDirectory() as directory:
