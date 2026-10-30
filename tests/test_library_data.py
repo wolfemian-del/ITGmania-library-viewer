@@ -7,7 +7,7 @@ import library_data as data
 
 class ParsingTests(unittest.TestCase):
     def test_split_path_normalizes_separators_and_prefix(self):
-        self.assertEqual(data.split_path(r"Songs\Pack\Song"), "Pack/Song")
+        self.assertEqual(data.split_path("Songs\\Pack\\Song"), "Pack/Song")
 
     def test_cache_chart_matches_stats_by_normalized_key(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -115,6 +115,99 @@ class DifficultySortTests(unittest.TestCase):
     def test_difficulty_key_is_case_insensitive(self):
         values = ["hard", "Beginner", "EASY"]
         self.assertEqual(sorted(values, key=data.difficulty_sort_key), ["Beginner", "EASY", "hard"])
+
+
+class CourseModelTests(unittest.TestCase):
+    def test_course_song_line_formats_path_and_difficulty(self):
+        self.assertEqual(
+            data.course_song_line("Pack/Song", "Hard"),
+            "#SONG:Pack/Song:Hard:;",
+        )
+
+    def test_course_song_lines_from_rows(self):
+        rows = [
+            {"Course path": "Pack/One", "Difficulty": "Hard"},
+            {"Course path": "Pack/Two", "Difficulty": "Challenge"},
+        ]
+        self.assertEqual(
+            data.course_song_lines(rows),
+            ["#SONG:Pack/One:Hard:;", "#SONG:Pack/Two:Challenge:;"],
+        )
+
+    def test_format_new_course_includes_title_and_trailing_newline(self):
+        body = data.format_new_course("My Course", ["#SONG:Pack/One:Hard:;"])
+        self.assertEqual(body, "#COURSE:My Course;\n#SONG:Pack/One:Hard:;\n")
+
+    def test_parse_course_text_reads_title_and_songs(self):
+        text = (
+            "#COURSE:Example;\n"
+            "#SONG:Pack/One:Hard:;\n"
+            "#SONG:Pack/Two:Challenge:;\n"
+        )
+        parsed = data.parse_course_text(text)
+        self.assertTrue(parsed["has_course"])
+        self.assertEqual(parsed["title"], "Example")
+        self.assertEqual(
+            [(song["path"], song["difficulty"]) for song in parsed["songs"]],
+            [("Pack/One", "Hard"), ("Pack/Two", "Challenge")],
+        )
+        self.assertIsNone(parsed["trailing_risk"])
+
+    def test_course_trailing_risk_detects_mods_after_last_song(self):
+        text = "#COURSE:Example;\n#SONG:Pack/One:Hard:;\n#MODS:xmod;\n"
+        self.assertEqual(data.course_trailing_risk(text), "MODS")
+        self.assertEqual(data.parse_course_text(text)["trailing_risk"], "MODS")
+
+    def test_course_trailing_risk_ignores_directives_before_last_song(self):
+        text = "#COURSE:Example;\n#MODS:xmod;\n#SONG:Pack/One:Hard:;\n"
+        self.assertIsNone(data.course_trailing_risk(text))
+
+    def test_validate_course_fields_rejects_empty_and_unsafe_text(self):
+        self.assertEqual(data.validate_course_fields([]), "Add at least one chart to the course.")
+        self.assertEqual(
+            data.validate_course_fields(
+                [{"Course path": "Pack/One", "Difficulty": "Hard"}],
+                title="",
+            ),
+            "Enter a title for this course.",
+        )
+        self.assertEqual(
+            data.validate_course_fields(
+                [{"Course path": "Pack/One", "Difficulty": "Hard"}],
+                title="   ",
+            ),
+            "Enter a title for this course.",
+        )
+        self.assertIn(
+            "titles",
+            data.validate_course_fields(
+                [{"Course path": "Pack/One", "Difficulty": "Hard"}],
+                title="Bad:Title",
+            ).casefold(),
+        )
+        self.assertIn(
+            "paths",
+            data.validate_course_fields(
+                [{"Course path": "Pack:One", "Difficulty": "Hard"}],
+            ).casefold(),
+        )
+        self.assertIn(
+            "difficulties",
+            data.validate_course_fields(
+                [{"Course path": "Pack/One", "Difficulty": "Hard:Extra"}],
+            ).casefold(),
+        )
+        self.assertIsNone(
+            data.validate_course_fields(
+                [{"Course path": "Pack/One", "Difficulty": "Hard"}],
+            )
+        )
+        self.assertIsNone(
+            data.validate_course_fields(
+                [{"Course path": "Pack/One", "Difficulty": "Hard"}],
+                title="Safe Title",
+            )
+        )
 
 
 class CourseAppendTests(unittest.TestCase):
