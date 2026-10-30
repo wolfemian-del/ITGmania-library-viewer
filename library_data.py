@@ -22,23 +22,31 @@ GRADE_NAMES = {
     "Tier09": "A", "Tier10": "A-", "Tier11": "B+", "Tier12": "B",
     "Tier13": "B-", "Tier14": "C+", "Tier15": "C", "Tier16": "C-", "Tier17": "D",
 }
+# Best grade first (low index). Accept both Tier keys and display labels.
+GRADE_RANK = {name.casefold(): index for index, name in enumerate(GRADE_NAMES.values())}
+GRADE_RANK.update({tier.casefold(): index for index, tier in enumerate(GRADE_NAMES)})
 COURSE_UNSAFE_CHARS = (";", ":", "\r", "\n")
 
 __all__ = [
     "COURSE_UNSAFE_CHARS",
     "DIFFICULTY_ORDER",
+    "GRADE_NAMES",
     "RADAR_FIELDS",
     "TAP_FIELDS",
     "TECH_FIELDS",
+    "bpm_sort_key",
     "course_append_bytes",
     "course_song_line",
     "course_song_lines",
     "course_trailing_risk",
     "difficulty_sort_key",
+    "format_bpm_display",
     "format_duration",
     "format_new_course",
+    "grade_sort_key",
     "looks_like_song_tree",
     "number",
+    "parse_bpms",
     "parse_cache_file",
     "parse_course_text",
     "split_path",
@@ -65,6 +73,83 @@ def format_duration(seconds) -> str:
 def difficulty_sort_key(value):
     difficulty = str(value or "")
     return DIFFICULTY_RANK.get(difficulty.casefold(), len(DIFFICULTY_ORDER)), difficulty.casefold()
+
+
+def grade_sort_key(value):
+    """Sort grades by ITGmania tier order (S+ before S before S-, etc.)."""
+    grade = str(value or "").strip()
+    if not grade:
+        return len(GRADE_RANK), ""
+    return GRADE_RANK.get(grade.casefold(), len(GRADE_RANK)), grade.casefold()
+
+
+def parse_bpms(value: str | None) -> tuple[float, float] | None:
+    """Return (min, max) BPM from a #BPMS tag value, or None if unusable."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    values = []
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" in part:
+            part = part.split("=", 1)[1].strip()
+        try:
+            values.append(float(part))
+        except ValueError:
+            continue
+    if not values:
+        return None
+    return min(values), max(values)
+
+
+def format_bpm_display(displaybpm: str | None, bpm_min, bpm_max) -> str:
+    """Format a BPM cell from #DISPLAYBPM and/or parsed #BPMS bounds."""
+    raw = (displaybpm or "").strip()
+    if raw == "*":
+        return "*"
+    if raw:
+        # Single value or explicit min:max (colon-separated).
+        if ":" in raw:
+            left, right = (piece.strip() for piece in raw.split(":", 1))
+            try:
+                lo, hi = float(left), float(right)
+            except ValueError:
+                pass
+            else:
+                return _format_bpm_pair(lo, hi)
+        else:
+            try:
+                value = float(raw)
+            except ValueError:
+                pass
+            else:
+                return _format_bpm_number(value)
+    if bpm_min is None or bpm_max is None or bpm_min == "" or bpm_max == "":
+        return ""
+    return _format_bpm_pair(float(bpm_min), float(bpm_max))
+
+
+def _format_bpm_number(value: float) -> str:
+    if value == int(value):
+        return str(int(value))
+    return f"{value:g}"
+
+
+def _format_bpm_pair(lo: float, hi: float) -> str:
+    if lo == hi:
+        return _format_bpm_number(lo)
+    return f"{_format_bpm_number(lo)}–{_format_bpm_number(hi)}"
+
+
+def bpm_sort_key(row: dict):
+    """Sort by max BPM, then min BPM (fast charts with a slow gimmick rank high)."""
+    bpm_max = row.get("bpm_max", "")
+    bpm_min = row.get("bpm_min", "")
+    if bpm_max in (None, "") or bpm_min in (None, ""):
+        return (float("inf"), float("inf"))
+    return (float(bpm_max), float(bpm_min))
 
 
 def tag_map(text: str) -> dict[str, str]:
@@ -137,6 +222,10 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
     song_dir = split_path(song_file)
     song_dir = song_dir.rsplit("/", 1)[0] if "/" in song_dir else ""
     pack = song_dir.split("/", 1)[0] if song_dir else ""
+    bpm_bounds = parse_bpms(song_tags.get("BPMS"))
+    bpm_min = bpm_bounds[0] if bpm_bounds else ""
+    bpm_max = bpm_bounds[1] if bpm_bounds else ""
+    bpm_display = format_bpm_display(song_tags.get("DISPLAYBPM"), bpm_min, bpm_max)
     rows = []
     for chunk in chunks[1:]:
         tags = tag_map(chunk)
@@ -156,6 +245,7 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
             "Pack": pack, "Type": chart_type, "Difficulty": difficulty, "Course path": song_dir,
             "Meter": number(tags.get("METER")),
             "Time": number(song_tags.get("MUSICLENGTH")) if song_tags.get("MUSICLENGTH") else "",
+            "BPM": bpm_display, "bpm_min": bpm_min, "bpm_max": bpm_max,
             "Chart": display_name,
             "Score": number(score.get("Score")) if score else "",
             "Grade": GRADE_NAMES.get(score.get("Grade", ""), score.get("Grade", "")),
