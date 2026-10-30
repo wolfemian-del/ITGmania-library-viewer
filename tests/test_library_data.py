@@ -125,6 +125,30 @@ class ParsingTests(unittest.TestCase):
 
         self.assertEqual(scores[("pack/song", "dance-single", "hard")]["Score"], "123")
 
+    def test_stats_index_keeps_best_score_across_duplicate_normalized_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores>"
+                "<Song Dir='/home/player/ITGmania/Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Hard'>"
+                "<HighScoreList NumTimesPlayed='8' LastPlayed='2026-01-01'>"
+                "<HighScore><PercentDP>0.99</PercentDP><Score>999</Score></HighScore>"
+                "</HighScoreList></Steps></Song>"
+                "<Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Hard'>"
+                "<HighScoreList NumTimesPlayed='5' LastPlayed='2026-02-01'>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>950</Score></HighScore>"
+                "</HighScoreList></Steps></Song>"
+                "</SongScores></Stats>",
+                encoding="utf-8",
+            )
+            scores = data.stats_index(stats_file)
+
+        entry = scores[("pack/song", "dance-single", "hard")]
+        self.assertEqual(entry["Score"], "999")
+        self.assertEqual(entry["PercentDP"], "0.99")
+
     def test_stats_index_accepts_profile_with_no_song_scores(self):
         with tempfile.TemporaryDirectory() as directory:
             stats_file = Path(directory) / "Stats.xml"

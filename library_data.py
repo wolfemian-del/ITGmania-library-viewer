@@ -113,8 +113,18 @@ def stats_index(stats_file: Path) -> dict[tuple[str, str, str], dict]:
                 radar = best.find("RadarValues")
                 if radar is not None:
                     best_data.update({"score_" + name: radar.findtext(name, "") for name in RADAR_FIELDS})
-            result[key] = {"plays": score_list.findtext("NumTimesPlayed", "0"),
-                           "last_played": score_list.findtext("LastPlayed", ""), **best_data}
+            entry = result.setdefault(key, {"plays": "0", "last_played": ""})
+            plays = score_list.findtext("NumTimesPlayed", "0")
+            if number(plays) > number(entry["plays"]):
+                entry["plays"] = plays
+            last_played = score_list.findtext("LastPlayed", "")
+            if last_played > entry["last_played"]:
+                entry["last_played"] = last_played
+            # Several Stats.xml Song entries can normalize to the same key.
+            # Merge them without letting a later, lower record replace the best.
+            if best_data and ("PercentDP" not in entry or
+                              number(best_data.get("PercentDP")) > number(entry.get("PercentDP"))):
+                entry.update(best_data)
     return result
 
 
