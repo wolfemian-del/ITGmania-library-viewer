@@ -164,6 +164,20 @@ class CourseModelTests(unittest.TestCase):
 
     def test_validate_course_fields_rejects_empty_and_unsafe_text(self):
         self.assertEqual(data.validate_course_fields([]), "Add at least one chart to the course.")
+        self.assertEqual(
+            data.validate_course_fields(
+                [{"Course path": "Pack/One", "Difficulty": "Hard"}],
+                title="",
+            ),
+            "Enter a title for this course.",
+        )
+        self.assertEqual(
+            data.validate_course_fields(
+                [{"Course path": "Pack/One", "Difficulty": "Hard"}],
+                title="   ",
+            ),
+            "Enter a title for this course.",
+        )
         self.assertIn(
             "titles",
             data.validate_course_fields(
@@ -176,6 +190,17 @@ class CourseModelTests(unittest.TestCase):
             data.validate_course_fields(
                 [{"Course path": "Pack:One", "Difficulty": "Hard"}],
             ).casefold(),
+        )
+        self.assertIn(
+            "difficulties",
+            data.validate_course_fields(
+                [{"Course path": "Pack/One", "Difficulty": "Hard:Extra"}],
+            ).casefold(),
+        )
+        self.assertIsNone(
+            data.validate_course_fields(
+                [{"Course path": "Pack/One", "Difficulty": "Hard"}],
+            )
         )
         self.assertIsNone(
             data.validate_course_fields(
