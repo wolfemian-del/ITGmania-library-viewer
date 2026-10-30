@@ -192,12 +192,17 @@ def _contains_unsafe_course_text(value: str) -> bool:
 def validate_course_fields(rows: list[dict], title: str | None = None) -> str | None:
     """Return a human-readable error if course fields are invalid, else None.
 
+    When ``title`` is provided (not None), a blank title is rejected. Pass
+    ``title=None`` to skip title checks (e.g. append flows that do not set one).
+
     Does not decide mixed-type policy; callers that care about mixed chart types
     should inspect the rows themselves after this returns None.
     """
     if title is not None:
         cleaned = title.strip()
-        if cleaned and _contains_unsafe_course_text(cleaned):
+        if not cleaned:
+            return "Enter a title for this course."
+        if _contains_unsafe_course_text(cleaned):
             return "Course titles cannot contain semicolons, colons, or newlines."
     if not rows:
         return "Add at least one chart to the course."
@@ -205,6 +210,8 @@ def validate_course_fields(rows: list[dict], title: str | None = None) -> str | 
         return "One or more selected charts are missing a song path or difficulty."
     if any(_contains_unsafe_course_text(str(row.get("Course path", ""))) for row in rows):
         return "Song paths cannot contain semicolons, colons, or newlines."
+    if any(_contains_unsafe_course_text(str(row.get("Difficulty", ""))) for row in rows):
+        return "Difficulties cannot contain semicolons, colons, or newlines."
     return None
 
 
