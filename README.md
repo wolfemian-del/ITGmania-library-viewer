@@ -25,7 +25,7 @@ On Linux and macOS, choose the cache and profile paths with **Browse…**; the a
 
 - Search by title, artist, pack, chart name, type, or difficulty.
 - Filter by pack, steps type, and difficulty; show scored charts only. Difficulties are listed in gameplay order from Beginner through Edit.
-- Click a column heading to sort. Click it again to reverse the order. Difficulty sorts in gameplay order from Beginner through Edit.
+- Click a column heading to sort. Click it again to reverse the order. Difficulty sorts in gameplay order from Beginner through Edit. Grade sorts in ITGmania tier order (S+ before S before S−). BPM sorts by maximum tempo, then minimum.
 - Drag column headings to reorder them, and drag the divider between headings to resize a column.
 - Use **View → Columns** to show or hide columns by category; **View → Reset column layout** restores the defaults.
 - Scroll horizontally for the full set of score, radar, and ITGmania tech-count columns.
@@ -36,7 +36,7 @@ New courses contain a `#COURSE:title;` line followed by one `#SONG:path:difficul
 
 The table includes chart meter, peak NPS, radar note counts, the player's highest `PercentDP` score for the chart, grade, play count, last played date, best-score tap judgments and combo, and cached tech counts. `Stats.xml` scores are matched to cached charts by song directory, steps type, and difficulty.
 
-The **Time** column shows cached song music length as `minutes:seconds`; CSV exports retain that value in seconds. The course builder shows each queued song's time and the summed course length.
+The **Time** column shows cached song music length as `minutes:seconds`; CSV exports retain that value in seconds. The **BPM** column shows the song's tempo range from the cache (`#BPMS`, with `#DISPLAYBPM` when set). Sorting by BPM uses maximum then minimum tempo so a mostly-fast chart with a brief slow section ranks with other fast charts. Grade sorts in ITGmania tier order (S+ before S before S−, and so on), not alphabetically. The course builder shows each queued song's time and the summed course length.
 
 ## Data paths
 
