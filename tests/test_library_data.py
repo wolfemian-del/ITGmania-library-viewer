@@ -367,10 +367,18 @@ class SearchQueryTests(unittest.TestCase):
         q = "Smiley meter:11 bpm:200-300 time:>2:00 diff:Challenge"
         res = data.parse_search_query(q)
         self.assertEqual(res["free_terms"], ["smiley"])
+        self.assertEqual(res["free_text"], "smiley")
         self.assertIn(("meter", "11"), res["directives"])
         self.assertIn(("bpm", "200-300"), res["directives"])
         self.assertIn(("time", ">2:00"), res["directives"])
         self.assertIn(("difficulty", "Challenge"), res["directives"])
+
+    def test_parse_search_query_preserves_quoted_free_text_for_round_trip(self):
+        parsed = data.parse_search_query('"In The Groove" meter:11')
+        self.assertEqual(parsed["free_terms"], ["in the groove"])
+        restored = data.parse_search_query(f'{parsed["free_text"]} meter:11')
+        self.assertEqual(restored["free_terms"], parsed["free_terms"])
+        self.assertIn(("meter", "11"), restored["directives"])
 
     def test_match_chart_query_meter_exact_and_range(self):
         row = {"Meter": 11, "Title": "Summer", "Artist": "Smiley", "Pack": "ITG"}

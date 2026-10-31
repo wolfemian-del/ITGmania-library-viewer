@@ -17,7 +17,6 @@ from tkinter import filedialog, messagebox, ttk
 from library_data import (
     DIFFICULTY_ORDER,
     GRADE_OPTIONS,
-    GRADE_NAMES,
     TAP_FIELDS,
     TECH_FIELDS,
     bpm_sort_key,
@@ -788,12 +787,13 @@ class LibraryApp:
 
         tk.Label(window, text="Advanced Search", fg="#f2f6fa", bg="#10151d",
                  font=("Segoe UI Semibold", 15)).pack(anchor="w", padx=18, pady=(14, 2))
-        tk.Label(window, text="Search charts by specific fields, tempo, length, or difficulty.",
+        tk.Label(window, text="Set field filters and a minimum grade. Free-text terms are ANDed; quote phrases.",
                  fg="#9eacbb", bg="#10151d", font=("Segoe UI", 9)).pack(anchor="w", padx=18, pady=(0, 10))
 
         form = tk.Frame(window, bg="#10151d", padx=18)
         form.pack(fill="both", expand=True)
 
+        free_text_var = tk.StringVar()
         title_var = tk.StringVar()
         artist_var = tk.StringVar()
         pack_var = tk.StringVar()
@@ -811,6 +811,7 @@ class LibraryApp:
         curr_q = self.search_var.get().strip()
         if curr_q:
             parsed = parse_search_query(curr_q)
+            free_text_var.set(parsed.get("free_text", ""))
             for field, val in parsed.get("directives", []):
                 if field == "title":
                     title_var.set(val)
@@ -882,6 +883,7 @@ class LibraryApp:
             if hint:
                 tk.Label(row, text=hint, fg="#607285", bg="#10151d", font=("Segoe UI", 8), padx=6).pack(side="left")
 
+        add_text_row(form, "Text", free_text_var)
         add_text_row(form, "Title", title_var)
         add_text_row(form, "Artist", artist_var)
         add_text_row(form, "Pack", pack_var)
@@ -910,6 +912,9 @@ class LibraryApp:
 
         def build_query():
             tokens = []
+            free_text = free_text_var.get().strip()
+            if free_text:
+                tokens.append(free_text)
             t = title_var.get().strip()
             if t:
                 tokens.append(f'title:"{t}"' if " " in t else f"title:{t}")
@@ -947,7 +952,7 @@ class LibraryApp:
         def update_preview(*_):
             query_preview.config(text=build_query())
 
-        for v in (title_var, artist_var, pack_var, meter_min_var, meter_max_var,
+        for v in (free_text_var, title_var, artist_var, pack_var, meter_min_var, meter_max_var,
                   bpm_min_var, bpm_max_var, time_min_var, time_max_var, nps_min_var, nps_max_var, grade_min_var):
             v.trace_add("write", update_preview)
         update_preview()
@@ -961,7 +966,7 @@ class LibraryApp:
             window.destroy()
 
         def clear_fields():
-            for v in (title_var, artist_var, pack_var, meter_min_var, meter_max_var,
+            for v in (free_text_var, title_var, artist_var, pack_var, meter_min_var, meter_max_var,
                       bpm_min_var, bpm_max_var, time_min_var, time_max_var, nps_min_var, nps_max_var):
                 v.set("")
             grade_min_var.set("Any")

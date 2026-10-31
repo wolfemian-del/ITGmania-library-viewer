@@ -562,7 +562,7 @@ def parse_search_query(query: str) -> dict:
     """Parse a query string into free-text terms and structured field criteria."""
     query = str(query or "").strip()
     if not query:
-        return {"free_terms": [], "directives": []}
+        return {"free_terms": [], "free_text": "", "directives": []}
 
     try:
         tokens = shlex.split(query)
@@ -586,7 +586,8 @@ def parse_search_query(query: str) -> dict:
                 continue
         free_terms.append(token.casefold())
 
-    return {"free_terms": free_terms, "directives": directives}
+    free_text = " ".join(shlex.quote(term) for term in free_terms)
+    return {"free_terms": free_terms, "free_text": free_text, "directives": directives}
 
 
 def match_chart_query(row: dict, query: str | dict) -> bool:
