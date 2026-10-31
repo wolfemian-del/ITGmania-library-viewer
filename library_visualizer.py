@@ -16,6 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from library_data import (
     DIFFICULTY_ORDER,
+    GRADE_OPTIONS,
     TAP_FIELDS,
     TECH_FIELDS,
     bpm_sort_key,
@@ -24,8 +25,11 @@ from library_data import (
     format_duration,
     grade_sort_key,
     looks_like_song_tree,
+    match_chart_query,
     number,
     parse_cache_file,
+    parse_numeric_bound,
+    parse_search_query,
     stats_index,
 )
 
@@ -168,7 +172,8 @@ class LibraryApp:
         bar.pack(fill="x")
         tk.Label(bar, text="Search", fg="#9eacbb", bg="#10151d", font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
         self.search_entry = self._entry(bar, "", self.search_var)
-        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self._button(bar, "Advanced…", self.open_advanced_search).pack(side="left", padx=(0, 8))
         self.pack_filter = self._combo(bar, self.pack_var, ["All packs"])
         self.pack_filter.pack(side="left", padx=4)
         self.type_filter = self._combo(bar, self.type_var, ["All types"])
@@ -237,6 +242,7 @@ class LibraryApp:
 
         edit_menu = tk.Menu(menubar, tearoff=False)
         edit_menu.add_command(label="Find", accelerator="Ctrl+F", command=self.focus_search)
+        edit_menu.add_command(label="Advanced search…", accelerator="Ctrl+Shift+F", command=self.open_advanced_search)
         edit_menu.add_command(label="Clear search", accelerator="Esc", command=self.clear_search)
         menubar.add_cascade(label="Edit", menu=edit_menu)
 
@@ -263,6 +269,9 @@ class LibraryApp:
         menubar.add_cascade(label="View", menu=view_menu)
         self.root.configure(menu=menubar)
         self.root.bind("<Control-f>", lambda _event: self.focus_search())
+        self.root.bind("<Control-F>", lambda _event: self.focus_search())
+        self.root.bind("<Control-Shift-f>", lambda _event: self.open_advanced_search())
+        self.root.bind("<Control-Shift-F>", lambda _event: self.open_advanced_search())
         self.root.bind("<Escape>", lambda _event: self.clear_search())
 
     @staticmethod
@@ -654,7 +663,8 @@ class LibraryApp:
         self._render_generation = getattr(self, "_render_generation", 0) + 1
         generation = self._render_generation
         self._update_sort_headings()
-        needle = self.search_var.get().strip().casefold()
+        query_text = self.search_var.get().strip()
+        criteria = parse_search_query(query_text) if query_text else None
         pack, chart_type, diff = self.pack_var.get(), self.type_var.get(), self.diff_var.get()
         visible = []
         for row in self.rows:
@@ -666,7 +676,7 @@ class LibraryApp:
                 continue
             if self.scored_var.get() and not row["Grade"]:
                 continue
-            if needle and needle not in " ".join(str(row[k]) for k in ("Title", "Artist", "Pack", "Chart", "Type", "Difficulty")).casefold():
+            if criteria and not match_chart_query(row, criteria):
                 continue
             visible.append(row)
         for column, descending in reversed(self.sort_keys):
@@ -761,6 +771,209 @@ class LibraryApp:
             writer.writeheader()
             writer.writerows(self.rows)
         self.status.set(f"Exported {len(self.rows):,} charts to {path}")
+
+    def open_advanced_search(self):
+        if getattr(self, "advanced_search_window", None) is not None and self.advanced_search_window.winfo_exists():
+            self.advanced_search_window.lift()
+            return
+
+        window = tk.Toplevel(self.root)
+        self.advanced_search_window = window
+        window.title("Advanced Search")
+        window.geometry("560x540")
+        window.minsize(480, 440)
+        window.configure(bg="#10151d")
+        window.transient(self.root)
+
+        tk.Label(window, text="Advanced Search", fg="#f2f6fa", bg="#10151d",
+                 font=("Segoe UI Semibold", 15)).pack(anchor="w", padx=18, pady=(14, 2))
+        tk.Label(window, text="Set field filters and a minimum grade. Free-text terms are ANDed; quote phrases.",
+                 fg="#9eacbb", bg="#10151d", font=("Segoe UI", 9)).pack(anchor="w", padx=18, pady=(0, 10))
+
+        form = tk.Frame(window, bg="#10151d", padx=18)
+        form.pack(fill="both", expand=True)
+
+        free_text_var = tk.StringVar()
+        title_var = tk.StringVar()
+        artist_var = tk.StringVar()
+        pack_var = tk.StringVar()
+        meter_min_var = tk.StringVar()
+        meter_max_var = tk.StringVar()
+        bpm_min_var = tk.StringVar()
+        bpm_max_var = tk.StringVar()
+        time_min_var = tk.StringVar()
+        time_max_var = tk.StringVar()
+        nps_min_var = tk.StringVar()
+        nps_max_var = tk.StringVar()
+        grade_min_var = tk.StringVar(value="Any")
+
+        # Parse current search string to prepopulate fields
+        curr_q = self.search_var.get().strip()
+        if curr_q:
+            parsed = parse_search_query(curr_q)
+            free_text_var.set(parsed.get("free_text", ""))
+            for field, val in parsed.get("directives", []):
+                if field == "title":
+                    title_var.set(val)
+                elif field == "artist":
+                    artist_var.set(val)
+                elif field == "pack":
+                    pack_var.set(val)
+                elif field == "meter":
+                    b = parse_numeric_bound(val)
+                    if b:
+                        if b[0] == "range":
+                            meter_min_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
+                            meter_max_var.set(str(int(b[2]) if b[2].is_integer() else b[2]))
+                        elif b[0] in (">=", ">"):
+                            meter_min_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
+                        elif b[0] in ("<=", "<"):
+                            meter_max_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
+                        elif b[0] == "==":
+                            meter_min_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
+                            meter_max_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
+                elif field == "bpm":
+                    b = parse_numeric_bound(val)
+                    if b:
+                        if b[0] == "range":
+                            bpm_min_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
+                            bpm_max_var.set(str(int(b[2]) if b[2].is_integer() else b[2]))
+                        elif b[0] in (">=", ">"):
+                            bpm_min_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
+                        elif b[0] in ("<=", "<"):
+                            bpm_max_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
+                        elif b[0] == "==":
+                            bpm_min_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
+                            bpm_max_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
+                elif field == "time":
+                    b = parse_numeric_bound(val, is_duration=True)
+                    if b:
+                        if b[0] == "range":
+                            time_min_var.set(format_duration(b[1]))
+                            time_max_var.set(format_duration(b[2]))
+                        elif b[0] in (">=", ">"):
+                            time_min_var.set(format_duration(b[1]))
+                        elif b[0] in ("<=", "<"):
+                            time_max_var.set(format_duration(b[1]))
+                        elif b[0] == "==":
+                            time_min_var.set(format_duration(b[1]))
+                            time_max_var.set(format_duration(b[1]))
+                elif field == "grade":
+                    clean_g = val.lstrip(">=< ")
+                    if clean_g in GRADE_OPTIONS:
+                        grade_min_var.set(clean_g)
+
+        def add_text_row(parent, label_text, var):
+            row = tk.Frame(parent, bg="#10151d")
+            row.pack(fill="x", pady=3)
+            tk.Label(row, text=label_text, fg="#9eacbb", bg="#10151d", width=12, anchor="w",
+                     font=("Segoe UI", 9)).pack(side="left")
+            self._entry(row, "", var).pack(side="left", fill="x", expand=True)
+
+        def add_range_row(parent, label_text, min_var, max_var, hint=""):
+            row = tk.Frame(parent, bg="#10151d")
+            row.pack(fill="x", pady=3)
+            tk.Label(row, text=label_text, fg="#9eacbb", bg="#10151d", width=12, anchor="w",
+                     font=("Segoe UI", 9)).pack(side="left")
+            e1 = self._entry(row, "", min_var)
+            e1.pack(side="left", fill="x", expand=True)
+            tk.Label(row, text="to", fg="#607285", bg="#10151d", padx=8, font=("Segoe UI", 9)).pack(side="left")
+            e2 = self._entry(row, "", max_var)
+            e2.pack(side="left", fill="x", expand=True)
+            if hint:
+                tk.Label(row, text=hint, fg="#607285", bg="#10151d", font=("Segoe UI", 8), padx=6).pack(side="left")
+
+        add_text_row(form, "Text", free_text_var)
+        add_text_row(form, "Title", title_var)
+        add_text_row(form, "Artist", artist_var)
+        add_text_row(form, "Pack", pack_var)
+
+        tk.Frame(form, bg="#202b38", height=1).pack(fill="x", pady=10)
+
+        add_range_row(form, "Meter", meter_min_var, meter_max_var)
+        add_range_row(form, "BPM", bpm_min_var, bpm_max_var)
+        add_range_row(form, "Time", time_min_var, time_max_var, "e.g. 1:30 or 90")
+        add_range_row(form, "Peak NPS", nps_min_var, nps_max_var)
+
+        g_row = tk.Frame(form, bg="#10151d")
+        g_row.pack(fill="x", pady=3)
+        tk.Label(g_row, text="Min Grade", fg="#9eacbb", bg="#10151d", width=12, anchor="w",
+                 font=("Segoe UI", 9)).pack(side="left")
+        g_options = ["Any"] + list(GRADE_OPTIONS)
+        self._combo(g_row, grade_min_var, g_options).pack(side="left")
+
+        preview_frame = tk.Frame(window, bg="#17202c", padx=12, pady=8)
+        preview_frame.pack(fill="x", padx=18, pady=(10, 4))
+        tk.Label(preview_frame, text="Query:", fg="#9eacbb", bg="#17202c",
+                 font=("Segoe UI", 8)).pack(side="left", padx=(0, 6))
+        query_preview = tk.Label(preview_frame, text="", fg="#dce5ee", bg="#17202c",
+                                 font=("Consolas", 9, "bold"), anchor="w")
+        query_preview.pack(side="left", fill="x", expand=True)
+
+        def build_query():
+            tokens = []
+            free_text = free_text_var.get().strip()
+            if free_text:
+                tokens.append(free_text)
+            t = title_var.get().strip()
+            if t:
+                tokens.append(f'title:"{t}"' if " " in t else f"title:{t}")
+            a = artist_var.get().strip()
+            if a:
+                tokens.append(f'artist:"{a}"' if " " in a else f"artist:{a}")
+            p = pack_var.get().strip()
+            if p:
+                tokens.append(f'pack:"{p}"' if " " in p else f"pack:{p}")
+
+            def add_range(name, min_v, max_v):
+                min_s = min_v.get().strip()
+                max_s = max_v.get().strip()
+                if min_s and max_s:
+                    if min_s == max_s:
+                        tokens.append(f"{name}:{min_s}")
+                    else:
+                        tokens.append(f"{name}:{min_s}-{max_s}")
+                elif min_s:
+                    tokens.append(f"{name}:>={min_s}")
+                elif max_s:
+                    tokens.append(f"{name}:<={max_s}")
+
+            add_range("meter", meter_min_var, meter_max_var)
+            add_range("bpm", bpm_min_var, bpm_max_var)
+            add_range("time", time_min_var, time_max_var)
+            add_range("nps", nps_min_var, nps_max_var)
+
+            g = grade_min_var.get()
+            if g and g != "Any":
+                tokens.append(f"grade:>={g}")
+
+            return " ".join(tokens)
+
+        def update_preview(*_):
+            query_preview.config(text=build_query())
+
+        for v in (free_text_var, title_var, artist_var, pack_var, meter_min_var, meter_max_var,
+                  bpm_min_var, bpm_max_var, time_min_var, time_max_var, nps_min_var, nps_max_var, grade_min_var):
+            v.trace_add("write", update_preview)
+        update_preview()
+
+        btn_row = tk.Frame(window, bg="#10151d", padx=18, pady=12)
+        btn_row.pack(fill="x", side="bottom")
+
+        def apply_search():
+            q = build_query()
+            self.search_var.set(q)
+            window.destroy()
+
+        def clear_fields():
+            for v in (free_text_var, title_var, artist_var, pack_var, meter_min_var, meter_max_var,
+                      bpm_min_var, bpm_max_var, time_min_var, time_max_var, nps_min_var, nps_max_var):
+                v.set("")
+            grade_min_var.set("Any")
+
+        self._button(btn_row, "Apply", apply_search, primary=True).pack(side="right", padx=(6, 0))
+        self._button(btn_row, "Close", window.destroy).pack(side="right")
+        self._button(btn_row, "Clear", clear_fields).pack(side="left")
 
     def open_course_builder(self):
         if getattr(self, "course_window", None) is not None and self.course_window.winfo_exists():

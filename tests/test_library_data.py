@@ -211,6 +211,9 @@ class BpmTests(unittest.TestCase):
 
 
 class GradeSortTests(unittest.TestCase):
+    def test_grade_filter_options_are_defined_labels(self):
+        self.assertEqual(data.GRADE_OPTIONS, tuple(data.GRADE_NAMES.values()))
+
     def test_grade_sort_key_follows_tier_order(self):
         grades = ["S-", "S+", "S", "A+", "A", "D", "★★★★"]
         ordered = sorted(grades, key=data.grade_sort_key)
@@ -338,5 +341,103 @@ class CourseAppendTests(unittest.TestCase):
             data.course_append_bytes(b"#TITLE:Not a course;", ["#SONG:Pack/Two:Challenge:;"])
 
 
-if __name__ == "__main__":
-    unittest.main()
+class SearchQueryTests(unittest.TestCase):
+    def test_parse_duration_seconds(self):
+        self.assertEqual(data.parse_duration_seconds("120"), 120.0)
+        self.assertEqual(data.parse_duration_seconds("2:15"), 135.0)
+        self.assertEqual(data.parse_duration_seconds("01:30.5"), 90.5)
+        self.assertEqual(data.parse_duration_seconds("1:00:10"), 3610.0)
+        self.assertIsNone(data.parse_duration_seconds(""))
+        self.assertIsNone(data.parse_duration_seconds("not-a-time"))
+
+    def test_parse_numeric_bound_operators_and_ranges(self):
+        self.assertEqual(data.parse_numeric_bound("11"), ("==", 11.0))
+        self.assertEqual(data.parse_numeric_bound("10-12"), ("range", 10.0, 12.0))
+        self.assertEqual(data.parse_numeric_bound("10..12"), ("range", 10.0, 12.0))
+        self.assertEqual(data.parse_numeric_bound(">=10"), (">=", 10.0))
+        self.assertEqual(data.parse_numeric_bound("<=12"), ("<=", 12.0))
+        self.assertEqual(data.parse_numeric_bound(">200"), (">", 200.0))
+        self.assertEqual(data.parse_numeric_bound("<150"), ("<", 150.0))
+        self.assertEqual(data.parse_numeric_bound("=9", is_duration=False), ("==", 9.0))
+        # Durations
+        self.assertEqual(data.parse_numeric_bound("1:30-2:30", is_duration=True), ("range", 90.0, 150.0))
+        self.assertEqual(data.parse_numeric_bound(">2:00", is_duration=True), (">", 120.0))
+
+    def test_parse_search_query_directives(self):
+        q = "Smiley meter:11 bpm:200-300 time:>2:00 diff:Challenge"
+        res = data.parse_search_query(q)
+        self.assertEqual(res["free_terms"], ["smiley"])
+        self.assertEqual(res["free_text"], "smiley")
+        self.assertIn(("meter", "11"), res["directives"])
+        self.assertIn(("bpm", "200-300"), res["directives"])
+        self.assertIn(("time", ">2:00"), res["directives"])
+        self.assertIn(("difficulty", "Challenge"), res["directives"])
+
+    def test_parse_search_query_preserves_quoted_free_text_for_round_trip(self):
+        parsed = data.parse_search_query('"In The Groove" meter:11')
+        self.assertEqual(parsed["free_terms"], ["in the groove"])
+        restored = data.parse_search_query(f'{parsed["free_text"]} meter:11')
+        self.assertEqual(restored["free_terms"], parsed["free_terms"])
+        self.assertIn(("meter", "11"), restored["directives"])
+
+    def test_match_chart_query_meter_exact_and_range(self):
+        row = {"Meter": 11, "Title": "Summer", "Artist": "Smiley", "Pack": "ITG"}
+        self.assertTrue(data.match_chart_query(row, "meter:11"))
+        self.assertTrue(data.match_chart_query(row, "meter:10-12"))
+        self.assertTrue(data.match_chart_query(row, "meter:>=10"))
+        self.assertFalse(data.match_chart_query(row, "meter:12"))
+        self.assertFalse(data.match_chart_query(row, "meter:<10"))
+
+    def test_match_chart_query_bpm_overlap(self):
+        row = {"bpm_min": 180.0, "bpm_max": 240.0, "Title": "Speedy"}
+        # Queries that overlap with [180, 240]
+        self.assertTrue(data.match_chart_query(row, "bpm:200"))
+        self.assertTrue(data.match_chart_query(row, "bpm:200-300"))
+        self.assertTrue(data.match_chart_query(row, "bpm:>150"))
+        self.assertTrue(data.match_chart_query(row, "bpm:<200"))
+        # Queries that do NOT overlap
+        self.assertFalse(data.match_chart_query(row, "bpm:100-150"))
+        self.assertFalse(data.match_chart_query(row, "bpm:>260"))
+        self.assertFalse(data.match_chart_query(row, "bpm:<170"))
+
+    def test_match_chart_query_does_not_crash_when_bpm_is_missing(self):
+        row = {"bpm_min": "", "bpm_max": ""}
+        self.assertFalse(data.match_chart_query(row, "bpm:200"))
+        self.assertFalse(data.match_chart_query(row, "bpm:180-220"))
+
+    def test_match_chart_query_duration_seconds_and_mmss(self):
+        row = {"Time": 135.0, "Title": "Song"}
+        self.assertTrue(data.match_chart_query(row, "time:>120"))
+        self.assertTrue(data.match_chart_query(row, "time:>2:00"))
+        self.assertTrue(data.match_chart_query(row, "time:2:00-2:30"))
+        self.assertFalse(data.match_chart_query(row, "time:<2:00"))
+        self.assertFalse(data.match_chart_query(row, "time:>150"))
+
+    def test_match_chart_query_free_text_and_combined(self):
+        row = {
+            "Title": "Delirium",
+            "Artist": "Smiley",
+            "Pack": "In The Groove",
+            "Meter": 12,
+            "bpm_min": 240.0,
+            "bpm_max": 240.0,
+            "Time": 115.0,
+            "Difficulty": "Challenge",
+            "Type": "dance-single",
+            "Grade": "S+",
+            "Best %": 98.5,
+        }
+        self.assertTrue(data.match_chart_query(row, "Smiley meter:12"))
+        self.assertTrue(data.match_chart_query(row, "delirium bpm:>200 time:<2:00"))
+        self.assertTrue(data.match_chart_query(row, 'pack:"in the groove" grade:>=S'))
+        self.assertFalse(data.match_chart_query(row, "Smiley meter:10"))
+        self.assertFalse(data.match_chart_query(row, "Vertex"))
+
+    def test_score_and_percent_directives_use_their_own_columns(self):
+        row = {"Score": 950000, "Best %": 95.0}
+        self.assertTrue(data.match_chart_query(row, "score:>=900000"))
+        self.assertFalse(data.match_chart_query(row, "score:>=960000"))
+        self.assertTrue(data.match_chart_query(row, "percent:>=95"))
+        self.assertFalse(data.match_chart_query(row, "percent:>=96"))
+
+
