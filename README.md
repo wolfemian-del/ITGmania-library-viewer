@@ -28,7 +28,7 @@ On Linux and macOS, choose the cache and profile paths with **Browse…**; the a
   - **BPM**: `bpm:200-300`, `bpm:>240`, `bpm:180` (matches tempo range overlap)
   - **Length / Time**: `time:>2:00`, `time:>120`, `length:1:30-2:15`, `time:<90` (accepts both `mm:ss` and raw seconds)
   - **Metadata**: `artist:Smiley`, `title:Delirium`, `pack:"In The Groove"`, `diff:Challenge`
-  - **Scores & Tech**: `grade:★★★★`, `grade:>=S`, `percent:>95`, `nps:>15`, `crossovers:>10`, `jacks:>0`
+  - **Scores & Tech**: `grade:★★★★`, `grade:>=S`, `score:>900000` (raw score), `percent:>95`, `nps:>15`, `crossovers:>10`, `jacks:>0`
   - Mixed queries like `Smiley meter:11 bpm:200-300 time:>1:45` filter across text and ranges simultaneously.
 - Filter by pack, steps type, and difficulty; show scored charts only. Difficulties are listed in gameplay order from Beginner through Edit.
 - Click a column heading to sort. Click it again to reverse the order. Difficulty sorts in gameplay order from Beginner through Edit. Grade sorts in ITGmania tier order (S+ before S before S−). BPM sorts by maximum tempo, then minimum.

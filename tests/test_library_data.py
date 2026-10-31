@@ -211,6 +211,9 @@ class BpmTests(unittest.TestCase):
 
 
 class GradeSortTests(unittest.TestCase):
+    def test_grade_filter_options_are_defined_labels(self):
+        self.assertEqual(data.GRADE_OPTIONS, tuple(data.GRADE_NAMES.values()))
+
     def test_grade_sort_key_follows_tier_order(self):
         grades = ["S-", "S+", "S", "A+", "A", "D", "★★★★"]
         ordered = sorted(grades, key=data.grade_sort_key)
@@ -389,6 +392,11 @@ class SearchQueryTests(unittest.TestCase):
         self.assertFalse(data.match_chart_query(row, "bpm:>260"))
         self.assertFalse(data.match_chart_query(row, "bpm:<170"))
 
+    def test_match_chart_query_does_not_crash_when_bpm_is_missing(self):
+        row = {"bpm_min": "", "bpm_max": ""}
+        self.assertFalse(data.match_chart_query(row, "bpm:200"))
+        self.assertFalse(data.match_chart_query(row, "bpm:180-220"))
+
     def test_match_chart_query_duration_seconds_and_mmss(self):
         row = {"Time": 135.0, "Title": "Song"}
         self.assertTrue(data.match_chart_query(row, "time:>120"))
@@ -416,5 +424,12 @@ class SearchQueryTests(unittest.TestCase):
         self.assertTrue(data.match_chart_query(row, 'pack:"in the groove" grade:>=S'))
         self.assertFalse(data.match_chart_query(row, "Smiley meter:10"))
         self.assertFalse(data.match_chart_query(row, "Vertex"))
+
+    def test_score_and_percent_directives_use_their_own_columns(self):
+        row = {"Score": 950000, "Best %": 95.0}
+        self.assertTrue(data.match_chart_query(row, "score:>=900000"))
+        self.assertFalse(data.match_chart_query(row, "score:>=960000"))
+        self.assertTrue(data.match_chart_query(row, "percent:>=95"))
+        self.assertFalse(data.match_chart_query(row, "percent:>=96"))
 
 

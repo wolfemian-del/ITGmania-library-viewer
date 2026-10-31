@@ -23,6 +23,7 @@ GRADE_NAMES = {
     "Tier09": "A", "Tier10": "A-", "Tier11": "B+", "Tier12": "B",
     "Tier13": "B-", "Tier14": "C+", "Tier15": "C", "Tier16": "C-", "Tier17": "D",
 }
+GRADE_OPTIONS = tuple(GRADE_NAMES.values())
 # Best grade first (low index). Accept both Tier keys and display labels.
 GRADE_RANK = {name.casefold(): index for index, name in enumerate(GRADE_NAMES.values())}
 GRADE_RANK.update({tier.casefold(): index for index, tier in enumerate(GRADE_NAMES)})
@@ -31,6 +32,7 @@ COURSE_UNSAFE_CHARS = (";", ":", "\r", "\n")
 __all__ = [
     "COURSE_UNSAFE_CHARS",
     "DIFFICULTY_ORDER",
+    "GRADE_OPTIONS",
     "GRADE_NAMES",
     "RADAR_FIELDS",
     "TAP_FIELDS",
@@ -530,7 +532,12 @@ def _compare_bound(bound: tuple, actual) -> bool:
 def _compare_bpm_bound(bound: tuple, row: dict) -> bool:
     b_min = row.get("bpm_min")
     b_max = row.get("bpm_max")
-    if b_min is None or b_max is None:
+    if b_min in (None, "") or b_max in (None, ""):
+        return False
+    try:
+        b_min = float(b_min)
+        b_max = float(b_max)
+    except (TypeError, ValueError):
         return False
 
     op = bound[0]
@@ -646,7 +653,11 @@ def match_chart_query(row: dict, query: str | dict) -> bool:
             else:
                 if raw_val.casefold() != chart_grade.casefold():
                     return False
-        elif field in ("score", "percent"):
+        elif field == "score":
+            b = parse_numeric_bound(raw_val)
+            if not b or not _compare_bound(b, row.get("Score")):
+                return False
+        elif field == "percent":
             b = parse_numeric_bound(raw_val)
             if not b or not _compare_bound(b, row.get("Best %")):
                 return False

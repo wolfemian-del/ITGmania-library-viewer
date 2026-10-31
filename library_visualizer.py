@@ -16,6 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from library_data import (
     DIFFICULTY_ORDER,
+    GRADE_OPTIONS,
     GRADE_NAMES,
     TAP_FIELDS,
     TECH_FIELDS,
@@ -858,7 +859,7 @@ class LibraryApp:
                             time_max_var.set(format_duration(b[1]))
                 elif field == "grade":
                     clean_g = val.lstrip(">=< ")
-                    if clean_g in GRADE_TIER_RANKS:
+                    if clean_g in GRADE_OPTIONS:
                         grade_min_var.set(clean_g)
 
         def add_text_row(parent, label_text, var):
@@ -896,7 +897,7 @@ class LibraryApp:
         g_row.pack(fill="x", pady=3)
         tk.Label(g_row, text="Min Grade", fg="#9eacbb", bg="#10151d", width=12, anchor="w",
                  font=("Segoe UI", 9)).pack(side="left")
-        g_options = ["Any"] + list(GRADE_TIER_RANKS.keys())
+        g_options = ["Any"] + list(GRADE_OPTIONS)
         self._combo(g_row, grade_min_var, g_options).pack(side="left")
 
         preview_frame = tk.Frame(window, bg="#17202c", padx=12, pady=8)
