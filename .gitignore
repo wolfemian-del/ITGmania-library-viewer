@@ -1,4 +1,12 @@
-# Local game/profile inputs supplied for development; do not commit personal scores.
-/Stats.xml
-/Cache - Shortcut.lnk
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
 __pycache__/
+*.pyc
+.aistudio/
+patches/

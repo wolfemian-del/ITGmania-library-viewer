@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -45,10 +46,14 @@ __all__ = [
     "format_new_course",
     "grade_sort_key",
     "looks_like_song_tree",
+    "match_chart_query",
     "number",
     "parse_bpms",
     "parse_cache_file",
     "parse_course_text",
+    "parse_duration_seconds",
+    "parse_numeric_bound",
+    "parse_search_query",
     "split_path",
     "stats_index",
     "tag_map",
@@ -385,3 +390,280 @@ def course_append_bytes(existing: bytes, song_lines: list[str]) -> bytes:
     newline = b"\r\n" if b"\r\n" in existing else b"\n"
     prefix = newline if existing and not existing.endswith((b"\n", b"\r")) else b""
     return prefix + newline.join(line.encode("utf-8") for line in song_lines) + newline
+
+
+SEARCH_FIELD_ALIASES = {
+    "m": "meter",
+    "meter": "meter",
+    "diff_meter": "meter",
+    "bpm": "bpm",
+    "tempo": "bpm",
+    "time": "time",
+    "len": "time",
+    "length": "time",
+    "title": "title",
+    "t": "title",
+    "artist": "artist",
+    "a": "artist",
+    "pack": "pack",
+    "p": "pack",
+    "chart": "chart",
+    "c": "chart",
+    "diff": "difficulty",
+    "difficulty": "difficulty",
+    "d": "difficulty",
+    "type": "type",
+    "mode": "type",
+    "grade": "grade",
+    "g": "grade",
+    "score": "score",
+    "percent": "percent",
+    "pct": "percent",
+    "plays": "plays",
+    "nps": "peak_nps",
+    "peak_nps": "peak_nps",
+    "peaknps": "peak_nps",
+    **{f.casefold(): f.casefold() for f in TECH_FIELDS},
+}
+
+
+def parse_duration_seconds(value: str) -> float | None:
+    """Parse a duration string in seconds (e.g. '120', '90.5') or mm:ss / hh:mm:ss."""
+    value = str(value or "").strip()
+    if not value:
+        return None
+    if ":" in value:
+        parts = value.split(":")
+        try:
+            if len(parts) == 2:
+                return float(parts[0]) * 60 + float(parts[1])
+            elif len(parts) == 3:
+                return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+        except (TypeError, ValueError):
+            return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_numeric_bound(raw: str, is_duration: bool = False) -> tuple | None:
+    """Parse an operator or range constraint into a normalized tuple.
+
+    Returns:
+      ('range', low, high)
+      ('>', val)
+      ('>=', val)
+      ('<', val)
+      ('<=', val)
+      ('==', val)
+    """
+    raw = str(raw or "").strip()
+    if not raw:
+        return None
+
+    def conv(s: str) -> float | None:
+        if is_duration:
+            return parse_duration_seconds(s)
+        try:
+            return float(s.strip())
+        except (TypeError, ValueError):
+            return None
+
+    if raw.startswith(">="):
+        v = conv(raw[2:])
+        return (">=", v) if v is not None else None
+    if raw.startswith("<="):
+        v = conv(raw[2:])
+        return ("<=", v) if v is not None else None
+    if raw.startswith(">"):
+        v = conv(raw[1:])
+        return (">", v) if v is not None else None
+    if raw.startswith("<"):
+        v = conv(raw[1:])
+        return ("<", v) if v is not None else None
+    if raw.startswith("="):
+        v = conv(raw[1:])
+        return ("==", v) if v is not None else None
+
+    if ".." in raw:
+        parts = raw.split("..", 1)
+        low, high = conv(parts[0]), conv(parts[1])
+        if low is not None and high is not None:
+            return ("range", min(low, high), max(low, high))
+
+    if "-" in raw and not raw.startswith("-"):
+        parts = raw.split("-", 1)
+        low, high = conv(parts[0]), conv(parts[1])
+        if low is not None and high is not None:
+            return ("range", min(low, high), max(low, high))
+
+    v = conv(raw)
+    return ("==", v) if v is not None else None
+
+
+def _compare_bound(bound: tuple, actual) -> bool:
+    if actual in (None, ""):
+        return False
+    try:
+        val = float(actual)
+    except (TypeError, ValueError):
+        return False
+
+    op = bound[0]
+    if op == "range":
+        return bound[1] <= val <= bound[2]
+    target = bound[1]
+    if op == ">":
+        return val > target
+    if op == ">=":
+        return val >= target
+    if op == "<":
+        return val < target
+    if op == "<=":
+        return val <= target
+    if op == "==":
+        return val == target
+    return False
+
+
+def _compare_bpm_bound(bound: tuple, row: dict) -> bool:
+    b_min = row.get("bpm_min")
+    b_max = row.get("bpm_max")
+    if b_min is None or b_max is None:
+        return False
+
+    op = bound[0]
+    if op == "range":
+        low, high = bound[1], bound[2]
+        return b_max >= low and b_min <= high
+    val = bound[1]
+    if op == ">":
+        return b_max > val
+    if op == ">=":
+        return b_max >= val
+    if op == "<":
+        return b_min < val
+    if op == "<=":
+        return b_min <= val
+    if op == "==":
+        return b_min <= val <= b_max
+    return False
+
+
+def parse_search_query(query: str) -> dict:
+    """Parse a query string into free-text terms and structured field criteria."""
+    query = str(query or "").strip()
+    if not query:
+        return {"free_terms": [], "directives": []}
+
+    try:
+        tokens = shlex.split(query)
+    except ValueError:
+        tokens = query.split()
+
+    free_terms = []
+    directives = []
+
+    for token in tokens:
+        token = token.strip()
+        if not token:
+            continue
+        if ":" in token:
+            prefix, val = token.split(":", 1)
+            field = prefix.strip().casefold()
+            if field in SEARCH_FIELD_ALIASES:
+                canonical = SEARCH_FIELD_ALIASES[field]
+                val = val.strip().strip('"').strip("'")
+                directives.append((canonical, val))
+                continue
+        free_terms.append(token.casefold())
+
+    return {"free_terms": free_terms, "directives": directives}
+
+
+def match_chart_query(row: dict, query: str | dict) -> bool:
+    """Return whether a chart row satisfies the search query."""
+    criteria = query if isinstance(query, dict) else parse_search_query(query)
+
+    # 1. Free terms match anywhere across main textual fields
+    if criteria.get("free_terms"):
+        text_corpus = " ".join(
+            str(row.get(k, "")) for k in ("Title", "Artist", "Pack", "Chart", "Type", "Difficulty")
+        ).casefold()
+        for term in criteria["free_terms"]:
+            if term not in text_corpus:
+                return False
+
+    # 2. Field directives
+    for field, raw_val in criteria.get("directives", []):
+        if field == "meter":
+            b = parse_numeric_bound(raw_val)
+            if not b or not _compare_bound(b, row.get("Meter")):
+                return False
+        elif field == "bpm":
+            b = parse_numeric_bound(raw_val)
+            if not b or not _compare_bpm_bound(b, row):
+                return False
+        elif field == "time":
+            b = parse_numeric_bound(raw_val, is_duration=True)
+            if not b or not _compare_bound(b, row.get("Time")):
+                return False
+        elif field == "title":
+            if raw_val.casefold() not in str(row.get("Title", "")).casefold():
+                return False
+        elif field == "artist":
+            if raw_val.casefold() not in str(row.get("Artist", "")).casefold():
+                return False
+        elif field == "pack":
+            if raw_val.casefold() not in str(row.get("Pack", "")).casefold():
+                return False
+        elif field == "chart":
+            if raw_val.casefold() not in str(row.get("Chart", "")).casefold():
+                return False
+        elif field == "difficulty":
+            if raw_val.casefold() not in str(row.get("Difficulty", "")).casefold():
+                return False
+        elif field == "type":
+            if raw_val.casefold() not in str(row.get("Type", "")).casefold():
+                return False
+        elif field == "grade":
+            chart_grade = str(row.get("Grade", ""))
+            if raw_val.startswith((">=", "<=", ">", "<")):
+                op = raw_val[:2] if raw_val[:2] in (">=", "<=") else raw_val[:1]
+                target_grade = raw_val[len(op):].strip()
+                c_rank = grade_sort_key(chart_grade)
+                t_rank = grade_sort_key(target_grade)
+                # Lower grade_sort_key rank means higher/better grade
+                if op == ">=" and not (c_rank <= t_rank):
+                    return False
+                if op == "<=" and not (c_rank >= t_rank):
+                    return False
+                if op == ">" and not (c_rank < t_rank):
+                    return False
+                if op == "<" and not (c_rank > t_rank):
+                    return False
+            else:
+                if raw_val.casefold() != chart_grade.casefold():
+                    return False
+        elif field in ("score", "percent"):
+            b = parse_numeric_bound(raw_val)
+            if not b or not _compare_bound(b, row.get("Best %")):
+                return False
+        elif field == "plays":
+            b = parse_numeric_bound(raw_val)
+            if not b or not _compare_bound(b, row.get("Plays")):
+                return False
+        elif field == "peak_nps":
+            b = parse_numeric_bound(raw_val)
+            if not b or not _compare_bound(b, row.get("Peak NPS")):
+                return False
+        elif field in {f.casefold() for f in TECH_FIELDS}:
+            canonical_field = next(f for f in TECH_FIELDS if f.casefold() == field)
+            b = parse_numeric_bound(raw_val)
+            if not b or not _compare_bound(b, row.get(canonical_field)):
+                return False
+
+    return True
+
+
