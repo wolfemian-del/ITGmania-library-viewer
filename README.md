@@ -10,6 +10,8 @@ Install Python 3.10 or newer with Tcl/Tk, then run:
 python library_visualizer.py
 ```
 
+Optional: Install `matplotlib` (`pip install matplotlib`) to display interactive collection distribution charts (Meter, Difficulty, and BPM) in the collapsible side panel.
+
 The app starts with the usual Windows ITGmania cache location filled in when it exists. Select the flat `Cache/Songs` folder and the player's `Stats.xml` with **Browse…**, then choose **Load / refresh**. The `Stats.xml` can be selected from a local profile folder; it is read only. After the first refresh, the app saves a local snapshot of the parsed chart library and restores it on later launches. Use **Load / refresh** when you want to reread the cache and scores; the saved snapshot does not update automatically when those files change.
 
 On Linux and macOS, choose the cache and profile paths with **Browse…**; the automatic cache-path guess is Windows-specific.
@@ -32,6 +34,7 @@ On Linux and macOS, choose the cache and profile paths with **Browse…**; the a
   - **Scores & Tech**: `grade:★★★★`, `grade:>=S`, `score:>900000` (raw score), `percent:>95`, `nps:>15`, `crossovers:>10`, `jacks:>0`
   - Mixed queries like `Smiley meter:11 bpm:200-300 time:>1:45` filter across text and ranges simultaneously.
 - Filter by pack, steps type, and difficulty; show scored charts only. Difficulties are listed in gameplay order from Beginner through Edit.
+- Toggle the **Distribution** side panel (or **View → Show distribution panel**) to view live distribution charts of Meter levels, Difficulty tiers, or BPM ranges for the currently filtered view. Clicking any category or bar immediately filters the table; clicking it again or clicking **Clear** removes the filter.
 - Click a column heading to sort. Click it again to reverse the order. Difficulty sorts in gameplay order from Beginner through Edit. Grade sorts in ITGmania tier order (S+ before S before S−). BPM sorts by maximum tempo, then minimum.
 - Drag column headings to reorder them, and drag the divider between headings to resize a column.
 - Use **View → Columns** to show or hide columns by category; **View → Reset column layout** restores the defaults.

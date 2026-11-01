@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shlex
+import statistics
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -35,17 +36,23 @@ __all__ = [
     "GRADE_OPTIONS",
     "GRADE_NAMES",
     "RADAR_FIELDS",
+    "SEARCH_FIELD_ALIASES",
     "TAP_FIELDS",
     "TECH_FIELDS",
+    "aggregate_bpm_distribution",
+    "aggregate_difficulty_distribution",
+    "aggregate_meter_distribution",
     "bpm_sort_key",
     "course_append_bytes",
     "course_song_line",
     "course_song_lines",
     "course_trailing_risk",
     "difficulty_sort_key",
+    "distribution_summary_stats",
     "format_bpm_display",
     "format_duration",
     "format_new_course",
+    "get_active_chart_filter",
     "grade_sort_key",
     "looks_like_song_tree",
     "match_chart_query",
@@ -56,6 +63,7 @@ __all__ = [
     "parse_duration_seconds",
     "parse_numeric_bound",
     "parse_search_query",
+    "replace_search_directive",
     "split_path",
     "stats_index",
     "tag_map",
@@ -677,5 +685,250 @@ def match_chart_query(row: dict, query: str | dict) -> bool:
                 return False
 
     return True
+
+
+def replace_search_directive(query: str, directive_prefix: str, new_value: str | None) -> str:
+    """Replace or remove a directive in a search query, preserving free-text terms and other directives.
+
+    Uses shlex tokenization consistent with parse_search_query and SEARCH_FIELD_ALIASES.
+    If new_value is None, removes any directives matching directive_prefix or its aliases.
+    If new_value is given, replaces the first matching directive in-place or appends it.
+    """
+    canonical_target = SEARCH_FIELD_ALIASES.get(directive_prefix.casefold(), directive_prefix.casefold())
+    raw_query = str(query or "").strip()
+    if not raw_query:
+        if new_value is None:
+            return ""
+        val_str = f'"{new_value}"' if " " in new_value and not (new_value.startswith('"') and new_value.endswith('"')) else new_value
+        return f"{canonical_target}:{val_str}"
+
+    try:
+        tokens = shlex.split(raw_query)
+    except ValueError:
+        tokens = raw_query.split()
+
+    new_tokens = []
+    replaced = False
+
+    for token in tokens:
+        if ":" in token:
+            prefix, _ = token.split(":", 1)
+            field = prefix.strip().casefold()
+            canonical = SEARCH_FIELD_ALIASES.get(field)
+            if canonical == canonical_target:
+                if not replaced and new_value is not None:
+                    val_str = f'"{new_value}"' if " " in new_value and not (new_value.startswith('"') and new_value.endswith('"')) else new_value
+                    new_tokens.append(f"{canonical_target}:{val_str}")
+                    replaced = True
+                continue
+        new_tokens.append(token)
+
+    if not replaced and new_value is not None:
+        val_str = f'"{new_value}"' if " " in new_value and not (new_value.startswith('"') and new_value.endswith('"')) else new_value
+        new_tokens.append(f"{canonical_target}:{val_str}")
+
+    def _format_token(tok: str) -> str:
+        if ":" in tok:
+            p, v = tok.split(":", 1)
+            if " " in v and not (v.startswith('"') and v.endswith('"')):
+                return f'{p}:"{v}"'
+            return tok
+        if " " in tok and not (tok.startswith('"') and tok.endswith('"')):
+            return f'"{tok}"'
+        return tok
+
+    return " ".join(_format_token(t) for t in new_tokens).strip()
+
+
+def get_active_chart_filter(diff_filter: str, search_query: str) -> tuple[str, str] | None:
+    """Return (metric_name, active_value) for the active chart filter, or None.
+
+    Tie-breaker rule: difficulty combobox takes precedence over search directives.
+    """
+    if diff_filter and diff_filter != "All difficulties":
+        return ("Difficulty", diff_filter)
+
+    parsed = parse_search_query(search_query)
+    for field, val in parsed.get("directives", []):
+        if field == "meter":
+            return ("Meter", val)
+        if field == "bpm":
+            return ("BPM", val)
+
+    return None
+
+
+def aggregate_meter_distribution(rows: list[dict], active_val: str | None = None) -> list[tuple[str, int, str, bool]]:
+    """Aggregate row counts per meter level.
+
+    Float meters like 11.0 are normalized to integer strings ("11"). Missing or unparseable
+    meters are grouped into "?" at the end (non-interactive).
+    Returns list of (label, count, filter_token, is_active).
+    """
+    counts: dict[str, int] = {}
+    numeric_keys: dict[float, str] = {}
+    missing_count = 0
+
+    for row in rows:
+        meter_raw = row.get("Meter")
+        if meter_raw in (None, ""):
+            missing_count += 1
+            continue
+        try:
+            m_val = float(meter_raw)
+            label = str(int(m_val)) if m_val.is_integer() else f"{m_val:g}"
+            counts[label] = counts.get(label, 0) + 1
+            numeric_keys[m_val] = label
+        except (TypeError, ValueError):
+            missing_count += 1
+
+    result = []
+    for m_val in sorted(numeric_keys.keys()):
+        label = numeric_keys[m_val]
+        count = counts[label]
+        is_active = (active_val == label) if active_val is not None else False
+        result.append((label, count, label, is_active))
+
+    if missing_count > 0:
+        result.append(("?", missing_count, "", False))
+
+    return result
+
+
+def aggregate_difficulty_distribution(rows: list[dict], active_val: str | None = None) -> list[tuple[str, int, str, bool]]:
+    """Aggregate row counts per difficulty tier in canonical DIFFICULTY_ORDER.
+
+    Returns list of (label, count, filter_token, is_active).
+    """
+    counts: dict[str, int] = {diff: 0 for diff in DIFFICULTY_ORDER}
+    extra_diffs: dict[str, int] = {}
+
+    for row in rows:
+        diff = str(row.get("Difficulty") or "").strip()
+        matched = False
+        for d in DIFFICULTY_ORDER:
+            if diff.casefold() == d.casefold():
+                counts[d] += 1
+                matched = True
+                break
+        if not matched and diff:
+            extra_diffs[diff] = extra_diffs.get(diff, 0) + 1
+
+    result = []
+    for diff in DIFFICULTY_ORDER:
+        count = counts.get(diff, 0)
+        is_active = (active_val.casefold() == diff.casefold()) if active_val else False
+        result.append((diff, count, diff, is_active))
+
+    for diff, count in extra_diffs.items():
+        is_active = (active_val.casefold() == diff.casefold()) if active_val else False
+        result.append((diff, count, diff, is_active))
+
+    return result
+
+
+BPM_BINS = (
+    ("<120", 0.0, 120.0, "<120"),
+    ("120-139", 120.0, 140.0, "120-139"),
+    ("140-159", 140.0, 160.0, "140-159"),
+    ("160-179", 160.0, 180.0, "160-179"),
+    ("180-199", 180.0, 200.0, "180-199"),
+    ("200+", 200.0, float("inf"), ">=200"),
+)
+
+
+def aggregate_bpm_distribution(rows: list[dict], active_val: str | None = None) -> list[tuple[str, int, str, bool]]:
+    """Aggregate row counts across standard BPM ranges using numeric bpm_max.
+
+    Returns list of (label, count, filter_token, is_active).
+    """
+    counts = {label: 0 for label, *_ in BPM_BINS}
+    missing_count = 0
+
+    for row in rows:
+        b_max = row.get("bpm_max")
+        if b_max in (None, ""):
+            missing_count += 1
+            continue
+        try:
+            val = float(b_max)
+        except (TypeError, ValueError):
+            missing_count += 1
+            continue
+
+        for label, lo, hi, _ in BPM_BINS:
+            if lo <= val < hi:
+                counts[label] += 1
+                break
+
+    result = []
+    for label, _, _, token in BPM_BINS:
+        count = counts[label]
+        is_active = (active_val in (label, token)) if active_val else False
+        result.append((label, count, token, is_active))
+
+    if missing_count > 0:
+        result.append(("?", missing_count, "", False))
+
+    return result
+
+
+def distribution_summary_stats(metric: str, rows: list[dict]) -> str:
+    """Calculate summary statistics for the active distribution metric on current visible rows.
+
+    For multimodal data, the lowest mode is selected deterministically.
+    """
+    if not rows:
+        return "0 charts"
+
+    if metric == "Meter":
+        vals = []
+        for r in rows:
+            m = r.get("Meter")
+            if m not in (None, ""):
+                try:
+                    v = float(m)
+                    vals.append(int(v) if v.is_integer() else v)
+                except (TypeError, ValueError):
+                    pass
+        if not vals:
+            return f"{len(rows):,} charts"
+        mean_val = statistics.mean(vals)
+        med_val = statistics.median(vals)
+        modes = statistics.multimode(vals)
+        mode_val = min(modes)
+        return f"{len(rows):,} charts · Median: {med_val:g} · Mean: {mean_val:.1f} · Mode: {mode_val:g}"
+
+    if metric == "Difficulty":
+        diff_counts = {d: 0 for d in DIFFICULTY_ORDER}
+        for r in rows:
+            d = str(r.get("Difficulty") or "")
+            for c in DIFFICULTY_ORDER:
+                if d.casefold() == c.casefold():
+                    diff_counts[c] += 1
+                    break
+        sorted_diffs = sorted(diff_counts.items(), key=lambda item: (-item[1], DIFFICULTY_ORDER.index(item[0])))
+        top_diff, top_count = sorted_diffs[0]
+        if top_count > 0:
+            return f"{len(rows):,} charts · Mode: {top_diff} ({top_count:,})"
+        return f"{len(rows):,} charts"
+
+    if metric == "BPM":
+        vals = []
+        for r in rows:
+            b = r.get("bpm_max")
+            if b not in (None, ""):
+                try:
+                    vals.append(float(b))
+                except (TypeError, ValueError):
+                    pass
+        if not vals:
+            return f"{len(rows):,} charts"
+        mean_val = statistics.mean(vals)
+        med_val = statistics.median(vals)
+        return f"{len(rows):,} charts · Median: {med_val:.0f} · Mean: {mean_val:.0f}"
+
+    return f"{len(rows):,} charts"
+
 
 

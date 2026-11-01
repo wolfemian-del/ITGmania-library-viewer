@@ -9,20 +9,50 @@ import os
 import re
 import sys
 import threading
-import tkinter as tk
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, ttk
+except ImportError:
+    tk = None
+    filedialog = None
+    messagebox = None
+    ttk = None
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+
+try:
+    import matplotlib
+    matplotlib.use("TkAgg")
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    from matplotlib.figure import Figure
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
+DIST_PANEL_WIDTH = 320
+DIFFICULTY_COLORS = {
+    "Beginner": "#38bdf8",
+    "Easy": "#facc15",
+    "Medium": "#f43f5e",
+    "Hard": "#34d399",
+    "Challenge": "#a855f7",
+    "Edit": "#94a3b8",
+}
 
 from library_data import (
     DIFFICULTY_ORDER,
     GRADE_OPTIONS,
     TAP_FIELDS,
     TECH_FIELDS,
+    aggregate_bpm_distribution,
+    aggregate_difficulty_distribution,
+    aggregate_meter_distribution,
     bpm_sort_key,
     course_append_bytes,
     difficulty_sort_key,
+    distribution_summary_stats,
     format_duration,
+    get_active_chart_filter,
     grade_sort_key,
     looks_like_song_tree,
     match_chart_query,
@@ -30,6 +60,7 @@ from library_data import (
     parse_cache_file,
     parse_numeric_bound,
     parse_search_query,
+    replace_search_directive,
     stats_index,
 )
 
@@ -108,6 +139,18 @@ class LibraryApp:
                     self.sort_keys.append((item[0], item[1]))
         if not self.sort_keys:
             self.sort_keys = [("Pack", False)]
+        self.show_distribution_panel = tk.BooleanVar(
+            value=bool(self.saved_settings.get("show_distribution", False))
+        )
+        saved_metric = self.saved_settings.get("distribution_metric", "Meter")
+        self.distribution_metric = tk.StringVar(
+            value=saved_metric if saved_metric in ("Meter", "Difficulty", "BPM") else "Meter"
+        )
+        self.dist_canvas = None
+        self.dist_fig = None
+        self.dist_ax = None
+        self._current_dist_bars = []
+        self._last_visible_rows = []
         self._style()
         self._build()
         self.search_var.trace_add("write", lambda *_: self._schedule_search_refresh())
@@ -186,9 +229,17 @@ class LibraryApp:
         self._button(bar, "Load / refresh", self.load_data, primary=True).pack(side="left", padx=4)
         self._button(bar, "Export CSV", self.export_csv).pack(side="left", padx=4)
         self._button(bar, "Build course…", self.open_course_builder).pack(side="left", padx=4)
-        frame = tk.Frame(self.root, bg="#10151d")
-        frame.pack(fill="both", expand=True, padx=18, pady=(0, 8))
-        self.tree = ttk.Treeview(frame, columns=HEADERS, show="headings", selectmode="extended")
+        self.dist_button = self._button(
+            bar,
+            "Distribution ◀" if self.show_distribution_panel.get() else "Distribution ▶",
+            self.toggle_distribution_panel,
+        )
+        self.dist_button.pack(side="left", padx=4)
+        self.content_frame = tk.Frame(self.root, bg="#10151d")
+        self.content_frame.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+        self.table_frame = tk.Frame(self.content_frame, bg="#10151d")
+        self.table_frame.pack(side="left", fill="both", expand=True)
+        self.tree = ttk.Treeview(self.table_frame, columns=HEADERS, show="headings", selectmode="extended")
         for col in HEADERS:
             self.tree.heading(col, text=col, command=lambda c=col: self.sort_by(c))
             width = 130 if col in ("Title", "Artist", "Pack") else 92
@@ -203,14 +254,14 @@ class LibraryApp:
             width = self.column_widths[col] or width
             self.tree.column(col, width=width, minwidth=55, stretch=False, anchor="w" if col in
                              ("Title", "Artist", "Pack", "Chart") else "center")
-        vs = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
-        hs = ttk.Scrollbar(frame, orient="horizontal", command=self.tree.xview)
+        vs = ttk.Scrollbar(self.table_frame, orient="vertical", command=self.tree.yview)
+        hs = ttk.Scrollbar(self.table_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
         vs.grid(row=0, column=1, sticky="ns")
         hs.grid(row=1, column=0, sticky="ew")
-        frame.grid_rowconfigure(0, weight=1)
-        frame.grid_columnconfigure(0, weight=1)
+        self.table_frame.grid_rowconfigure(0, weight=1)
+        self.table_frame.grid_columnconfigure(0, weight=1)
         self.tree.bind("<ButtonPress-1>", self._column_drag_start, add="+")
         self.tree.bind("<ButtonRelease-1>", self._column_drag_end, add="+")
         self.tree.bind("<ButtonRelease-1>", self._shift_sort_click, add="+")
@@ -219,6 +270,9 @@ class LibraryApp:
         if visible_columns:
             self.tree.configure(displaycolumns=visible_columns)
         self._update_sort_headings()
+        self._build_distribution_panel()
+        if self.show_distribution_panel.get():
+            self.dist_panel.pack(side="right", fill="y", padx=(10, 0))
         self.progress = ttk.Progressbar(self.root, mode="indeterminate", style="Horizontal.TProgressbar")
         self.progress.pack(fill="x", padx=18, pady=(0, 4))
         footer = tk.Frame(self.root, bg="#10151d", padx=18, pady=7)
@@ -266,6 +320,12 @@ class LibraryApp:
             columns_menu.add_cascade(label=group, menu=group_menu)
         view_menu.add_cascade(label="Columns", menu=columns_menu)
         view_menu.add_command(label="Reset column layout", command=self.reset_column_layout)
+        view_menu.add_separator()
+        view_menu.add_checkbutton(
+            label="Show distribution panel",
+            variable=self.show_distribution_panel,
+            command=self._sync_distribution_toggle,
+        )
         menubar.add_cascade(label="View", menu=view_menu)
         self.root.configure(menu=menubar)
         self.root.bind("<Control-f>", lambda _event: self.focus_search())
@@ -411,6 +471,8 @@ class LibraryApp:
             "column_visibility": {column: variable.get() for column, variable in self.column_visibility.items()},
             "column_widths": {column: self.tree.column(column, "width") for column in HEADERS},
             "sort_keys": [[column, descending] for column, descending in self.sort_keys],
+            "show_distribution": self.show_distribution_panel.get() if hasattr(self, "show_distribution_panel") else False,
+            "distribution_metric": self.distribution_metric.get() if hasattr(self, "distribution_metric") else "Meter",
         }
         temporary = self.settings_path.with_suffix(".tmp")
         try:
@@ -697,6 +759,7 @@ class LibraryApp:
         self.tree_item_rows = {}
         self._insert_batch(visible, 0, generation, selected_rows)
         self.count_label.set(f"{len(visible):,} charts shown · {len(self.rows):,} total")
+        self._update_distribution_panel(visible)
 
     def _update_sort_headings(self):
         priorities = {column: (index, descending) for index, (column, descending) in enumerate(self.sort_keys, 1)}
@@ -729,6 +792,261 @@ class LibraryApp:
                 self.tree.selection_add(item)
         if stop < len(rows):
             self.root.after(1, lambda: self._insert_batch(rows, stop, generation, selected_rows))
+
+    def _build_distribution_panel(self):
+        self.dist_panel = tk.Frame(self.content_frame, bg="#171f2a", width=DIST_PANEL_WIDTH, padx=10, pady=10)
+        self.dist_panel.pack_propagate(False)
+
+        # Header: Title + Close button
+        hdr = tk.Frame(self.dist_panel, bg="#171f2a")
+        hdr.pack(fill="x", pady=(0, 6))
+        tk.Label(hdr, text="Distribution", fg="#f2f6fa", bg="#171f2a",
+                 font=("Segoe UI Semibold", 11)).pack(side="left")
+        self._button(hdr, "✕", self.toggle_distribution_panel).pack(side="right")
+
+        # Active filter banner (hidden when not active)
+        self.dist_banner_frame = tk.Frame(self.dist_panel, bg="#202b38", padx=8, pady=5)
+        self.dist_banner_label = tk.Label(self.dist_banner_frame, text="", fg="#4fc3b0", bg="#202b38",
+                                          font=("Segoe UI", 9))
+        self.dist_banner_label.pack(side="left", fill="x", expand=True)
+        self._button(self.dist_banner_frame, "Clear", self.clear_chart_filter).pack(side="right")
+
+        # Metric selector
+        metric_bar = tk.Frame(self.dist_panel, bg="#171f2a")
+        metric_bar.pack(fill="x", pady=(4, 6))
+        for m in ("Meter", "Difficulty", "BPM"):
+            b = tk.Radiobutton(
+                metric_bar, text=m, value=m, variable=self.distribution_metric,
+                indicatoron=False, bg="#202b38", fg="#ecf3f9", selectcolor="#287c78",
+                activebackground="#287c78", activeforeground="#ffffff", font=("Segoe UI", 8),
+                command=self._on_distribution_metric_changed, padx=6, pady=3,
+            )
+            b.pack(side="left", padx=2, expand=True, fill="x")
+
+        # Summary line
+        self.dist_summary_var = tk.StringVar(value="")
+        tk.Label(self.dist_panel, textvariable=self.dist_summary_var, fg="#9eacbb", bg="#171f2a",
+                 font=("Segoe UI", 8), wraplength=DIST_PANEL_WIDTH - 24, justify="left").pack(fill="x", pady=(0, 6))
+
+        # Chart container
+        self.dist_chart_frame = tk.Frame(self.dist_panel, bg="#171f2a")
+        self.dist_chart_frame.pack(fill="both", expand=True)
+
+        if not MATPLOTLIB_AVAILABLE:
+            tk.Label(
+                self.dist_chart_frame,
+                text="Install matplotlib to enable\ndistribution charts\n\nRun:\npip install matplotlib",
+                fg="#9eacbb", bg="#171f2a", font=("Segoe UI", 9), justify="center",
+            ).pack(expand=True, pady=40)
+
+    def _ensure_distribution_canvas(self):
+        if not MATPLOTLIB_AVAILABLE:
+            return False
+        if self.dist_canvas is None:
+            self.dist_fig = Figure(figsize=(3.0, 4.0), dpi=100, facecolor="#171f2a")
+            self.dist_ax = self.dist_fig.add_subplot(111)
+            self.dist_canvas = FigureCanvasTkAgg(self.dist_fig, master=self.dist_chart_frame)
+            self.dist_canvas.mpl_connect("button_press_event", self._on_chart_click)
+            self.dist_canvas.get_tk_widget().pack(fill="both", expand=True)
+            self.dist_chart_frame.bind(
+                "<Configure>",
+                lambda _event: self.dist_canvas.draw_idle() if self.dist_canvas else None,
+            )
+        return True
+
+    def toggle_distribution_panel(self):
+        if not hasattr(self, "dist_panel"):
+            return
+        if self.show_distribution_panel.get():
+            self.dist_panel.pack_forget()
+            self.show_distribution_panel.set(False)
+            self.dist_button.configure(text="Distribution ▶")
+            self.root.update_idletasks()
+        else:
+            self.dist_panel.pack(side="right", fill="y", padx=(10, 0))
+            self.show_distribution_panel.set(True)
+            self.dist_button.configure(text="Distribution ◀")
+            self._update_distribution_panel(getattr(self, "_last_visible_rows", []))
+        self._save_settings()
+
+    def _sync_distribution_toggle(self):
+        if not hasattr(self, "dist_panel"):
+            return
+        if self.show_distribution_panel.get():
+            self.dist_panel.pack(side="right", fill="y", padx=(10, 0))
+            self.dist_button.configure(text="Distribution ◀")
+            self._update_distribution_panel(getattr(self, "_last_visible_rows", []))
+        else:
+            self.dist_panel.pack_forget()
+            self.dist_button.configure(text="Distribution ▶")
+            self.root.update_idletasks()
+        self._save_settings()
+
+    def _on_distribution_metric_changed(self):
+        self._save_settings()
+        self._update_distribution_panel(getattr(self, "_last_visible_rows", []))
+
+    def clear_chart_filter(self):
+        active = get_active_chart_filter(self.diff_var.get(), self.search_var.get())
+        if not active:
+            return
+        metric, _ = active
+        if metric == "Difficulty":
+            self.diff_var.set("All difficulties")
+            new_query = replace_search_directive(self.search_var.get(), "diff", None)
+            self.search_var.set(new_query)
+        elif metric == "Meter":
+            new_query = replace_search_directive(self.search_var.get(), "meter", None)
+            self.search_var.set(new_query)
+        elif metric == "BPM":
+            new_query = replace_search_directive(self.search_var.get(), "bpm", None)
+            self.search_var.set(new_query)
+        if hasattr(self, "search_entry"):
+            self.search_entry.icursor("end")
+        self.refresh_table()
+
+    def _on_chart_click(self, event):
+        if event.ydata is None or not self._current_dist_bars:
+            return
+        clicked_y = event.ydata
+        target_token = None
+        target_label = None
+        for y_min, y_max, label, token in self._current_dist_bars:
+            if y_min <= clicked_y <= y_max:
+                target_token = token
+                target_label = label
+                break
+        if not target_token or target_label == "?":
+            # '?' bar or outside bar is non-interactive
+            return
+
+        metric = self.distribution_metric.get()
+        active = get_active_chart_filter(self.diff_var.get(), self.search_var.get())
+        query = self.search_var.get()
+
+        if metric == "Difficulty":
+            if active and active[0] == "Difficulty" and active[1].casefold() == target_token.casefold():
+                self.diff_var.set("All difficulties")
+            else:
+                self.diff_var.set(target_token)
+            # Remove redundant diff from search bar so they don't fight
+            new_query = replace_search_directive(query, "diff", None)
+            if new_query != query:
+                self.search_var.set(new_query)
+        elif metric == "Meter":
+            if active and active[0] == "Meter" and active[1] == target_token:
+                new_query = replace_search_directive(query, "meter", None)
+            else:
+                new_query = replace_search_directive(query, "meter", target_token)
+            self.search_var.set(new_query)
+        elif metric == "BPM":
+            if active and active[0] == "BPM" and active[1] == target_token:
+                new_query = replace_search_directive(query, "bpm", None)
+            else:
+                new_query = replace_search_directive(query, "bpm", target_token)
+            self.search_var.set(new_query)
+
+        if hasattr(self, "search_entry"):
+            self.search_entry.icursor("end")
+        self.refresh_table()
+
+    def _update_distribution_panel(self, visible_rows):
+        self._last_visible_rows = visible_rows
+        if not hasattr(self, "dist_panel") or not self.show_distribution_panel.get():
+            return
+
+        # Update active filter banner
+        active = get_active_chart_filter(self.diff_var.get(), self.search_var.get())
+        if active:
+            metric_name, active_val = active
+            self.dist_banner_label.configure(text=f"Filtered by: {metric_name} {active_val}")
+            self.dist_banner_frame.pack(fill="x", pady=(0, 6), before=self.dist_chart_frame)
+        else:
+            self.dist_banner_frame.pack_forget()
+
+        # Update summary text
+        metric = self.distribution_metric.get()
+        self.dist_summary_var.set(distribution_summary_stats(metric, visible_rows))
+
+        if not self._ensure_distribution_canvas():
+            return
+
+        # Redraw chart
+        self.dist_ax.clear()
+        self._current_dist_bars = []
+
+        if not visible_rows:
+            self.dist_ax.text(
+                0.5, 0.5, "No charts match\ncurrent filters",
+                color="#9eacbb", fontsize=9, ha="center", va="center",
+                transform=self.dist_ax.transAxes,
+            )
+            self.dist_ax.axis("off")
+            self.dist_canvas.draw_idle()
+            return
+
+        self.dist_ax.axis("on")
+        active_val = active[1] if (active and active[0] == metric) else None
+
+        if metric == "Meter":
+            data_items = aggregate_meter_distribution(visible_rows, active_val=active_val)
+        elif metric == "Difficulty":
+            data_items = aggregate_difficulty_distribution(visible_rows, active_val=active_val)
+        else:  # BPM
+            data_items = aggregate_bpm_distribution(visible_rows, active_val=active_val)
+
+        labels = [item[0] for item in reversed(data_items)]
+        counts = [item[1] for item in reversed(data_items)]
+        tokens = [item[2] for item in reversed(data_items)]
+        actives = [item[3] for item in reversed(data_items)]
+
+        y_positions = list(range(len(labels)))
+        bar_colors = []
+        edge_colors = []
+        linewidths = []
+
+        for label, is_act in zip(labels, actives):
+            if metric == "Difficulty":
+                base_color = DIFFICULTY_COLORS.get(label, "#94a3b8")
+            else:
+                base_color = "#4fc3b0" if label != "?" else "#64748b"
+
+            bar_colors.append(base_color)
+            if is_act:
+                edge_colors.append("#ffffff")
+                linewidths.append(1.5)
+            else:
+                edge_colors.append("#202b38")
+                linewidths.append(0.8)
+
+        bars = self.dist_ax.barh(
+            y_positions, counts, align="center",
+            color=bar_colors, edgecolor=edge_colors, linewidth=linewidths, height=0.68,
+        )
+
+        max_count = max(counts) if counts else 1
+        for i, (bar, count) in enumerate(zip(bars, counts)):
+            y = bar.get_y()
+            h = bar.get_height()
+            self._current_dist_bars.append((y, y + h, labels[i], tokens[i]))
+            if count > 0:
+                self.dist_ax.text(
+                    count + max_count * 0.03, y + h / 2, str(count),
+                    va="center", ha="left", color="#ecf3f9", fontsize=7.5,
+                )
+
+        self.dist_ax.set_yticks(y_positions)
+        self.dist_ax.set_yticklabels(labels, color="#ecf3f9", fontsize=8)
+        self.dist_ax.set_xlim(0, max_count * 1.25)
+        self.dist_ax.set_facecolor("#171f2a")
+        self.dist_fig.patch.set_facecolor("#171f2a")
+        self.dist_ax.tick_params(colors="#9eacbb", labelsize=8, left=False, bottom=True)
+        self.dist_ax.spines["top"].set_visible(False)
+        self.dist_ax.spines["right"].set_visible(False)
+        self.dist_ax.spines["left"].set_visible(False)
+        self.dist_ax.spines["bottom"].set_color("#2a3749")
+        self.dist_fig.tight_layout(pad=1.0)
+        self.dist_canvas.draw_idle()
 
     def _shift_sort_click(self, event):
         if not event.state & 0x0001 or self.tree.identify_region(event.x, event.y) != "heading":
@@ -1194,6 +1512,8 @@ class LibraryApp:
 
 
 def main():
+    if tk is None:
+        sys.exit("Tkinter is required to run the ITGmania Library Visualizer GUI.")
     root = tk.Tk()
     LibraryApp(root)
     root.mainloop()
