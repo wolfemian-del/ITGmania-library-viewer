@@ -44,7 +44,8 @@ them in a sortable, filterable table, and can build .CRS course files. Read READ
   it in your sandbox: name the test or script and the Python version), [TESTED]/[OBSERVED] (the owner
   ran or saw it). Never present an inference as fact.
 - .CRS files: follow the notes' course format reference (cref). Do not write what the notes say the
-  game ignores or mishandles.
+  game ignores or mishandles. If existing viewer code already writes something of that kind,
+  report it to the owner as a finding; do not change it until the owner confirms.
 
 ## Running and checking
 - Run: python library_visualizer.py (Python 3.10+; the owner uses 3.14 on Windows 11).
