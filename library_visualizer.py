@@ -854,33 +854,28 @@ class LibraryApp:
             )
         return True
 
-    def toggle_distribution_panel(self):
+    def _set_distribution_visible(self, visible: bool):
+        """Single source of truth for panel visibility (toolbar + View menu)."""
         if not hasattr(self, "dist_panel"):
             return
-        if self.show_distribution_panel.get():
-            self.dist_panel.pack_forget()
-            self.show_distribution_panel.set(False)
-            self.dist_button.configure(text="Distribution ▶")
-            self.root.update_idletasks()
-        else:
+        self.show_distribution_panel.set(visible)
+        if visible:
             self.dist_panel.pack(side="right", fill="y", padx=(10, 0))
-            self.show_distribution_panel.set(True)
             self.dist_button.configure(text="Distribution ◀")
             self._update_distribution_panel(getattr(self, "_last_visible_rows", []))
+        else:
+            self.dist_panel.pack_forget()
+            self.dist_button.configure(text="Distribution ▶")
+            self.root.update_idletasks()
         self._save_settings()
 
+    def toggle_distribution_panel(self):
+        """Toolbar button: flip current visibility."""
+        self._set_distribution_visible(not self.show_distribution_panel.get())
+
     def _sync_distribution_toggle(self):
-        if not hasattr(self, "dist_panel"):
-            return
-        if self.show_distribution_panel.get():
-            self.dist_panel.pack(side="right", fill="y", padx=(10, 0))
-            self.dist_button.configure(text="Distribution ◀")
-            self._update_distribution_panel(getattr(self, "_last_visible_rows", []))
-        else:
-            self.dist_panel.pack_forget()
-            self.dist_button.configure(text="Distribution ▶")
-            self.root.update_idletasks()
-        self._save_settings()
+        """View-menu checkbutton: BooleanVar already toggled by Tk; apply it to the UI."""
+        self._set_distribution_visible(self.show_distribution_panel.get())
 
     def _on_distribution_metric_changed(self):
         self._save_settings()
