@@ -54,6 +54,7 @@ from library_data import (
     aggregate_difficulty_distribution,
     aggregate_meter_distribution,
     bpm_sort_key,
+    build_dialog_query,
     course_append_bytes,
     difficulty_sort_key,
     distribution_summary_stats,
@@ -65,9 +66,9 @@ from library_data import (
     match_chart_query,
     number,
     parse_cache_file,
-    parse_numeric_bound,
     parse_search_query,
     replace_search_directive,
+    split_dialog_query,
     stats_index,
 )
 
@@ -1161,8 +1162,8 @@ class LibraryApp:
         window = tk.Toplevel(self.root)
         self.advanced_search_window = window
         window.title("Advanced Search")
-        window.geometry("560x540")
-        window.minsize(480, 440)
+        window.geometry("560x620")
+        window.minsize(480, 520)
         window.configure(bg="#10151d")
         window.transient(self.root)
 
@@ -1187,62 +1188,26 @@ class LibraryApp:
         nps_min_var = tk.StringVar()
         nps_max_var = tk.StringVar()
         grade_min_var = tk.StringVar(value="Any")
+        other_var = tk.StringVar()
 
-        # Parse current search string to prepopulate fields
-        curr_q = self.search_var.get().strip()
-        if curr_q:
-            parsed = parse_search_query(curr_q)
-            free_text_var.set(parsed.get("free_text", ""))
-            for field, val in parsed.get("directives", []):
-                if field == "title":
-                    title_var.set(val)
-                elif field == "artist":
-                    artist_var.set(val)
-                elif field == "pack":
-                    pack_var.set(val)
-                elif field == "meter":
-                    b = parse_numeric_bound(val)
-                    if b:
-                        if b[0] == "range":
-                            meter_min_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
-                            meter_max_var.set(str(int(b[2]) if b[2].is_integer() else b[2]))
-                        elif b[0] in (">=", ">"):
-                            meter_min_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
-                        elif b[0] in ("<=", "<"):
-                            meter_max_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
-                        elif b[0] == "==":
-                            meter_min_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
-                            meter_max_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
-                elif field == "bpm":
-                    b = parse_numeric_bound(val)
-                    if b:
-                        if b[0] == "range":
-                            bpm_min_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
-                            bpm_max_var.set(str(int(b[2]) if b[2].is_integer() else b[2]))
-                        elif b[0] in (">=", ">"):
-                            bpm_min_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
-                        elif b[0] in ("<=", "<"):
-                            bpm_max_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
-                        elif b[0] == "==":
-                            bpm_min_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
-                            bpm_max_var.set(str(int(b[1]) if b[1].is_integer() else b[1]))
-                elif field == "time":
-                    b = parse_numeric_bound(val, is_duration=True)
-                    if b:
-                        if b[0] == "range":
-                            time_min_var.set(format_duration(b[1]))
-                            time_max_var.set(format_duration(b[2]))
-                        elif b[0] in (">=", ">"):
-                            time_min_var.set(format_duration(b[1]))
-                        elif b[0] in ("<=", "<"):
-                            time_max_var.set(format_duration(b[1]))
-                        elif b[0] == "==":
-                            time_min_var.set(format_duration(b[1]))
-                            time_max_var.set(format_duration(b[1]))
-                elif field == "grade":
-                    clean_g = val.lstrip(">=< ")
-                    if clean_g in GRADE_OPTIONS:
-                        grade_min_var.set(clean_g)
+        # Fill the boxes from the current search text; filters the boxes cannot show exactly
+        # go in "Other filters" so that Apply keeps them.
+        current = split_dialog_query(self.search_var.get())
+        free_text_var.set(current["free_text"])
+        title_var.set(current["title"])
+        artist_var.set(current["artist"])
+        pack_var.set(current["pack"])
+        meter_min_var.set(current["meter"][0])
+        meter_max_var.set(current["meter"][1])
+        bpm_min_var.set(current["bpm"][0])
+        bpm_max_var.set(current["bpm"][1])
+        time_min_var.set(current["time"][0])
+        time_max_var.set(current["time"][1])
+        nps_min_var.set(current["peak_nps"][0])
+        nps_max_var.set(current["peak_nps"][1])
+        if current["grade"]:
+            grade_min_var.set(current["grade"])
+        other_var.set(current["other"])
 
         def add_text_row(parent, label_text, var):
             row = tk.Frame(parent, bg="#10151d")
@@ -1283,6 +1248,11 @@ class LibraryApp:
         g_options = ["Any"] + list(GRADE_OPTIONS)
         self._combo(g_row, grade_min_var, g_options).pack(side="left")
 
+        tk.Frame(form, bg="#202b38", height=1).pack(fill="x", pady=10)
+        add_text_row(form, "Other filters", other_var)
+        tk.Label(form, text="Kept from your search: filters without a box above. Edit or clear them here.",
+                 fg="#607285", bg="#10151d", font=("Segoe UI", 8), anchor="w").pack(fill="x")
+
         preview_frame = tk.Frame(window, bg="#17202c", padx=12, pady=8)
         preview_frame.pack(fill="x", padx=18, pady=(10, 4))
         tk.Label(preview_frame, text="Query:", fg="#9eacbb", bg="#17202c",
@@ -1292,49 +1262,22 @@ class LibraryApp:
         query_preview.pack(side="left", fill="x", expand=True)
 
         def build_query():
-            tokens = []
-            free_text = free_text_var.get().strip()
-            if free_text:
-                tokens.append(free_text)
-            t = title_var.get().strip()
-            if t:
-                tokens.append(f'title:"{t}"' if " " in t else f"title:{t}")
-            a = artist_var.get().strip()
-            if a:
-                tokens.append(f'artist:"{a}"' if " " in a else f"artist:{a}")
-            p = pack_var.get().strip()
-            if p:
-                tokens.append(f'pack:"{p}"' if " " in p else f"pack:{p}")
-
-            def add_range(name, min_v, max_v):
-                min_s = min_v.get().strip()
-                max_s = max_v.get().strip()
-                if min_s and max_s:
-                    if min_s == max_s:
-                        tokens.append(f"{name}:{min_s}")
-                    else:
-                        tokens.append(f"{name}:{min_s}-{max_s}")
-                elif min_s:
-                    tokens.append(f"{name}:>={min_s}")
-                elif max_s:
-                    tokens.append(f"{name}:<={max_s}")
-
-            add_range("meter", meter_min_var, meter_max_var)
-            add_range("bpm", bpm_min_var, bpm_max_var)
-            add_range("time", time_min_var, time_max_var)
-            add_range("nps", nps_min_var, nps_max_var)
-
-            g = grade_min_var.get()
-            if g and g != "Any":
-                tokens.append(f"grade:>={g}")
-
-            return " ".join(tokens)
+            return build_dialog_query({
+                "free_text": free_text_var.get(), "title": title_var.get(),
+                "artist": artist_var.get(), "pack": pack_var.get(),
+                "meter": (meter_min_var.get(), meter_max_var.get()),
+                "bpm": (bpm_min_var.get(), bpm_max_var.get()),
+                "time": (time_min_var.get(), time_max_var.get()),
+                "peak_nps": (nps_min_var.get(), nps_max_var.get()),
+                "grade": grade_min_var.get(), "other": other_var.get(),
+            })
 
         def update_preview(*_):
             query_preview.config(text=build_query())
 
         for v in (free_text_var, title_var, artist_var, pack_var, meter_min_var, meter_max_var,
-                  bpm_min_var, bpm_max_var, time_min_var, time_max_var, nps_min_var, nps_max_var, grade_min_var):
+                  bpm_min_var, bpm_max_var, time_min_var, time_max_var, nps_min_var, nps_max_var, grade_min_var,
+                  other_var):
             v.trace_add("write", update_preview)
         update_preview()
 
@@ -1348,7 +1291,8 @@ class LibraryApp:
 
         def clear_fields():
             for v in (free_text_var, title_var, artist_var, pack_var, meter_min_var, meter_max_var,
-                      bpm_min_var, bpm_max_var, time_min_var, time_max_var, nps_min_var, nps_max_var):
+                      bpm_min_var, bpm_max_var, time_min_var, time_max_var, nps_min_var, nps_max_var,
+                      other_var):
                 v.set("")
             grade_min_var.set("Any")
 
