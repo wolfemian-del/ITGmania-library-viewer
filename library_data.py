@@ -842,8 +842,11 @@ def get_active_chart_filter(diff_filter: str, search_query: str) -> tuple[str, s
 def aggregate_meter_distribution(rows: list[dict], active_val: str | None = None) -> list[tuple[str, int, str, bool]]:
     """Aggregate row counts per meter level.
 
-    Float meters like 11.0 are normalized to integer strings ("11"). Missing or unparseable
-    meters are grouped into "?" at the end (non-interactive).
+    Float meters like 11.0 are normalized to integer strings ("11"). parse_cache_file stores a chart with
+    no METER tag as 0, so such charts get an ordinary "0" bar: the table shows 0 for them and meter:0
+    finds them, which keeps the bar's number equal to the rows after clicking it. Only rows with no
+    value at all or text that is not a number (not produced by parse_cache_file) are grouped into "?"
+    at the end (non-interactive).
     Returns list of (label, count, filter_token, is_active).
     """
     counts: dict[str, int] = {}

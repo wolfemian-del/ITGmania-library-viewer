@@ -157,6 +157,17 @@ class DistributionTests(unittest.TestCase):
         # ? is non-interactive (filter_token is empty string)
         self.assertEqual(dict(zip([d[0] for d in dist], [d[2] for d in dist]))["?"], "")
 
+    def test_chart_without_a_meter_tag_gets_a_clickable_zero_bar(self):
+        # parse_cache_file stores a missing METER tag as 0, so real data never reaches the "?" bar.
+        self.assertEqual(data.number(None), 0.0)
+        rows = [{"Meter": data.number(None)}, {"Meter": data.number("11")}]
+        dist = {label: (count, token) for label, count, token, _ in data.aggregate_meter_distribution(rows)}
+        self.assertEqual(dist["0"], (1, "0"))
+        self.assertNotIn("?", dist)
+        # The bar's number equals the rows the table shows after clicking it.
+        query = data.parse_search_query(data.replace_search_directive("", "meter", dist["0"][1]))
+        self.assertEqual(sum(data.match_chart_query(row, query) for row in rows), dist["0"][0])
+
     def test_aggregate_difficulty_distribution(self):
         rows = [
             {"Difficulty": "Beginner"},
