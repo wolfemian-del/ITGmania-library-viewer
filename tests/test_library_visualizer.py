@@ -100,8 +100,9 @@ class LibrarySnapshotTests(unittest.TestCase):
 
         instance.clear_chart_filter()
 
+        # Clear removes every chart filter (difficulty and meter here), keeping the pack filter.
         instance.diff_var.set.assert_called_with("All difficulties")
-        instance.search_var.set.assert_called_with('pack:"In The Groove" meter:10')
+        instance.search_var.set.assert_called_with('pack:"In The Groove"')
         instance.refresh_table.assert_called_once()
 
     def test_absence_fallback_when_matplotlib_unavailable(self):

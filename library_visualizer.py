@@ -44,6 +44,7 @@ from library_data import (
     GRADE_OPTIONS,
     TAP_FIELDS,
     TECH_FIELDS,
+    CHART_FILTER_FIELDS,
     aggregate_bpm_distribution,
     aggregate_difficulty_distribution,
     aggregate_meter_distribution,
@@ -51,8 +52,9 @@ from library_data import (
     course_append_bytes,
     difficulty_sort_key,
     distribution_summary_stats,
+    filter_token_text,
     format_duration,
-    get_active_chart_filter,
+    get_active_chart_filters,
     grade_sort_key,
     looks_like_song_tree,
     match_chart_query,
@@ -713,6 +715,37 @@ class LibraryApp:
         except (TypeError, ValueError):
             return "unknown"
 
+    def _filter_rows(self, ignore_metric=None):
+        """Return the rows that pass the pack, type, difficulty, scored and search filters.
+
+        ignore_metric ("Meter", "Difficulty" or "BPM") leaves out that chart's own filter, both the
+        search directive and, for Difficulty, the dropdown. The distribution chart uses this to keep
+        showing every bar after you click one.
+        """
+        query_text = self.search_var.get().strip()
+        criteria = parse_search_query(query_text) if query_text else None
+        ignored_field = CHART_FILTER_FIELDS.get(ignore_metric)
+        if criteria and ignored_field:
+            criteria = {**criteria, "directives": [
+                directive for directive in criteria["directives"] if directive[0] != ignored_field]}
+        pack, chart_type, diff = self.pack_var.get(), self.type_var.get(), self.diff_var.get()
+        if ignore_metric == "Difficulty":
+            diff = "All difficulties"
+        rows = []
+        for row in self.rows:
+            if pack != "All packs" and row["Pack"] != pack:
+                continue
+            if chart_type != "All types" and row["Type"] != chart_type:
+                continue
+            if diff != "All difficulties" and row["Difficulty"] != diff:
+                continue
+            if self.scored_var.get() and not row["Grade"]:
+                continue
+            if criteria and not match_chart_query(row, criteria):
+                continue
+            rows.append(row)
+        return rows
+
     def refresh_table(self, preserve_selection=False):
         if not hasattr(self, "tree"):
             return
@@ -725,22 +758,7 @@ class LibraryApp:
         self._render_generation = getattr(self, "_render_generation", 0) + 1
         generation = self._render_generation
         self._update_sort_headings()
-        query_text = self.search_var.get().strip()
-        criteria = parse_search_query(query_text) if query_text else None
-        pack, chart_type, diff = self.pack_var.get(), self.type_var.get(), self.diff_var.get()
-        visible = []
-        for row in self.rows:
-            if pack != "All packs" and row["Pack"] != pack:
-                continue
-            if chart_type != "All types" and row["Type"] != chart_type:
-                continue
-            if diff != "All difficulties" and row["Difficulty"] != diff:
-                continue
-            if self.scored_var.get() and not row["Grade"]:
-                continue
-            if criteria and not match_chart_query(row, criteria):
-                continue
-            visible.append(row)
+        visible = self._filter_rows()
         for column, descending in reversed(self.sort_keys):
             present = [row for row in visible if row.get(column) not in (None, "")]
             missing = [row for row in visible if row.get(column) in (None, "")]
@@ -807,7 +825,8 @@ class LibraryApp:
         # Active filter banner (hidden when not active)
         self.dist_banner_frame = tk.Frame(self.dist_panel, bg="#202b38", padx=8, pady=5)
         self.dist_banner_label = tk.Label(self.dist_banner_frame, text="", fg="#4fc3b0", bg="#202b38",
-                                          font=("Segoe UI", 9))
+                                          font=("Segoe UI", 9), wraplength=DIST_PANEL_WIDTH - 90,
+                                          justify="left", anchor="w")
         self.dist_banner_label.pack(side="left", fill="x", expand=True)
         self._button(self.dist_banner_frame, "Clear", self.clear_chart_filter).pack(side="right")
 
@@ -882,20 +901,16 @@ class LibraryApp:
         self._update_distribution_panel(getattr(self, "_last_visible_rows", []))
 
     def clear_chart_filter(self):
-        active = get_active_chart_filter(self.diff_var.get(), self.search_var.get())
+        """Remove every filter the distribution charts can set (difficulty, meter and BPM)."""
+        active = get_active_chart_filters(self.diff_var.get(), self.search_var.get())
         if not active:
             return
-        metric, _ = active
-        if metric == "Difficulty":
-            self.diff_var.set("All difficulties")
-            new_query = replace_search_directive(self.search_var.get(), "diff", None)
-            self.search_var.set(new_query)
-        elif metric == "Meter":
-            new_query = replace_search_directive(self.search_var.get(), "meter", None)
-            self.search_var.set(new_query)
-        elif metric == "BPM":
-            new_query = replace_search_directive(self.search_var.get(), "bpm", None)
-            self.search_var.set(new_query)
+        query = self.search_var.get()
+        for metric, _ in active:
+            if metric == "Difficulty":
+                self.diff_var.set("All difficulties")
+            query = replace_search_directive(query, CHART_FILTER_FIELDS[metric], None)
+        self.search_var.set(query)
         if hasattr(self, "search_entry"):
             self.search_entry.icursor("end")
         self.refresh_table()
@@ -916,52 +931,59 @@ class LibraryApp:
             return
 
         metric = self.distribution_metric.get()
-        active = get_active_chart_filter(self.diff_var.get(), self.search_var.get())
         query = self.search_var.get()
+        current = dict(get_active_chart_filters(self.diff_var.get(), query)).get(metric)
+        already_active = (current is not None
+                          and current.casefold() == filter_token_text(target_token).casefold())
 
         if metric == "Difficulty":
-            if active and active[0] == "Difficulty" and active[1].casefold() == target_token.casefold():
-                self.diff_var.set("All difficulties")
-            else:
-                self.diff_var.set(target_token)
+            self.diff_var.set("All difficulties" if already_active else target_token)
             # Remove redundant diff from search bar so they don't fight
             new_query = replace_search_directive(query, "diff", None)
             if new_query != query:
                 self.search_var.set(new_query)
-        elif metric == "Meter":
-            if active and active[0] == "Meter" and active[1] == target_token:
-                new_query = replace_search_directive(query, "meter", None)
-            else:
-                new_query = replace_search_directive(query, "meter", target_token)
-            self.search_var.set(new_query)
-        elif metric == "BPM":
-            if active and active[0] == "BPM" and active[1] == target_token:
-                new_query = replace_search_directive(query, "bpm", None)
-            else:
-                new_query = replace_search_directive(query, "bpm", target_token)
+        else:
+            new_query = replace_search_directive(
+                query, CHART_FILTER_FIELDS[metric], None if already_active else target_token)
             self.search_var.set(new_query)
 
         if hasattr(self, "search_entry"):
             self.search_entry.icursor("end")
         self.refresh_table()
 
+    def _metric_filter_present(self, metric):
+        """Whether the table is currently filtered by this chart's own metric."""
+        if metric == "Difficulty" and self.diff_var.get() != "All difficulties":
+            return True
+        field = CHART_FILTER_FIELDS[metric]
+        directives = parse_search_query(self.search_var.get()).get("directives", [])
+        return any(directive_field == field for directive_field, _ in directives)
+
+    def _distribution_rows(self, metric):
+        """Rows behind the chart: every filter except the chart's own, so all bars stay visible."""
+        if self._metric_filter_present(metric):
+            return self._filter_rows(ignore_metric=metric)
+        return self._last_visible_rows
+
     def _update_distribution_panel(self, visible_rows):
         self._last_visible_rows = visible_rows
         if not hasattr(self, "dist_panel") or not self.show_distribution_panel.get():
             return
 
-        # Update active filter banner
-        active = get_active_chart_filter(self.diff_var.get(), self.search_var.get())
-        if active:
-            metric_name, active_val = active
-            self.dist_banner_label.configure(text=f"Filtered by: {metric_name} {active_val}")
+        metric = self.distribution_metric.get()
+        chart_rows = self._distribution_rows(metric)
+
+        # Update active filter banner (every chart filter narrowing the table, not just this chart's)
+        active_filters = get_active_chart_filters(self.diff_var.get(), self.search_var.get())
+        if active_filters:
+            banner = " · ".join(f"{name} {value}" for name, value in active_filters)
+            self.dist_banner_label.configure(text=f"Filtered by: {banner}")
             self.dist_banner_frame.pack(fill="x", pady=(0, 6), before=self.dist_chart_frame)
         else:
             self.dist_banner_frame.pack_forget()
 
         # Update summary text
-        metric = self.distribution_metric.get()
-        self.dist_summary_var.set(distribution_summary_stats(metric, visible_rows))
+        self.dist_summary_var.set(distribution_summary_stats(metric, chart_rows))
 
         if not self._ensure_distribution_canvas():
             return
@@ -970,7 +992,7 @@ class LibraryApp:
         self.dist_ax.clear()
         self._current_dist_bars = []
 
-        if not visible_rows:
+        if not chart_rows:
             self.dist_ax.text(
                 0.5, 0.5, "No charts match\ncurrent filters",
                 color="#9eacbb", fontsize=9, ha="center", va="center",
@@ -981,14 +1003,14 @@ class LibraryApp:
             return
 
         self.dist_ax.axis("on")
-        active_val = active[1] if (active and active[0] == metric) else None
+        active_val = dict(active_filters).get(metric)
 
         if metric == "Meter":
-            data_items = aggregate_meter_distribution(visible_rows, active_val=active_val)
+            data_items = aggregate_meter_distribution(chart_rows, active_val=active_val)
         elif metric == "Difficulty":
-            data_items = aggregate_difficulty_distribution(visible_rows, active_val=active_val)
+            data_items = aggregate_difficulty_distribution(chart_rows, active_val=active_val)
         else:  # BPM
-            data_items = aggregate_bpm_distribution(visible_rows, active_val=active_val)
+            data_items = aggregate_bpm_distribution(chart_rows, active_val=active_val)
 
         labels = [item[0] for item in reversed(data_items)]
         counts = [item[1] for item in reversed(data_items)]
