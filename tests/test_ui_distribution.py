@@ -229,5 +229,91 @@ class FullDistributionTests(unittest.TestCase):
         instance.search_var.set.assert_called_with("Smiley")
 
 
+class FakeVar:
+    """Stands in for a Tk variable: set() runs the 'write' traces straight away, as Tk does."""
+
+    def __init__(self, value=""):
+        self.value, self.traces = value, []
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
+        for trace in self.traces:
+            trace()
+
+
+class FakeRoot:
+    """Stands in for the Tk root: after() queues a callback that run_pending() runs later."""
+
+    def __init__(self):
+        self.pending, self.counter = {}, 0
+
+    def after(self, _milliseconds, callback):
+        self.counter += 1
+        self.pending[self.counter] = callback
+        return self.counter
+
+    def after_cancel(self, identifier):
+        self.pending.pop(identifier, None)
+
+    def run_pending(self):
+        for identifier in sorted(self.pending):
+            self.pending.pop(identifier)()
+
+
+class SingleRefreshTests(unittest.TestCase):
+    """One chart click or Clear rebuilds the table once, not once per filter variable."""
+
+    @staticmethod
+    def make_app(metric, query="", diff="All difficulties", bars=None):
+        instance = object.__new__(app.LibraryApp)
+        instance.root = FakeRoot()
+        instance.search_var, instance.diff_var = FakeVar(query), FakeVar(diff)
+        instance.distribution_metric = FakeVar(metric)
+        instance._current_dist_bars = bars or [(0.0, 1.0, "11", "11")]
+        instance.refreshes = 0
+        instance.refresh_table = lambda *args, **kwargs: setattr(instance, "refreshes", instance.refreshes + 1)
+        # The same wiring LibraryApp.__init__ does.
+        instance.search_var.traces.append(instance._schedule_search_refresh)
+        instance.diff_var.traces.append(instance._refresh_unless_batching)
+        return instance
+
+    def refreshes_after_everything_settles(self, instance):
+        instance.root.run_pending()  # lets any delayed search refresh fire
+        return instance.refreshes
+
+    def test_meter_click_refreshes_once(self):
+        instance = self.make_app("Meter", "Smiley")
+        instance._on_chart_click(Mock(ydata=0.5))
+        self.assertEqual(self.refreshes_after_everything_settles(instance), 1)
+
+    def test_difficulty_click_that_also_cleans_the_search_box_refreshes_once(self):
+        instance = self.make_app("Difficulty", "Smiley diff:hard", bars=[(0.0, 1.0, "Hard", "Hard")])
+        instance._on_chart_click(Mock(ydata=0.5))
+        self.assertEqual(instance.search_var.get(), "Smiley")
+        self.assertEqual(self.refreshes_after_everything_settles(instance), 1)
+
+    def test_clear_with_several_filters_refreshes_once(self):
+        instance = self.make_app("Meter", "meter:11 Smiley", diff="Hard")
+        instance.clear_chart_filter()
+        self.assertEqual((instance.diff_var.get(), instance.search_var.get()), ("All difficulties", "Smiley"))
+        self.assertEqual(self.refreshes_after_everything_settles(instance), 1)
+
+    def test_typing_still_waits_for_the_delay(self):
+        instance = self.make_app("Meter")
+        for text in ("s", "sm", "smi"):
+            instance.search_var.set(text)
+        self.assertEqual(instance.refreshes, 0)
+        self.assertEqual(self.refreshes_after_everything_settles(instance), 1)
+
+    def test_pending_typing_refresh_is_not_repeated_after_a_click(self):
+        instance = self.make_app("Meter", "Smiley")
+        instance.search_var.set("Smiley x")  # typing, delayed refresh queued
+        instance._on_chart_click(Mock(ydata=0.5))
+        self.assertEqual(self.refreshes_after_everything_settles(instance), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

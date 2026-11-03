@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import csv
 from datetime import datetime
 import json
@@ -78,6 +79,10 @@ NUMERIC_COLUMNS = {"Meter", "Time", "Score", "Best %", "Plays", "Peak NPS", "Tap
 
 
 class LibraryApp:
+    # Defaults for state that is only set later, so every instance has these attributes.
+    _search_refresh_after_id = None
+    _batching_filter_changes = False
+
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("ITGmania Library Visualizer")
@@ -157,7 +162,7 @@ class LibraryApp:
         self._build()
         self.search_var.trace_add("write", lambda *_: self._schedule_search_refresh())
         for var in (self.pack_var, self.type_var, self.diff_var, self.scored_var):
-            var.trace_add("write", lambda *_: self.refresh_table())
+            var.trace_add("write", lambda *_: self._refresh_unless_batching())
         for var in (self.cache_var, self.stats_var):
             var.trace_add("write", lambda *_: self._source_paths_changed())
         self.load_cached_data()
@@ -494,8 +499,33 @@ class LibraryApp:
         self.search_var.set("")
         self.search_entry.focus_set()
 
+    def _refresh_unless_batching(self):
+        if not self._batching_filter_changes:
+            self.refresh_table()
+
+    @contextlib.contextmanager
+    def _batched_filter_changes(self):
+        """Change several filter variables, then refresh the table once.
+
+        Each filter variable refreshes the table by itself when it changes (the search box after a
+        short delay), so one chart click that sets two of them would rebuild the table and the chart
+        several times. Inside this block those automatic refreshes are skipped, and one refresh runs
+        when the block ends.
+        """
+        self._batching_filter_changes = True
+        try:
+            yield
+        finally:
+            self._batching_filter_changes = False
+        if self._search_refresh_after_id is not None:
+            self.root.after_cancel(self._search_refresh_after_id)
+            self._search_refresh_after_id = None
+        self.refresh_table()
+
     def _schedule_search_refresh(self):
         """Refresh the table once the user pauses typing in the search box."""
+        if self._batching_filter_changes:
+            return
         if self._search_refresh_after_id is not None:
             self.root.after_cancel(self._search_refresh_after_id)
         self._search_refresh_after_id = self.root.after(
@@ -906,14 +936,14 @@ class LibraryApp:
         if not active:
             return
         query = self.search_var.get()
-        for metric, _ in active:
-            if metric == "Difficulty":
-                self.diff_var.set("All difficulties")
-            query = replace_search_directive(query, CHART_FILTER_FIELDS[metric], None)
-        self.search_var.set(query)
+        with self._batched_filter_changes():
+            for metric, _ in active:
+                if metric == "Difficulty":
+                    self.diff_var.set("All difficulties")
+                query = replace_search_directive(query, CHART_FILTER_FIELDS[metric], None)
+            self.search_var.set(query)
         if hasattr(self, "search_entry"):
             self.search_entry.icursor("end")
-        self.refresh_table()
 
     def _on_chart_click(self, event):
         if event.ydata is None or not self._current_dist_bars:
@@ -936,20 +966,20 @@ class LibraryApp:
         already_active = (current is not None
                           and current.casefold() == filter_token_text(target_token).casefold())
 
-        if metric == "Difficulty":
-            self.diff_var.set("All difficulties" if already_active else target_token)
-            # Remove redundant diff from search bar so they don't fight
-            new_query = replace_search_directive(query, "diff", None)
-            if new_query != query:
+        with self._batched_filter_changes():
+            if metric == "Difficulty":
+                self.diff_var.set("All difficulties" if already_active else target_token)
+                # Remove redundant diff from search bar so they don't fight
+                new_query = replace_search_directive(query, "diff", None)
+                if new_query != query:
+                    self.search_var.set(new_query)
+            else:
+                new_query = replace_search_directive(
+                    query, CHART_FILTER_FIELDS[metric], None if already_active else target_token)
                 self.search_var.set(new_query)
-        else:
-            new_query = replace_search_directive(
-                query, CHART_FILTER_FIELDS[metric], None if already_active else target_token)
-            self.search_var.set(new_query)
 
         if hasattr(self, "search_entry"):
             self.search_entry.icursor("end")
-        self.refresh_table()
 
     def _metric_filter_present(self, metric):
         """Whether the table is currently filtered by this chart's own metric."""
