@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shlex
+import statistics
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -30,13 +31,18 @@ GRADE_RANK.update({tier.casefold(): index for index, tier in enumerate(GRADE_NAM
 COURSE_UNSAFE_CHARS = (";", ":", "\r", "\n")
 
 __all__ = [
+    "CHART_FILTER_FIELDS",
     "COURSE_UNSAFE_CHARS",
     "DIFFICULTY_ORDER",
     "GRADE_OPTIONS",
     "GRADE_NAMES",
     "RADAR_FIELDS",
+    "SEARCH_FIELD_ALIASES",
     "TAP_FIELDS",
     "TECH_FIELDS",
+    "aggregate_bpm_distribution",
+    "aggregate_difficulty_distribution",
+    "aggregate_meter_distribution",
     "bpm_sort_key",
     "build_dialog_query",
     "course_append_bytes",
@@ -44,9 +50,14 @@ __all__ = [
     "course_song_lines",
     "course_trailing_risk",
     "difficulty_sort_key",
+    "distribution_summary_stats",
+    "filter_texts_match",
+    "filter_token_text",
     "format_bpm_display",
     "format_duration",
     "format_new_course",
+    "get_active_chart_filter",
+    "get_active_chart_filters",
     "grade_sort_key",
     "looks_like_song_tree",
     "match_chart_query",
@@ -57,6 +68,7 @@ __all__ = [
     "parse_duration_seconds",
     "parse_numeric_bound",
     "parse_search_query",
+    "replace_search_directive",
     "split_dialog_query",
     "split_path",
     "stats_index",
@@ -681,6 +693,363 @@ def match_chart_query(row: dict, query: str | dict) -> bool:
     return True
 
 
+def filter_token_text(token) -> str:
+    """Text form of a chart filter token: a plain string, or several values joined by spaces.
+
+    A BPM range bar needs two directives (bpm:>=120 bpm:<140), so its token is a tuple of values.
+    """
+    if token is None:
+        return ""
+    if isinstance(token, str):
+        return token
+    return " ".join(token)
+
+
+def filter_texts_match(first, second) -> bool:
+    """Whether two chart filter texts select the same charts, however they were typed.
+
+    Each text is one filter value or several joined by spaces ("11", ">=120 <140"); a bar's token tuple
+    is accepted too. Every value is read the way the search reads it (parse_numeric_bound), so "11.0"
+    matches "11" and "=11", and the order of the values does not matter ("<140 >=120" matches
+    ">=120 <140"). Text that is not a number (a difficulty name) is compared ignoring case.
+    """
+    def readings(text):
+        values = filter_token_text(text).split()
+        keys = [parse_numeric_bound(value) or ("text", value.casefold()) for value in values]
+        return sorted(keys, key=repr)
+
+    return bool(filter_token_text(first).strip()) and readings(first) == readings(second)
+
+
+def _needs_quotes(text: str) -> bool:
+    return not text or any(char.isspace() or char in "\"'\\" for char in text)
+
+
+def _quote_for_search(text: str) -> str:
+    """Quote text for the search box so that shlex.split reads it back unchanged.
+
+    Text with no spaces or quote characters stays as it is. Anything else goes in double quotes,
+    with backslashes and double quotes escaped (the only escapes shlex honors inside them).
+    """
+    if not _needs_quotes(text):
+        return text
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _format_search_token(token: str) -> str:
+    """Write one token from shlex.split back as search text that reads as the same single token.
+
+    A directive such as `pack:In The Groove` gets only its value quoted (pack:"In The Groove").
+    Every other token, including free text that happens to contain a colon, is quoted as a whole,
+    so a quoted phrase like "Dance Dance: Revolution" stays one phrase instead of splitting at the
+    space before the colon.
+    """
+    prefix, colon, value = token.partition(":")
+    if colon and not _needs_quotes(prefix) and SEARCH_FIELD_ALIASES.get(prefix.casefold()):
+        return f"{prefix}:{_quote_for_search(value) if value else ''}"
+    return _quote_for_search(token)
+
+
+def replace_search_directive(query: str, directive_prefix: str, new_value: str | tuple[str, ...] | list[str] | None) -> str:
+    """Replace or remove a directive in a search query, preserving free-text terms and other directives.
+
+    Uses shlex tokenization consistent with parse_search_query and SEARCH_FIELD_ALIASES.
+    If new_value is None, removes any directives matching directive_prefix or its aliases.
+    If new_value is a string, replaces the first matching directive in-place or appends it.
+    If new_value is several values, they are written as several directives of that field
+    (e.g. (">=120", "<140") gives "bpm:>=120 bpm:<140") in the first matching directive's place.
+    Any other directives of that field are removed.
+    """
+    canonical_target = SEARCH_FIELD_ALIASES.get(directive_prefix.casefold(), directive_prefix.casefold())
+    if new_value is None:
+        new_values = []
+    elif isinstance(new_value, str):
+        new_values = [new_value]
+    else:
+        new_values = list(new_value)
+
+    def _directive_tokens() -> list[str]:
+        tokens_out = []
+        for value in new_values:
+            already_quoted = len(value) >= 2 and value.startswith('"') and value.endswith('"')
+            text = value if already_quoted or not value else _quote_for_search(value)
+            tokens_out.append(f"{canonical_target}:{text}")
+        return tokens_out
+
+    raw_query = str(query or "").strip()
+    if not raw_query:
+        return " ".join(_directive_tokens())
+
+    try:
+        tokens = shlex.split(raw_query)
+        unbalanced = False
+    except ValueError:
+        # Unbalanced quote: parse_search_query splits on spaces in this case, so the words are raw text.
+        tokens = raw_query.split()
+        unbalanced = True
+
+    # Each piece is (text, is_new_directive). Kept pieces are the query's own words.
+    pieces = []
+    replaced = False
+
+    for token in tokens:
+        if ":" in token:
+            field = token.split(":", 1)[0].strip().casefold()
+            if SEARCH_FIELD_ALIASES.get(field) == canonical_target:
+                if not replaced and new_values:
+                    pieces.extend((text, True) for text in _directive_tokens())
+                    replaced = True
+                continue
+        pieces.append((token, False))
+
+    if not replaced and new_values:
+        pieces.extend((text, True) for text in _directive_tokens())
+
+    if not unbalanced:
+        # shlex took the quotes off, so each kept word is written back with quotes where it needs them.
+        return " ".join(text if is_new else _format_search_token(text) for text, is_new in pieces)
+
+    # Unbalanced case: keep the words as typed, so the search still reads the same way, unless that would
+    # break the result: either a new value needs quotes (a space-separated search cannot hold it), or the
+    # word that held the stray quote is gone and the rest is balanced, which the search would now read with
+    # its quotes stripped. Then each kept word's quotes are escaped so it is still read as typed.
+    typed = " ".join(text for text, _ in pieces)
+    try:
+        shlex.split(typed)
+        typed_reads_as_typed = False
+    except ValueError:
+        typed_reads_as_typed = not any(is_new and _needs_quotes(text) for text, is_new in pieces)
+    if typed_reads_as_typed:
+        return typed
+    return " ".join(text if is_new else _quote_for_search(text) for text, is_new in pieces)
+
+
+# Chart metric name -> canonical search directive field that filters it.
+CHART_FILTER_FIELDS = {"Difficulty": "difficulty", "Meter": "meter", "BPM": "bpm"}
+
+
+def get_active_chart_filters(diff_filter: str, search_query: str) -> list[tuple[str, str]]:
+    """Return [(metric_name, active_value), ...] for every chart metric currently filtering the table.
+
+    Order is Difficulty, Meter, BPM. The difficulty combobox takes precedence over a diff: directive.
+    When a field has several directives (bpm:>=120 bpm:<140) their values are joined with spaces,
+    which is the same text filter_token_text gives for a BPM bar.
+    """
+    values: dict[str, list[str]] = {metric: [] for metric in CHART_FILTER_FIELDS}
+    metric_by_field = {field: metric for metric, field in CHART_FILTER_FIELDS.items()}
+    for field, val in parse_search_query(search_query).get("directives", []):
+        if field in metric_by_field and val:
+            values[metric_by_field[field]].append(val)
+
+    active = []
+    if diff_filter and diff_filter != "All difficulties":
+        active.append(("Difficulty", diff_filter))
+    elif values["Difficulty"]:
+        active.append(("Difficulty", " ".join(values["Difficulty"])))
+    for metric in ("Meter", "BPM"):
+        if values[metric]:
+            active.append((metric, " ".join(values[metric])))
+    return active
+
+
+def get_active_chart_filter(diff_filter: str, search_query: str) -> tuple[str, str] | None:
+    """Return the first (metric_name, active_value) from get_active_chart_filters, or None."""
+    active = get_active_chart_filters(diff_filter, search_query)
+    return active[0] if active else None
+
+
+def aggregate_meter_distribution(rows: list[dict], active_val: str | None = None) -> list[tuple[str, int, str, bool]]:
+    """Aggregate row counts per meter level.
+
+    Float meters like 11.0 are normalized to integer strings ("11"). parse_cache_file stores a chart with
+    no METER tag as 0, so such charts get an ordinary "0" bar: the table shows 0 for them and meter:0
+    finds them, which keeps the bar's number equal to the rows after clicking it. Only rows with no
+    value at all or text that is not a number (not produced by parse_cache_file) are grouped into "?"
+    at the end (non-interactive).
+    Returns list of (label, count, filter_token, is_active).
+    """
+    counts: dict[str, int] = {}
+    numeric_keys: dict[float, str] = {}
+    missing_count = 0
+
+    for row in rows:
+        meter_raw = row.get("Meter")
+        if meter_raw in (None, ""):
+            missing_count += 1
+            continue
+        try:
+            m_val = float(meter_raw)
+            label = str(int(m_val)) if m_val.is_integer() else f"{m_val:g}"
+            counts[label] = counts.get(label, 0) + 1
+            numeric_keys[m_val] = label
+        except (TypeError, ValueError):
+            missing_count += 1
+
+    result = []
+    for m_val in sorted(numeric_keys.keys()):
+        label = numeric_keys[m_val]
+        count = counts[label]
+        is_active = filter_texts_match(active_val, label) if active_val is not None else False
+        result.append((label, count, label, is_active))
+
+    if missing_count > 0:
+        result.append(("?", missing_count, "", False))
+
+    return result
+
+
+def aggregate_difficulty_distribution(rows: list[dict], active_val: str | None = None) -> list[tuple[str, int, str, bool]]:
+    """Aggregate row counts per difficulty tier in canonical DIFFICULTY_ORDER.
+
+    Returns list of (label, count, filter_token, is_active).
+    """
+    counts: dict[str, int] = {diff: 0 for diff in DIFFICULTY_ORDER}
+    extra_diffs: dict[str, int] = {}
+
+    for row in rows:
+        diff = str(row.get("Difficulty") or "").strip()
+        matched = False
+        for d in DIFFICULTY_ORDER:
+            if diff.casefold() == d.casefold():
+                counts[d] += 1
+                matched = True
+                break
+        if not matched and diff:
+            extra_diffs[diff] = extra_diffs.get(diff, 0) + 1
+
+    result = []
+    for diff in DIFFICULTY_ORDER:
+        count = counts.get(diff, 0)
+        is_active = (active_val.casefold() == diff.casefold()) if active_val else False
+        result.append((diff, count, diff, is_active))
+
+    for diff, count in extra_diffs.items():
+        is_active = (active_val.casefold() == diff.casefold()) if active_val else False
+        result.append((diff, count, diff, is_active))
+
+    return result
+
+
+# (bar label, bpm: directive values that select the bar). Each range is half-open [low, high), so a
+# chart at exactly 140 BPM belongs to 140-159 only, and a chart at 139.5 belongs to 120-139.
+BPM_BINS = (
+    ("<120", ("<120",)),
+    ("120-139", (">=120", "<140")),
+    ("140-159", (">=140", "<160")),
+    ("160-179", (">=160", "<180")),
+    ("180-199", (">=180", "<200")),
+    ("200+", (">=200",)),
+)
+
+
+def _bpm_range(row: dict) -> tuple[float, float] | None:
+    """Return a row's (bpm_min, bpm_max), or None when either is missing or not a number."""
+    try:
+        low, high = row.get("bpm_min"), row.get("bpm_max")
+        if low in (None, "") or high in (None, ""):
+            return None
+        return float(low), float(high)
+    except (TypeError, ValueError):
+        return None
+
+
+def aggregate_bpm_distribution(
+    rows: list[dict], active_val: str | None = None
+) -> list[tuple[str, int, tuple[str, ...], bool]]:
+    """Count charts per BPM range; a chart counts in every range its tempo span touches.
+
+    A chart that runs 100-150 BPM is counted in <120, 120-139 and 140-159. Each bar is counted with
+    the same test as the bpm: filter (_compare_bpm_bound) on the bar's own directives, so the number
+    on a bar always equals the number of rows the table shows after clicking it. Bar counts therefore
+    add up to more than the number of charts when some charts change tempo across ranges.
+
+    Returns list of (label, count, filter_token, is_active). filter_token is a tuple of bpm:
+    directive values; is_active compares its space-joined text with active_val.
+    """
+    bounds_by_label = {
+        label: [parse_numeric_bound(value) for value in values] for label, values in BPM_BINS
+    }
+    counts = {label: 0 for label, _ in BPM_BINS}
+    missing_count = 0
+
+    for row in rows:
+        if _bpm_range(row) is None:
+            missing_count += 1
+            continue
+        for label, bounds in bounds_by_label.items():
+            if all(_compare_bpm_bound(bound, row) for bound in bounds):
+                counts[label] += 1
+
+    result = []
+    for label, values in BPM_BINS:
+        is_active = bool(active_val) and filter_texts_match(active_val, values)
+        result.append((label, counts[label], values, is_active))
+
+    if missing_count > 0:
+        result.append(("?", missing_count, "", False))
+
+    return result
+
+
+def distribution_summary_stats(metric: str, rows: list[dict]) -> str:
+    """Calculate summary statistics for the active distribution metric on current visible rows.
+
+    For multimodal data, the lowest mode is selected deterministically.
+    """
+    if not rows:
+        return "0 charts"
+
+    if metric == "Meter":
+        vals = []
+        for r in rows:
+            m = r.get("Meter")
+            if m not in (None, ""):
+                try:
+                    v = float(m)
+                    vals.append(int(v) if v.is_integer() else v)
+                except (TypeError, ValueError):
+                    pass
+        if not vals:
+            return f"{len(rows):,} charts"
+        mean_val = statistics.mean(vals)
+        med_val = statistics.median(vals)
+        modes = statistics.multimode(vals)
+        mode_val = min(modes)
+        return f"{len(rows):,} charts · Median: {med_val:g} · Mean: {mean_val:.1f} · Mode: {mode_val:g}"
+
+    if metric == "Difficulty":
+        diff_counts = {d: 0 for d in DIFFICULTY_ORDER}
+        for r in rows:
+            d = str(r.get("Difficulty") or "")
+            for c in DIFFICULTY_ORDER:
+                if d.casefold() == c.casefold():
+                    diff_counts[c] += 1
+                    break
+        sorted_diffs = sorted(diff_counts.items(), key=lambda item: (-item[1], DIFFICULTY_ORDER.index(item[0])))
+        top_diff, top_count = sorted_diffs[0]
+        if top_count > 0:
+            return f"{len(rows):,} charts · Mode: {top_diff} ({top_count:,})"
+        return f"{len(rows):,} charts"
+
+    if metric == "BPM":
+        vals = []
+        for r in rows:
+            b = r.get("bpm_max")
+            if b not in (None, ""):
+                try:
+                    vals.append(float(b))
+                except (TypeError, ValueError):
+                    pass
+        if not vals:
+            return f"{len(rows):,} charts"
+        mean_val = statistics.mean(vals)
+        med_val = statistics.median(vals)
+        return (f"{len(rows):,} charts · Median: {med_val:.0f} · Mean: {mean_val:.0f}\n"
+                "A chart counts in every range its tempo touches.")
+
+    return f"{len(rows):,} charts"
+
+
 # --- Advanced Search dialog <-> search-bar text -------------------------------------------
 # The dialog has boxes for only some filters. split_dialog_query() fills the boxes from the
 # search bar and hands back everything the boxes cannot show exactly as "other", so applying
@@ -695,7 +1064,7 @@ def _has_quote_chars(text: str) -> bool:
     return any(char in text for char in "\"'\\")
 
 
-def _format_search_token(field: str, value: str) -> str:
+def _format_dialog_token(field: str, value: str) -> str:
     """Write ``field:value`` so parse_search_query reads the same value back."""
     token = f"{field}:{value}"
     if not any(char.isspace() or char in "\"'\\" for char in token):
@@ -772,7 +1141,7 @@ def split_dialog_query(query: str) -> dict:
     other = []
     for field, value in parsed["directives"]:
         if not _absorb_into_dialog(slots, field, value):
-            other.append(_format_search_token(field, value))
+            other.append(_format_dialog_token(field, value))
     result = {"free_text": parsed["free_text"], **slots, "other": " ".join(other)}
     for name in DIALOG_RANGE_FIELDS:
         result[name] = tuple(slots[name])
@@ -789,7 +1158,7 @@ def build_dialog_query(parts: dict) -> str:
         tokens.append(text("free_text"))
     for field in DIALOG_TEXT_FIELDS:
         if text(field):
-            tokens.append(_format_search_token(field, text(field)))
+            tokens.append(_format_dialog_token(field, text(field)))
     for field in DIALOG_RANGE_FIELDS:
         low, high = (str(part or "").strip() for part in parts.get(field, ("", "")))
         name = _DIALOG_RANGE_TOKEN_NAMES[field]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import csv
 from datetime import datetime
 import json
@@ -9,27 +10,64 @@ import os
 import re
 import sys
 import threading
-import tkinter as tk
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, ttk
+except ImportError:
+    tk = None
+    filedialog = None
+    messagebox = None
+    ttk = None
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from typing import NamedTuple
+
+try:
+    import matplotlib
+    matplotlib.use("TkAgg")
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    from matplotlib.figure import Figure
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
+DIST_PANEL_WIDTH = 320
+# A bar can be clicked across at least this fraction of the chart's width, so a very short bar (one chart
+# among hundreds) is still easy to hit, while a click far to the right of it does nothing.
+CHART_MIN_CLICK_FRACTION = 0.15
+DIFFICULTY_COLORS = {
+    "Beginner": "#38bdf8",
+    "Easy": "#facc15",
+    "Medium": "#f43f5e",
+    "Hard": "#34d399",
+    "Challenge": "#a855f7",
+    "Edit": "#94a3b8",
+}
 
 from library_data import (
     DIFFICULTY_ORDER,
     GRADE_OPTIONS,
     TAP_FIELDS,
     TECH_FIELDS,
+    CHART_FILTER_FIELDS,
+    aggregate_bpm_distribution,
+    aggregate_difficulty_distribution,
+    aggregate_meter_distribution,
     bpm_sort_key,
     build_dialog_query,
     course_append_bytes,
     difficulty_sort_key,
+    distribution_summary_stats,
+    filter_texts_match,
     format_duration,
+    get_active_chart_filters,
     grade_sort_key,
     looks_like_song_tree,
     match_chart_query,
     number,
     parse_cache_file,
     parse_search_query,
+    replace_search_directive,
     split_dialog_query,
     stats_index,
 )
@@ -45,7 +83,20 @@ NUMERIC_COLUMNS = {"Meter", "Time", "Score", "Best %", "Plays", "Peak NPS", "Tap
                    "W5", "Miss", "Max combo", *TECH_FIELDS}
 
 
+class ChartBar(NamedTuple):
+    """One row of the distribution chart, in the chart's own coordinates, as the click handler needs it."""
+    y_min: float
+    y_max: float
+    label: str
+    token: str | tuple  # the filter value(s) a click applies; "" when the row cannot be clicked
+    click_width: float = float("inf")  # a click to the right of this x does nothing
+
+
 class LibraryApp:
+    # Defaults for state that is only set later, so every instance has these attributes.
+    _search_refresh_after_id = None
+    _batching_filter_changes = False
+
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("ITGmania Library Visualizer")
@@ -109,11 +160,23 @@ class LibraryApp:
                     self.sort_keys.append((item[0], item[1]))
         if not self.sort_keys:
             self.sort_keys = [("Pack", False)]
+        self.show_distribution_panel = tk.BooleanVar(
+            value=bool(self.saved_settings.get("show_distribution", False))
+        )
+        saved_metric = self.saved_settings.get("distribution_metric", "Meter")
+        self.distribution_metric = tk.StringVar(
+            value=saved_metric if saved_metric in ("Meter", "Difficulty", "BPM") else "Meter"
+        )
+        self.dist_canvas = None
+        self.dist_fig = None
+        self.dist_ax = None
+        self._current_dist_bars = []
+        self._last_visible_rows = []
         self._style()
         self._build()
         self.search_var.trace_add("write", lambda *_: self._schedule_search_refresh())
         for var in (self.pack_var, self.type_var, self.diff_var, self.scored_var):
-            var.trace_add("write", lambda *_: self.refresh_table())
+            var.trace_add("write", lambda *_: self._refresh_unless_batching())
         for var in (self.cache_var, self.stats_var):
             var.trace_add("write", lambda *_: self._source_paths_changed())
         self.load_cached_data()
@@ -187,9 +250,17 @@ class LibraryApp:
         self._button(bar, "Load / refresh", self.load_data, primary=True).pack(side="left", padx=4)
         self._button(bar, "Export CSV", self.export_csv).pack(side="left", padx=4)
         self._button(bar, "Build course…", self.open_course_builder).pack(side="left", padx=4)
-        frame = tk.Frame(self.root, bg="#10151d")
-        frame.pack(fill="both", expand=True, padx=18, pady=(0, 8))
-        self.tree = ttk.Treeview(frame, columns=HEADERS, show="headings", selectmode="extended")
+        self.dist_button = self._button(
+            bar,
+            "Distribution ◀" if self.show_distribution_panel.get() else "Distribution ▶",
+            self.toggle_distribution_panel,
+        )
+        self.dist_button.pack(side="left", padx=4)
+        self.content_frame = tk.Frame(self.root, bg="#10151d")
+        self.content_frame.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+        self.table_frame = tk.Frame(self.content_frame, bg="#10151d")
+        self.table_frame.pack(side="left", fill="both", expand=True)
+        self.tree = ttk.Treeview(self.table_frame, columns=HEADERS, show="headings", selectmode="extended")
         for col in HEADERS:
             self.tree.heading(col, text=col, command=lambda c=col: self.sort_by(c))
             width = 130 if col in ("Title", "Artist", "Pack") else 92
@@ -204,14 +275,14 @@ class LibraryApp:
             width = self.column_widths[col] or width
             self.tree.column(col, width=width, minwidth=55, stretch=False, anchor="w" if col in
                              ("Title", "Artist", "Pack", "Chart") else "center")
-        vs = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
-        hs = ttk.Scrollbar(frame, orient="horizontal", command=self.tree.xview)
+        vs = ttk.Scrollbar(self.table_frame, orient="vertical", command=self.tree.yview)
+        hs = ttk.Scrollbar(self.table_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
         vs.grid(row=0, column=1, sticky="ns")
         hs.grid(row=1, column=0, sticky="ew")
-        frame.grid_rowconfigure(0, weight=1)
-        frame.grid_columnconfigure(0, weight=1)
+        self.table_frame.grid_rowconfigure(0, weight=1)
+        self.table_frame.grid_columnconfigure(0, weight=1)
         self.tree.bind("<ButtonPress-1>", self._column_drag_start, add="+")
         self.tree.bind("<ButtonRelease-1>", self._column_drag_end, add="+")
         self.tree.bind("<ButtonRelease-1>", self._shift_sort_click, add="+")
@@ -220,6 +291,9 @@ class LibraryApp:
         if visible_columns:
             self.tree.configure(displaycolumns=visible_columns)
         self._update_sort_headings()
+        self._build_distribution_panel()
+        if self.show_distribution_panel.get():
+            self.dist_panel.pack(side="right", fill="y", padx=(10, 0))
         self.progress = ttk.Progressbar(self.root, mode="indeterminate", style="Horizontal.TProgressbar")
         self.progress.pack(fill="x", padx=18, pady=(0, 4))
         footer = tk.Frame(self.root, bg="#10151d", padx=18, pady=7)
@@ -267,6 +341,12 @@ class LibraryApp:
             columns_menu.add_cascade(label=group, menu=group_menu)
         view_menu.add_cascade(label="Columns", menu=columns_menu)
         view_menu.add_command(label="Reset column layout", command=self.reset_column_layout)
+        view_menu.add_separator()
+        view_menu.add_checkbutton(
+            label="Show distribution panel",
+            variable=self.show_distribution_panel,
+            command=self._sync_distribution_toggle,
+        )
         menubar.add_cascade(label="View", menu=view_menu)
         self.root.configure(menu=menubar)
         self.root.bind("<Control-f>", lambda _event: self.focus_search())
@@ -412,6 +492,8 @@ class LibraryApp:
             "column_visibility": {column: variable.get() for column, variable in self.column_visibility.items()},
             "column_widths": {column: self.tree.column(column, "width") for column in HEADERS},
             "sort_keys": [[column, descending] for column, descending in self.sort_keys],
+            "show_distribution": self.show_distribution_panel.get() if hasattr(self, "show_distribution_panel") else False,
+            "distribution_metric": self.distribution_metric.get() if hasattr(self, "distribution_metric") else "Meter",
         }
         temporary = self.settings_path.with_suffix(".tmp")
         try:
@@ -431,8 +513,33 @@ class LibraryApp:
         self.search_var.set("")
         self.search_entry.focus_set()
 
+    def _refresh_unless_batching(self):
+        if not self._batching_filter_changes:
+            self.refresh_table()
+
+    @contextlib.contextmanager
+    def _batched_filter_changes(self):
+        """Change several filter variables, then refresh the table once.
+
+        Each filter variable refreshes the table by itself when it changes (the search box after a
+        short delay), so one chart click that sets two of them would rebuild the table and the chart
+        several times. Inside this block those automatic refreshes are skipped, and one refresh runs
+        when the block ends.
+        """
+        self._batching_filter_changes = True
+        try:
+            yield
+        finally:
+            self._batching_filter_changes = False
+        if self._search_refresh_after_id is not None:
+            self.root.after_cancel(self._search_refresh_after_id)
+            self._search_refresh_after_id = None
+        self.refresh_table()
+
     def _schedule_search_refresh(self):
         """Refresh the table once the user pauses typing in the search box."""
+        if self._batching_filter_changes:
+            return
         if self._search_refresh_after_id is not None:
             self.root.after_cancel(self._search_refresh_after_id)
         self._search_refresh_after_id = self.root.after(
@@ -652,6 +759,37 @@ class LibraryApp:
         except (TypeError, ValueError):
             return "unknown"
 
+    def _filter_rows(self, ignore_metric=None):
+        """Return the rows that pass the pack, type, difficulty, scored and search filters.
+
+        ignore_metric ("Meter", "Difficulty" or "BPM") leaves out that chart's own filter, both the
+        search directive and, for Difficulty, the dropdown. The distribution chart uses this to keep
+        showing every bar after you click one.
+        """
+        query_text = self.search_var.get().strip()
+        criteria = parse_search_query(query_text) if query_text else None
+        ignored_field = CHART_FILTER_FIELDS.get(ignore_metric)
+        if criteria and ignored_field:
+            criteria = {**criteria, "directives": [
+                directive for directive in criteria["directives"] if directive[0] != ignored_field]}
+        pack, chart_type, diff = self.pack_var.get(), self.type_var.get(), self.diff_var.get()
+        if ignore_metric == "Difficulty":
+            diff = "All difficulties"
+        rows = []
+        for row in self.rows:
+            if pack != "All packs" and row["Pack"] != pack:
+                continue
+            if chart_type != "All types" and row["Type"] != chart_type:
+                continue
+            if diff != "All difficulties" and row["Difficulty"] != diff:
+                continue
+            if self.scored_var.get() and not row["Grade"]:
+                continue
+            if criteria and not match_chart_query(row, criteria):
+                continue
+            rows.append(row)
+        return rows
+
     def refresh_table(self, preserve_selection=False):
         if not hasattr(self, "tree"):
             return
@@ -664,22 +802,7 @@ class LibraryApp:
         self._render_generation = getattr(self, "_render_generation", 0) + 1
         generation = self._render_generation
         self._update_sort_headings()
-        query_text = self.search_var.get().strip()
-        criteria = parse_search_query(query_text) if query_text else None
-        pack, chart_type, diff = self.pack_var.get(), self.type_var.get(), self.diff_var.get()
-        visible = []
-        for row in self.rows:
-            if pack != "All packs" and row["Pack"] != pack:
-                continue
-            if chart_type != "All types" and row["Type"] != chart_type:
-                continue
-            if diff != "All difficulties" and row["Difficulty"] != diff:
-                continue
-            if self.scored_var.get() and not row["Grade"]:
-                continue
-            if criteria and not match_chart_query(row, criteria):
-                continue
-            visible.append(row)
+        visible = self._filter_rows()
         for column, descending in reversed(self.sort_keys):
             present = [row for row in visible if row.get(column) not in (None, "")]
             missing = [row for row in visible if row.get(column) in (None, "")]
@@ -698,6 +821,7 @@ class LibraryApp:
         self.tree_item_rows = {}
         self._insert_batch(visible, 0, generation, selected_rows)
         self.count_label.set(f"{len(visible):,} charts shown · {len(self.rows):,} total")
+        self._update_distribution_panel(visible)
 
     def _update_sort_headings(self):
         priorities = {column: (index, descending) for index, (column, descending) in enumerate(self.sort_keys, 1)}
@@ -730,6 +854,263 @@ class LibraryApp:
                 self.tree.selection_add(item)
         if stop < len(rows):
             self.root.after(1, lambda: self._insert_batch(rows, stop, generation, selected_rows))
+
+    def _build_distribution_panel(self):
+        self.dist_panel = tk.Frame(self.content_frame, bg="#171f2a", width=DIST_PANEL_WIDTH, padx=10, pady=10)
+        self.dist_panel.pack_propagate(False)
+
+        # Header: Title + Close button
+        hdr = tk.Frame(self.dist_panel, bg="#171f2a")
+        hdr.pack(fill="x", pady=(0, 6))
+        tk.Label(hdr, text="Distribution", fg="#f2f6fa", bg="#171f2a",
+                 font=("Segoe UI Semibold", 11)).pack(side="left")
+        self._button(hdr, "✕", self.toggle_distribution_panel).pack(side="right")
+
+        # Metric selector
+        metric_bar = tk.Frame(self.dist_panel, bg="#171f2a")
+        metric_bar.pack(fill="x", pady=(4, 6))
+        for m in ("Meter", "Difficulty", "BPM"):
+            b = tk.Radiobutton(
+                metric_bar, text=m, value=m, variable=self.distribution_metric,
+                indicatoron=False, bg="#202b38", fg="#ecf3f9", selectcolor="#287c78",
+                activebackground="#287c78", activeforeground="#ffffff", font=("Segoe UI", 8),
+                command=self._on_distribution_metric_changed, padx=6, pady=3,
+            )
+            b.pack(side="left", padx=2, expand=True, fill="x")
+
+        # Summary line
+        self.dist_summary_var = tk.StringVar(value="")
+        tk.Label(self.dist_panel, textvariable=self.dist_summary_var, fg="#9eacbb", bg="#171f2a",
+                 font=("Segoe UI", 8), wraplength=DIST_PANEL_WIDTH - 24, justify="left").pack(fill="x", pady=(0, 6))
+
+        # Active filter banner: shown just above the chart, only while a chart filter is active.
+        # It is built here but not packed; _update_distribution_panel packs it before the chart container.
+        self.dist_banner_frame = tk.Frame(self.dist_panel, bg="#202b38", padx=8, pady=5)
+        self.dist_banner_label = tk.Label(self.dist_banner_frame, text="", fg="#4fc3b0", bg="#202b38",
+                                          font=("Segoe UI", 9), wraplength=DIST_PANEL_WIDTH - 90,
+                                          justify="left", anchor="w")
+        self.dist_banner_label.pack(side="left", fill="x", expand=True)
+        self._button(self.dist_banner_frame, "Clear", self.clear_chart_filter).pack(side="right")
+
+        # Chart container
+        self.dist_chart_frame = tk.Frame(self.dist_panel, bg="#171f2a")
+        self.dist_chart_frame.pack(fill="both", expand=True)
+
+        if not MATPLOTLIB_AVAILABLE:
+            tk.Label(
+                self.dist_chart_frame,
+                text="Install matplotlib to enable\ndistribution charts\n\nRun:\npip install matplotlib",
+                fg="#9eacbb", bg="#171f2a", font=("Segoe UI", 9), justify="center",
+            ).pack(expand=True, pady=40)
+
+    def _ensure_distribution_canvas(self):
+        if not MATPLOTLIB_AVAILABLE:
+            return False
+        if self.dist_canvas is None:
+            self.dist_fig = Figure(figsize=(3.0, 4.0), dpi=100, facecolor="#171f2a")
+            self.dist_ax = self.dist_fig.add_subplot(111)
+            self.dist_canvas = FigureCanvasTkAgg(self.dist_fig, master=self.dist_chart_frame)
+            self.dist_canvas.mpl_connect("button_press_event", self._on_chart_click)
+            # No resize binding is needed here: the canvas widget fills the chart frame, and matplotlib's
+            # Tk canvas already resizes the figure and redraws when its widget changes size.
+            self.dist_canvas.get_tk_widget().pack(fill="both", expand=True)
+        return True
+
+    def _set_distribution_visible(self, visible: bool):
+        """Single source of truth for panel visibility (toolbar + View menu)."""
+        if not hasattr(self, "dist_panel"):
+            return
+        self.show_distribution_panel.set(visible)
+        if visible:
+            self.dist_panel.pack(side="right", fill="y", padx=(10, 0))
+            self.dist_button.configure(text="Distribution ◀")
+            self._update_distribution_panel(getattr(self, "_last_visible_rows", []))
+        else:
+            self.dist_panel.pack_forget()
+            self.dist_button.configure(text="Distribution ▶")
+            self.root.update_idletasks()
+        self._save_settings()
+
+    def toggle_distribution_panel(self):
+        """Toolbar button: flip current visibility."""
+        self._set_distribution_visible(not self.show_distribution_panel.get())
+
+    def _sync_distribution_toggle(self):
+        """View-menu checkbutton: BooleanVar already toggled by Tk; apply it to the UI."""
+        self._set_distribution_visible(self.show_distribution_panel.get())
+
+    def _on_distribution_metric_changed(self):
+        self._save_settings()
+        self._update_distribution_panel(getattr(self, "_last_visible_rows", []))
+
+    def clear_chart_filter(self):
+        """Remove every filter the distribution charts can set (difficulty, meter and BPM)."""
+        active = get_active_chart_filters(self.diff_var.get(), self.search_var.get())
+        if not active:
+            return
+        query = self.search_var.get()
+        with self._batched_filter_changes():
+            for metric, _ in active:
+                if metric == "Difficulty":
+                    self.diff_var.set("All difficulties")
+                query = replace_search_directive(query, CHART_FILTER_FIELDS[metric], None)
+            self.search_var.set(query)
+        if hasattr(self, "search_entry"):
+            self.search_entry.icursor("end")
+
+    def _on_chart_click(self, event):
+        # xdata and ydata are None when the click is outside the plot area (for example on a row label).
+        if event.xdata is None or event.ydata is None or not self._current_dist_bars:
+            return
+        clicked = next(
+            (bar for bar in self._current_dist_bars
+             if bar.y_min <= event.ydata <= bar.y_max and 0 <= event.xdata <= bar.click_width),
+            None,
+        )
+        if clicked is None or not clicked.token or clicked.label == "?":
+            # Blank space, a '?' row or a row with nothing to filter to is not clickable.
+            return
+        target_token = clicked.token
+
+        metric = self.distribution_metric.get()
+        query = self.search_var.get()
+        current = dict(get_active_chart_filters(self.diff_var.get(), query)).get(metric)
+        already_active = current is not None and filter_texts_match(current, target_token)
+
+        with self._batched_filter_changes():
+            if metric == "Difficulty":
+                self.diff_var.set("All difficulties" if already_active else target_token)
+                # Remove redundant diff from search bar so they don't fight
+                new_query = replace_search_directive(query, "diff", None)
+                if new_query != query:
+                    self.search_var.set(new_query)
+            else:
+                new_query = replace_search_directive(
+                    query, CHART_FILTER_FIELDS[metric], None if already_active else target_token)
+                self.search_var.set(new_query)
+
+        if hasattr(self, "search_entry"):
+            self.search_entry.icursor("end")
+
+    def _metric_filter_present(self, metric):
+        """Whether the table is currently filtered by this chart's own metric."""
+        if metric == "Difficulty" and self.diff_var.get() != "All difficulties":
+            return True
+        field = CHART_FILTER_FIELDS[metric]
+        directives = parse_search_query(self.search_var.get()).get("directives", [])
+        return any(directive_field == field for directive_field, _ in directives)
+
+    def _distribution_rows(self, metric):
+        """Rows behind the chart: every filter except the chart's own, so all bars stay visible."""
+        if self._metric_filter_present(metric):
+            return self._filter_rows(ignore_metric=metric)
+        return self._last_visible_rows
+
+    def _update_distribution_panel(self, visible_rows):
+        self._last_visible_rows = visible_rows
+        if not hasattr(self, "dist_panel") or not self.show_distribution_panel.get():
+            return
+
+        metric = self.distribution_metric.get()
+        chart_rows = self._distribution_rows(metric)
+
+        # Update active filter banner (every chart filter narrowing the table, not just this chart's)
+        active_filters = get_active_chart_filters(self.diff_var.get(), self.search_var.get())
+        if active_filters:
+            banner = " · ".join(f"{name} {value}" for name, value in active_filters)
+            self.dist_banner_label.configure(text=f"Filtered by: {banner}")
+            self.dist_banner_frame.pack(fill="x", pady=(0, 6), before=self.dist_chart_frame)
+        else:
+            self.dist_banner_frame.pack_forget()
+
+        # Update summary text
+        self.dist_summary_var.set(distribution_summary_stats(metric, chart_rows))
+
+        if not self._ensure_distribution_canvas():
+            return
+
+        # Redraw chart
+        self.dist_ax.clear()
+        self._current_dist_bars = []
+
+        if not chart_rows:
+            self.dist_ax.text(
+                0.5, 0.5, "No charts match\ncurrent filters",
+                color="#9eacbb", fontsize=9, ha="center", va="center",
+                transform=self.dist_ax.transAxes,
+            )
+            self.dist_ax.axis("off")
+            self.dist_canvas.draw_idle()
+            return
+
+        self.dist_ax.axis("on")
+        active_val = dict(active_filters).get(metric)
+
+        if metric == "Meter":
+            data_items = aggregate_meter_distribution(chart_rows, active_val=active_val)
+        elif metric == "Difficulty":
+            data_items = aggregate_difficulty_distribution(chart_rows, active_val=active_val)
+        else:  # BPM
+            data_items = aggregate_bpm_distribution(chart_rows, active_val=active_val)
+
+        labels = [item[0] for item in reversed(data_items)]
+        counts = [item[1] for item in reversed(data_items)]
+        tokens = [item[2] for item in reversed(data_items)]
+        actives = [item[3] for item in reversed(data_items)]
+
+        y_positions = list(range(len(labels)))
+        bar_colors = []
+        edge_colors = []
+        linewidths = []
+
+        for label, is_act in zip(labels, actives):
+            if metric == "Difficulty":
+                base_color = DIFFICULTY_COLORS.get(label, "#94a3b8")
+            else:
+                base_color = "#4fc3b0" if label != "?" else "#64748b"
+
+            bar_colors.append(base_color)
+            if is_act:
+                edge_colors.append("#ffffff")
+                linewidths.append(1.5)
+            else:
+                edge_colors.append("#202b38")
+                linewidths.append(0.8)
+
+        bars = self.dist_ax.barh(
+            y_positions, counts, align="center",
+            color=bar_colors, edgecolor=edge_colors, linewidth=linewidths, height=0.68,
+        )
+
+        max_count = max(counts) if counts else 1
+        axis_max = max_count * 1.25
+        min_click_width = axis_max * CHART_MIN_CLICK_FRACTION
+        for i, (bar, count) in enumerate(zip(bars, counts)):
+            y = bar.get_y()
+            h = bar.get_height()
+            # An empty row has nothing to filter to, so it is not clickable, unless it is the active
+            # filter, which has to stay clickable so that clicking it again can switch it off.
+            clickable = counts[i] > 0 or actives[i]
+            self._current_dist_bars.append(ChartBar(
+                y, y + h, labels[i], tokens[i] if clickable else "", max(count, min_click_width)))
+            if count > 0:
+                self.dist_ax.text(
+                    count + max_count * 0.03, y + h / 2, str(count),
+                    va="center", ha="left", color="#ecf3f9", fontsize=7.5,
+                )
+
+        self.dist_ax.set_yticks(y_positions)
+        self.dist_ax.set_yticklabels(labels, color="#ecf3f9", fontsize=8)
+        self.dist_ax.set_xlim(0, axis_max)
+        self.dist_ax.set_facecolor("#171f2a")
+        self.dist_fig.patch.set_facecolor("#171f2a")
+        self.dist_ax.tick_params(colors="#9eacbb", labelsize=8, left=False, bottom=True)
+        self.dist_ax.spines["top"].set_visible(False)
+        self.dist_ax.spines["right"].set_visible(False)
+        self.dist_ax.spines["left"].set_visible(False)
+        self.dist_ax.spines["bottom"].set_color("#2a3749")
+        self.dist_fig.tight_layout(pad=1.0)
+        self.dist_canvas.draw_idle()
 
     def _shift_sort_click(self, event):
         if not event.state & 0x0001 or self.tree.identify_region(event.x, event.y) != "heading":
@@ -1138,6 +1519,8 @@ class LibraryApp:
 
 
 def main():
+    if tk is None:
+        sys.exit("Tkinter is required to run the ITGmania Library Visualizer GUI.")
     root = tk.Tk()
     LibraryApp(root)
     root.mainloop()

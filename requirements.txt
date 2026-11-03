@@ -1,0 +1,3 @@
+# Optional. The app runs on Python's standard library alone; matplotlib only adds the
+# distribution charts in the Distribution side panel.
+matplotlib

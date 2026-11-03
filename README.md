@@ -1,6 +1,6 @@
 # ITGmania Library Visualizer
 
-A small Windows-friendly desktop app for browsing ITGmania cached charts alongside a player's `Stats.xml`. It uses only Python's standard library (including Tkinter), so there is no package installation step.
+A small Windows-friendly desktop app for browsing ITGmania cached charts alongside a player's `Stats.xml`. It runs on Python's standard library alone (including Tkinter), so no package installation is required. One optional package, `matplotlib`, adds the distribution charts (see below).
 
 ## Run
 
@@ -9,6 +9,8 @@ Install Python 3.10 or newer with Tcl/Tk, then run:
 ```powershell
 python library_visualizer.py
 ```
+
+Optional: install `matplotlib` (`pip install matplotlib`, or `pip install -r requirements.txt`) to display interactive collection distribution charts (Meter, Difficulty, and BPM) in the collapsible side panel. Without it the panel shows an install hint and everything else works as usual.
 
 The app starts with the usual Windows ITGmania cache location filled in when it exists. Select the flat `Cache/Songs` folder and the player's `Stats.xml` with **Browse…**, then choose **Load / refresh**. The `Stats.xml` can be selected from a local profile folder; it is read only. After the first refresh, the app saves a local snapshot of the parsed chart library and restores it on later launches. Use **Load / refresh** when you want to reread the cache and scores; the saved snapshot does not update automatically when those files change.
 
@@ -33,6 +35,8 @@ On Linux and macOS, choose the cache and profile paths with **Browse…**; the a
   - Mixed queries like `Smiley meter:11 bpm:200-300 time:>1:45` filter across text and ranges simultaneously.
   - The **Advanced…** window fills its boxes from the search bar. Any filter that has no box, or that a box cannot show exactly (for example `plays:>=3`, `jacks:>0`, `grade:<B` or `meter:>10`), appears in **Other filters** and is written back unchanged when you click **Apply**. Edit or clear that line to change those filters.
 - Filter by pack, steps type, and difficulty; show scored charts only. Difficulties are listed in gameplay order from Beginner through Edit.
+- Toggle the **Distribution** side panel (or **View → Show distribution panel**) to view live distribution charts of Meter levels, Difficulty tiers, or BPM ranges for the currently filtered view. Clicking any category or bar immediately filters the table; clicking it again removes that filter, and **Clear** removes every chart filter (difficulty, meter and BPM) at once. Each chart keeps showing all of its bars after you click one, so you can click another bar to switch; it still respects the other filters (pack, steps type, scored only, search text, and the other charts' filters), and only skips its own metric's filter.
+  - BPM bars count a chart in every range its tempo touches, so a chart that runs 100–150 BPM is counted in the under-120, 120–139 and 140–159 bars, and the bars add up to more than the number of charts. Clicking a bar writes two search filters, such as `bpm:>=120 bpm:<140`, so the table shows exactly the number of charts on the bar.
 - Click a column heading to sort. Click it again to reverse the order. Difficulty sorts in gameplay order from Beginner through Edit. Grade sorts in ITGmania tier order (S+ before S before S−). BPM sorts by maximum tempo, then minimum.
 - Drag column headings to reorder them, and drag the divider between headings to resize a column.
 - Use **View → Columns** to show or hide columns by category; **View → Reset column layout** restores the defaults.
