@@ -256,6 +256,17 @@ class FullDistributionTests(unittest.TestCase):
         instance._on_chart_click(Mock(ydata=1.5))
         instance.search_var.set.assert_called_with("Smiley")
 
+    def test_clicking_a_bar_switches_off_a_hand_typed_version_of_its_filter(self):
+        instance = self.make_app(query="Smiley meter:11.0", metric="Meter")
+        instance._current_dist_bars = [(0.0, 1.0, "11", "11")]
+        instance._on_chart_click(Mock(ydata=0.5))
+        instance.search_var.set.assert_called_with("Smiley")
+
+        instance = self.make_app(query="Smiley bpm:<140 bpm:>=120", metric="BPM")
+        instance._current_dist_bars = [(0.0, 1.0, "120-139", (">=120", "<140"))]
+        instance._on_chart_click(Mock(ydata=0.5))
+        instance.search_var.set.assert_called_with("Smiley")
+
     def test_clicking_a_bpm_bar_sets_both_range_directives(self):
         instance = self.make_app(query="Smiley bpm:150", metric="BPM")
         instance._current_dist_bars = [(0.0, 1.0, "120-139", (">=120", "<140"))]

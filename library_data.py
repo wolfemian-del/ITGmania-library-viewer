@@ -50,6 +50,7 @@ __all__ = [
     "course_trailing_risk",
     "difficulty_sort_key",
     "distribution_summary_stats",
+    "filter_texts_match",
     "filter_token_text",
     "format_bpm_display",
     "format_duration",
@@ -702,6 +703,22 @@ def filter_token_text(token) -> str:
     return " ".join(token)
 
 
+def filter_texts_match(first, second) -> bool:
+    """Whether two chart filter texts select the same charts, however they were typed.
+
+    Each text is one filter value or several joined by spaces ("11", ">=120 <140"); a bar's token tuple
+    is accepted too. Every value is read the way the search reads it (parse_numeric_bound), so "11.0"
+    matches "11" and "=11", and the order of the values does not matter ("<140 >=120" matches
+    ">=120 <140"). Text that is not a number (a difficulty name) is compared ignoring case.
+    """
+    def readings(text):
+        values = filter_token_text(text).split()
+        keys = [parse_numeric_bound(value) or ("text", value.casefold()) for value in values]
+        return sorted(keys, key=repr)
+
+    return bool(filter_token_text(first).strip()) and readings(first) == readings(second)
+
+
 def _needs_quotes(text: str) -> bool:
     return not text or any(char.isspace() or char in "\"'\\" for char in text)
 
@@ -870,7 +887,7 @@ def aggregate_meter_distribution(rows: list[dict], active_val: str | None = None
     for m_val in sorted(numeric_keys.keys()):
         label = numeric_keys[m_val]
         count = counts[label]
-        is_active = (active_val == label) if active_val is not None else False
+        is_active = filter_texts_match(active_val, label) if active_val is not None else False
         result.append((label, count, label, is_active))
 
     if missing_count > 0:
@@ -963,7 +980,7 @@ def aggregate_bpm_distribution(
 
     result = []
     for label, values in BPM_BINS:
-        is_active = bool(active_val) and active_val == filter_token_text(values)
+        is_active = bool(active_val) and filter_texts_match(active_val, values)
         result.append((label, counts[label], values, is_active))
 
     if missing_count > 0:

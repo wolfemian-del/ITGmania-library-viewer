@@ -273,6 +273,34 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(data.filter_token_text((">=120", "<140")), ">=120 <140")
         self.assertEqual(data.filter_token_text(""), "")
 
+    def test_filter_texts_match_ignores_number_format_and_order(self):
+        match = data.filter_texts_match
+        # Numbers are read the way the search reads them.
+        self.assertTrue(match("11.0", "11"))
+        self.assertTrue(match("=11", "11"))
+        self.assertFalse(match("12", "11"))
+        # The order of several values does not matter, and a bar's token tuple is accepted.
+        self.assertTrue(match("<140 >=120", (">=120", "<140")))
+        self.assertTrue(match(">=120.0 <140.0", ">=120 <140"))
+        # Different operators or a missing half are different filters.
+        self.assertFalse(match(">=120", ">120"))
+        self.assertFalse(match(">=120", (">=120", "<140")))
+        # A typed inclusive range is not the same filter as the half-open bar.
+        self.assertFalse(match("120-139", (">=120", "<140")))
+        # Names are compared ignoring case; empty text never matches.
+        self.assertTrue(match("hard", "Hard"))
+        self.assertFalse(match("", ""))
+        self.assertFalse(match("", "11"))
+
+    def test_bars_highlight_for_filters_typed_a_different_way(self):
+        meter_bars = data.aggregate_meter_distribution([{"Meter": 11.0}, {"Meter": 10.0}], active_val="11.0")
+        self.assertEqual({label: active for label, _, _, active in meter_bars}, {"10": False, "11": True})
+
+        rows = [self.bpm_row(130)]
+        for typed in (">=120 <140", "<140 >=120", ">=120.0 <140.0"):
+            bars = data.aggregate_bpm_distribution(rows, active_val=typed)
+            self.assertEqual([label for label, _, _, active in bars if active], ["120-139"], typed)
+
     def test_get_active_chart_filters_lists_every_active_chart_filter(self):
         self.assertEqual(
             data.get_active_chart_filters("Hard", "Smiley meter:11 bpm:>=120 bpm:<140"),

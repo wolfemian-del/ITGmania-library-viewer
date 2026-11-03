@@ -53,7 +53,7 @@ from library_data import (
     course_append_bytes,
     difficulty_sort_key,
     distribution_summary_stats,
-    filter_token_text,
+    filter_texts_match,
     format_duration,
     get_active_chart_filters,
     grade_sort_key,
@@ -962,8 +962,7 @@ class LibraryApp:
         metric = self.distribution_metric.get()
         query = self.search_var.get()
         current = dict(get_active_chart_filters(self.diff_var.get(), query)).get(metric)
-        already_active = (current is not None
-                          and current.casefold() == filter_token_text(target_token).casefold())
+        already_active = current is not None and filter_texts_match(current, target_token)
 
         with self._batched_filter_changes():
             if metric == "Difficulty":
