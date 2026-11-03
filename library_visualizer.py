@@ -20,6 +20,7 @@ except ImportError:
     ttk = None
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import NamedTuple
 
 try:
     import matplotlib
@@ -31,6 +32,9 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 DIST_PANEL_WIDTH = 320
+# A bar can be clicked across at least this fraction of the chart's width, so a very short bar (one chart
+# among hundreds) is still easy to hit, while a click far to the right of it does nothing.
+CHART_MIN_CLICK_FRACTION = 0.15
 DIFFICULTY_COLORS = {
     "Beginner": "#38bdf8",
     "Easy": "#facc15",
@@ -76,6 +80,15 @@ HEADERS = ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BP
 NUMERIC_COLUMNS = {"Meter", "Time", "Score", "Best %", "Plays", "Peak NPS", "Taps/Holds", "Jumps",
                    "Holds", "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4",
                    "W5", "Miss", "Max combo", *TECH_FIELDS}
+
+
+class ChartBar(NamedTuple):
+    """One row of the distribution chart, in the chart's own coordinates, as the click handler needs it."""
+    y_min: float
+    y_max: float
+    label: str
+    token: str | tuple  # the filter value(s) a click applies; "" when the row cannot be clicked
+    click_width: float = float("inf")  # a click to the right of this x does nothing
 
 
 class LibraryApp:
@@ -945,19 +958,18 @@ class LibraryApp:
             self.search_entry.icursor("end")
 
     def _on_chart_click(self, event):
-        if event.ydata is None or not self._current_dist_bars:
+        # xdata and ydata are None when the click is outside the plot area (for example on a row label).
+        if event.xdata is None or event.ydata is None or not self._current_dist_bars:
             return
-        clicked_y = event.ydata
-        target_token = None
-        target_label = None
-        for y_min, y_max, label, token in self._current_dist_bars:
-            if y_min <= clicked_y <= y_max:
-                target_token = token
-                target_label = label
-                break
-        if not target_token or target_label == "?":
-            # '?' bar or outside bar is non-interactive
+        clicked = next(
+            (bar for bar in self._current_dist_bars
+             if bar.y_min <= event.ydata <= bar.y_max and 0 <= event.xdata <= bar.click_width),
+            None,
+        )
+        if clicked is None or not clicked.token or clicked.label == "?":
+            # Blank space, a '?' row or a row with nothing to filter to is not clickable.
             return
+        target_token = clicked.token
 
         metric = self.distribution_metric.get()
         query = self.search_var.get()
@@ -1070,13 +1082,16 @@ class LibraryApp:
         )
 
         max_count = max(counts) if counts else 1
+        axis_max = max_count * 1.25
+        min_click_width = axis_max * CHART_MIN_CLICK_FRACTION
         for i, (bar, count) in enumerate(zip(bars, counts)):
             y = bar.get_y()
             h = bar.get_height()
             # An empty row has nothing to filter to, so it is not clickable, unless it is the active
             # filter, which has to stay clickable so that clicking it again can switch it off.
             clickable = counts[i] > 0 or actives[i]
-            self._current_dist_bars.append((y, y + h, labels[i], tokens[i] if clickable else ""))
+            self._current_dist_bars.append(ChartBar(
+                y, y + h, labels[i], tokens[i] if clickable else "", max(count, min_click_width)))
             if count > 0:
                 self.dist_ax.text(
                     count + max_count * 0.03, y + h / 2, str(count),
@@ -1085,7 +1100,7 @@ class LibraryApp:
 
         self.dist_ax.set_yticks(y_positions)
         self.dist_ax.set_yticklabels(labels, color="#ecf3f9", fontsize=8)
-        self.dist_ax.set_xlim(0, max_count * 1.25)
+        self.dist_ax.set_xlim(0, axis_max)
         self.dist_ax.set_facecolor("#171f2a")
         self.dist_fig.patch.set_facecolor("#171f2a")
         self.dist_ax.tick_params(colors="#9eacbb", labelsize=8, left=False, bottom=True)

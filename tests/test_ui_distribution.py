@@ -1,3 +1,4 @@
+import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
@@ -56,9 +57,10 @@ class DistributionUITests(unittest.TestCase):
         instance.dist_summary_var.set.assert_called()
 
         # Simulate chart click on a meter bar
-        instance._current_dist_bars = [(0.0, 1.0, "11", "11")]
+        instance._current_dist_bars = [app.ChartBar(0.0, 1.0, "11", "11")]
         click_event = Mock()
         click_event.ydata = 0.5
+        click_event.xdata = 0.1
         instance._on_chart_click(click_event)
 
         instance.search_var.set.assert_called_with("meter:11")
@@ -121,10 +123,11 @@ class DistributionUITests(unittest.TestCase):
         instance.diff_var = Mock(get=Mock(return_value="All difficulties"))
         instance.search_var = Mock(get=Mock(return_value=""))
         instance.refresh_table = Mock()
-        instance._current_dist_bars = [(0.0, 1.0, "?", "")]
+        instance._current_dist_bars = [app.ChartBar(0.0, 1.0, "?", "")]
 
         event = Mock()
         event.ydata = 0.5
+        event.xdata = 0.1
         instance._on_chart_click(event)
 
         instance.search_var.set.assert_not_called()
@@ -230,8 +233,8 @@ class FullDistributionTests(unittest.TestCase):
             self.assertEqual(tokens[empty], "", empty)
 
         # Clicking an empty row changes nothing.
-        y_of_easy = next(lo for lo, hi, label, _ in instance._current_dist_bars if label == "Easy")
-        instance._on_chart_click(Mock(ydata=y_of_easy + 0.1))
+        y_of_easy = next(bar.y_min for bar in instance._current_dist_bars if bar.label == "Easy")
+        instance._on_chart_click(Mock(ydata=y_of_easy + 0.1, xdata=0.1))
         instance.search_var.set.assert_not_called()
         instance.refresh_table.assert_not_called()
 
@@ -250,32 +253,63 @@ class FullDistributionTests(unittest.TestCase):
 
     def test_clicking_another_bar_replaces_filter_and_same_bar_clears_it(self):
         instance = self.make_app(query="Smiley meter:11", metric="Meter")
-        instance._current_dist_bars = [(0.0, 1.0, "12", "12"), (1.0, 2.0, "11", "11")]
-        instance._on_chart_click(Mock(ydata=0.5))
+        instance._current_dist_bars = [app.ChartBar(0.0, 1.0, "12", "12"), app.ChartBar(1.0, 2.0, "11", "11")]
+        instance._on_chart_click(Mock(ydata=0.5, xdata=0.1))
         instance.search_var.set.assert_called_with("Smiley meter:12")
-        instance._on_chart_click(Mock(ydata=1.5))
+        instance._on_chart_click(Mock(ydata=1.5, xdata=0.1))
         instance.search_var.set.assert_called_with("Smiley")
+
+    def test_clicks_outside_a_bars_click_zone_do_nothing(self):
+        instance = self.make_app(metric="Meter")
+        instance._current_dist_bars = [app.ChartBar(0.0, 1.0, "11", "11", 4.0)]
+        # Past the end of the zone, left of the axis, off the row, or outside the plot (no position).
+        for x, y in ((4.5, 0.5), (100.0, 0.5), (-0.5, 0.5), (1.0, 1.5), (None, 0.5), (1.0, None)):
+            instance._on_chart_click(Mock(xdata=x, ydata=y))
+        instance.search_var.set.assert_not_called()
+        instance.refresh_table.assert_not_called()
+        # Both ends of the zone count.
+        instance._on_chart_click(Mock(xdata=4.0, ydata=0.5))
+        instance.search_var.set.assert_called_with("meter:11")
+        instance.search_var.set.reset_mock()
+        instance._on_chart_click(Mock(xdata=0.0, ydata=0.5))
+        instance.search_var.set.assert_called_with("meter:11")
+
+    def test_click_zone_is_the_bar_plus_a_minimum_width(self):
+        instance = self.make_app(metric="Meter")
+        # 22 charts of meter 10, one of 11 and one of 12: the long bar sets the chart's width.
+        instance.rows = list(self.ROWS[:1]) * 20 + list(self.ROWS)
+        bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(3)]
+        instance.dist_ax.barh.return_value = bars
+        with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
+            instance._update_distribution_panel(instance._filter_rows())
+        widths = {bar.label: bar.click_width for bar in instance._current_dist_bars}
+        minimum = 22 * 1.25 * app.CHART_MIN_CLICK_FRACTION  # the chart is 22 * 1.25 units wide
+        self.assertEqual(set(widths), {"12", "11", "10"})
+        self.assertAlmostEqual(widths["12"], minimum)   # one chart: widened to the minimum
+        self.assertAlmostEqual(widths["11"], minimum)
+        self.assertAlmostEqual(widths["10"], 22)         # the long bar: its own length
+        instance.dist_ax.set_xlim.assert_called_with(0, 22 * 1.25)
 
     def test_clicking_a_bar_switches_off_a_hand_typed_version_of_its_filter(self):
         instance = self.make_app(query="Smiley meter:11.0", metric="Meter")
-        instance._current_dist_bars = [(0.0, 1.0, "11", "11")]
-        instance._on_chart_click(Mock(ydata=0.5))
+        instance._current_dist_bars = [app.ChartBar(0.0, 1.0, "11", "11")]
+        instance._on_chart_click(Mock(ydata=0.5, xdata=0.1))
         instance.search_var.set.assert_called_with("Smiley")
 
         instance = self.make_app(query="Smiley bpm:<140 bpm:>=120", metric="BPM")
-        instance._current_dist_bars = [(0.0, 1.0, "120-139", (">=120", "<140"))]
-        instance._on_chart_click(Mock(ydata=0.5))
+        instance._current_dist_bars = [app.ChartBar(0.0, 1.0, "120-139", (">=120", "<140"))]
+        instance._on_chart_click(Mock(ydata=0.5, xdata=0.1))
         instance.search_var.set.assert_called_with("Smiley")
 
     def test_clicking_a_bpm_bar_sets_both_range_directives(self):
         instance = self.make_app(query="Smiley bpm:150", metric="BPM")
-        instance._current_dist_bars = [(0.0, 1.0, "120-139", (">=120", "<140"))]
-        instance._on_chart_click(Mock(ydata=0.5))
+        instance._current_dist_bars = [app.ChartBar(0.0, 1.0, "120-139", (">=120", "<140"))]
+        instance._on_chart_click(Mock(ydata=0.5, xdata=0.1))
         instance.search_var.set.assert_called_with("Smiley bpm:>=120 bpm:<140")
 
         # Clicking the highlighted bar again removes both directives.
         instance.search_var.get.return_value = "Smiley bpm:>=120 bpm:<140"
-        instance._on_chart_click(Mock(ydata=0.5))
+        instance._on_chart_click(Mock(ydata=0.5, xdata=0.1))
         instance.search_var.set.assert_called_with("Smiley")
 
 
@@ -322,7 +356,7 @@ class SingleRefreshTests(unittest.TestCase):
         instance.root = FakeRoot()
         instance.search_var, instance.diff_var = FakeVar(query), FakeVar(diff)
         instance.distribution_metric = FakeVar(metric)
-        instance._current_dist_bars = bars or [(0.0, 1.0, "11", "11")]
+        instance._current_dist_bars = bars or [app.ChartBar(0.0, 1.0, "11", "11")]
         instance.refreshes = 0
         instance.refresh_table = lambda *args, **kwargs: setattr(instance, "refreshes", instance.refreshes + 1)
         # The same wiring LibraryApp.__init__ does.
@@ -336,12 +370,12 @@ class SingleRefreshTests(unittest.TestCase):
 
     def test_meter_click_refreshes_once(self):
         instance = self.make_app("Meter", "Smiley")
-        instance._on_chart_click(Mock(ydata=0.5))
+        instance._on_chart_click(Mock(ydata=0.5, xdata=0.1))
         self.assertEqual(self.refreshes_after_everything_settles(instance), 1)
 
     def test_difficulty_click_that_also_cleans_the_search_box_refreshes_once(self):
-        instance = self.make_app("Difficulty", "Smiley diff:hard", bars=[(0.0, 1.0, "Hard", "Hard")])
-        instance._on_chart_click(Mock(ydata=0.5))
+        instance = self.make_app("Difficulty", "Smiley diff:hard", bars=[app.ChartBar(0.0, 1.0, "Hard", "Hard")])
+        instance._on_chart_click(Mock(ydata=0.5, xdata=0.1))
         self.assertEqual(instance.search_var.get(), "Smiley")
         self.assertEqual(self.refreshes_after_everything_settles(instance), 1)
 
@@ -361,8 +395,59 @@ class SingleRefreshTests(unittest.TestCase):
     def test_pending_typing_refresh_is_not_repeated_after_a_click(self):
         instance = self.make_app("Meter", "Smiley")
         instance.search_var.set("Smiley x")  # typing, delayed refresh queued
-        instance._on_chart_click(Mock(ydata=0.5))
+        instance._on_chart_click(Mock(ydata=0.5, xdata=0.1))
         self.assertEqual(self.refreshes_after_everything_settles(instance), 1)
+
+
+@unittest.skipUnless(importlib.util.find_spec("matplotlib"), "matplotlib is not installed")
+class RealChartClickTests(unittest.TestCase):
+    """Draws the real chart with matplotlib's Agg backend (no Tk needed) and clicks at real positions."""
+
+    def setUp(self):
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
+
+        self.instance = FullDistributionTests.make_app(metric="Meter")
+        row = {"Difficulty": "Hard", "Pack": "P", "Type": "dance-single", "Grade": "",
+               "bpm_min": 130.0, "bpm_max": 130.0}
+        # One chart each of meter 12 and 11, thirty of meter 10: a very short bar next to a long one.
+        self.instance.rows = ([dict(row, Meter=12), dict(row, Meter=11)]
+                              + [dict(row, Meter=10) for _ in range(30)])
+        figure = Figure(figsize=(3.0, 4.0), dpi=100)
+        self.instance.dist_fig, self.instance.dist_ax = figure, figure.add_subplot(111)
+        self.instance.dist_canvas = FigureCanvasAgg(figure)
+        with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
+            self.instance._update_distribution_panel(self.instance._filter_rows())
+        self.instance.dist_canvas.draw()
+        self.row_y = {bar.label: (bar.y_min + bar.y_max) / 2 for bar in self.instance._current_dist_bars}
+
+    def click(self, x_data, label):
+        """Click at a chart position; return the search text the click applied, or None."""
+        from matplotlib.backend_bases import MouseEvent
+
+        x_px, y_px = self.instance.dist_ax.transData.transform((x_data, self.row_y[label]))
+        return self.click_pixels(x_px, y_px)
+
+    def click_pixels(self, x_px, y_px):
+        from matplotlib.backend_bases import MouseEvent
+
+        self.instance.search_var.set.reset_mock()
+        self.instance._on_chart_click(
+            MouseEvent("button_press_event", self.instance.dist_canvas, x_px, y_px, button=1))
+        call = self.instance.search_var.set.call_args
+        return call.args[0] if call else None
+
+    def test_a_short_bar_is_easy_to_hit_and_far_blank_space_is_not(self):
+        self.assertEqual(self.click(0.5, "12"), "meter:12")    # on the one-chart bar
+        self.assertEqual(self.click(3.0, "12"), "meter:12")    # beside it, inside the minimum zone
+        self.assertIsNone(self.click(10.0, "12"))              # far to its right: nothing
+        self.assertEqual(self.click(15.0, "10"), "meter:10")   # on the long bar
+        self.assertIsNone(self.click(34.0, "10"))              # past the long bar's end
+
+    def test_clicking_a_row_label_does_nothing(self):
+        axes_box = self.instance.dist_ax.get_window_extent()
+        row_px = self.instance.dist_ax.transData.transform((0, self.row_y["12"]))[1]
+        self.assertIsNone(self.click_pixels(axes_box.x0 - 12, row_px))
 
 
 if __name__ == "__main__":
