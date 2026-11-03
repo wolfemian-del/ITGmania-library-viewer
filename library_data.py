@@ -702,6 +702,35 @@ def filter_token_text(token) -> str:
     return " ".join(token)
 
 
+def _needs_quotes(text: str) -> bool:
+    return not text or any(char.isspace() or char in "\"'\\" for char in text)
+
+
+def _quote_for_search(text: str) -> str:
+    """Quote text for the search box so that shlex.split reads it back unchanged.
+
+    Text with no spaces or quote characters stays as it is. Anything else goes in double quotes,
+    with backslashes and double quotes escaped (the only escapes shlex honors inside them).
+    """
+    if not _needs_quotes(text):
+        return text
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _format_search_token(token: str) -> str:
+    """Write one token from shlex.split back as search text that reads as the same single token.
+
+    A directive such as `pack:In The Groove` gets only its value quoted (pack:"In The Groove").
+    Every other token, including free text that happens to contain a colon, is quoted as a whole,
+    so a quoted phrase like "Dance Dance: Revolution" stays one phrase instead of splitting at the
+    space before the colon.
+    """
+    prefix, colon, value = token.partition(":")
+    if colon and not _needs_quotes(prefix) and SEARCH_FIELD_ALIASES.get(prefix.casefold()):
+        return f"{prefix}:{_quote_for_search(value) if value else ''}"
+    return _quote_for_search(token)
+
+
 def replace_search_directive(query: str, directive_prefix: str, new_value: str | tuple[str, ...] | list[str] | None) -> str:
     """Replace or remove a directive in a search query, preserving free-text terms and other directives.
 
@@ -723,8 +752,9 @@ def replace_search_directive(query: str, directive_prefix: str, new_value: str |
     def _directive_tokens() -> list[str]:
         tokens_out = []
         for value in new_values:
-            val_str = f'"{value}"' if " " in value and not (value.startswith('"') and value.endswith('"')) else value
-            tokens_out.append(f"{canonical_target}:{val_str}")
+            already_quoted = len(value) >= 2 and value.startswith('"') and value.endswith('"')
+            text = value if already_quoted or not value else _quote_for_search(value)
+            tokens_out.append(f"{canonical_target}:{text}")
         return tokens_out
 
     raw_query = str(query or "").strip()
@@ -733,38 +763,46 @@ def replace_search_directive(query: str, directive_prefix: str, new_value: str |
 
     try:
         tokens = shlex.split(raw_query)
+        unbalanced = False
     except ValueError:
+        # Unbalanced quote: parse_search_query splits on spaces in this case, so the words are raw text.
         tokens = raw_query.split()
+        unbalanced = True
 
-    new_tokens = []
+    # Each piece is (text, is_new_directive). Kept pieces are the query's own words.
+    pieces = []
     replaced = False
 
     for token in tokens:
         if ":" in token:
-            prefix, _ = token.split(":", 1)
-            field = prefix.strip().casefold()
-            canonical = SEARCH_FIELD_ALIASES.get(field)
-            if canonical == canonical_target:
+            field = token.split(":", 1)[0].strip().casefold()
+            if SEARCH_FIELD_ALIASES.get(field) == canonical_target:
                 if not replaced and new_values:
-                    new_tokens.extend(_directive_tokens())
+                    pieces.extend((text, True) for text in _directive_tokens())
                     replaced = True
                 continue
-        new_tokens.append(token)
+        pieces.append((token, False))
 
     if not replaced and new_values:
-        new_tokens.extend(_directive_tokens())
+        pieces.extend((text, True) for text in _directive_tokens())
 
-    def _format_token(tok: str) -> str:
-        if ":" in tok:
-            p, v = tok.split(":", 1)
-            if " " in v and not (v.startswith('"') and v.endswith('"')):
-                return f'{p}:"{v}"'
-            return tok
-        if " " in tok and not (tok.startswith('"') and tok.endswith('"')):
-            return f'"{tok}"'
-        return tok
+    if not unbalanced:
+        # shlex took the quotes off, so each kept word is written back with quotes where it needs them.
+        return " ".join(text if is_new else _format_search_token(text) for text, is_new in pieces)
 
-    return " ".join(_format_token(t) for t in new_tokens).strip()
+    # Unbalanced case: keep the words as typed, so the search still reads the same way, unless that would
+    # break the result: either a new value needs quotes (a space-separated search cannot hold it), or the
+    # word that held the stray quote is gone and the rest is balanced, which the search would now read with
+    # its quotes stripped. Then each kept word's quotes are escaped so it is still read as typed.
+    typed = " ".join(text for text, _ in pieces)
+    try:
+        shlex.split(typed)
+        typed_reads_as_typed = False
+    except ValueError:
+        typed_reads_as_typed = not any(is_new and _needs_quotes(text) for text, is_new in pieces)
+    if typed_reads_as_typed:
+        return typed
+    return " ".join(text if is_new else _quote_for_search(text) for text, is_new in pieces)
 
 
 # Chart metric name -> canonical search directive field that filters it.

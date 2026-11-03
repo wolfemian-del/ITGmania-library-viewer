@@ -47,6 +47,60 @@ class DistributionTests(unittest.TestCase):
         res = data.replace_search_directive('pack:"In The Groove" bpm:140-159', "bpm", None)
         self.assertEqual(res, 'pack:"In The Groove"')
 
+    @staticmethod
+    def search_meaning(query):
+        """What the search reads from a query: its free-text terms and its directives."""
+        parsed = data.parse_search_query(query)
+        return tuple(parsed["free_terms"]), sorted(parsed["directives"])
+
+    def assert_rewrite_keeps_meaning(self, query, target, value, new_values):
+        """The rewritten query must read as the original with only the target field's directives swapped."""
+        free, directives = self.search_meaning(query)
+        field = data.SEARCH_FIELD_ALIASES[target]
+        expected = (free, sorted([d for d in directives if d[0] != field] + [(field, v) for v in new_values]))
+        rewritten = data.replace_search_directive(query, target, value)
+        self.assertEqual(self.search_meaning(rewritten), expected, f"{query!r} -> {rewritten!r}")
+        return rewritten
+
+    def test_quoted_phrase_with_a_colon_stays_one_phrase(self):
+        # A space before the colon used to split the phrase when the query was rewritten.
+        for phrase in ('"Dance Dance: Revolution"', '"Mr. Wonderful: Remix"'):
+            rewritten = self.assert_rewrite_keeps_meaning(f"{phrase} meter:11", "meter", None, [])
+            self.assertEqual(rewritten, phrase)
+            rewritten = self.assert_rewrite_keeps_meaning(phrase, "meter", "12", ["12"])
+            self.assertEqual(rewritten, f"{phrase} meter:12")
+
+        # The search already reads a quoted "pack: foo" as a pack filter; the rewrite must not change that.
+        self.assert_rewrite_keeps_meaning('"pack: foo" meter:11', "meter", None, [])
+        self.assert_rewrite_keeps_meaning('"my pack: foo" meter:11', "meter", None, [])
+
+    def test_quote_for_search_reads_back_unchanged(self):
+        import shlex
+        for text in ("plain", "two words", 'say "hi"', "it's", "back\\slash", 'a: "b" \\ c', ""):
+            self.assertEqual(shlex.split(data._quote_for_search(text)) or [""], [text], repr(text))
+        self.assertEqual(data._quote_for_search("plain"), "plain")
+
+    def test_rewrite_with_an_unbalanced_quote_keeps_meaning(self):
+        # parse_search_query splits on spaces when a quote is never closed, so these are plain words.
+        self.assertEqual(data.replace_search_directive("don't stop meter:3", "meter", None), "don't stop")
+        # Removing the word that held the stray quote must not change how the rest is read.
+        for query in ("m:' :'title'", 'meter::"x ya""'):
+            self.assert_rewrite_keeps_meaning(query, "meter", None, [])
+        # A new value with a space cannot live in a space-split query, so the quotes are escaped instead.
+        self.assert_rewrite_keeps_meaning(' >10 "foo', "pack", "In The Groove", ["In The Groove"])
+
+    def test_rewrite_keeps_meaning_on_random_queries(self):
+        import random
+        rng = random.Random(2026)
+        pieces = ["a", "b", "foo", "pack", "title", "bpm", "meter", "m", "diff", ":", ":", " ", " ",
+                  '"', "'", "11", ">10", "x y", "\\"]
+        targets = [("meter", None, []), ("meter", "12", ["12"]), ("bpm", (">=120", "<140"), [">=120", "<140"]),
+                   ("diff", "Hard", ["Hard"]), ("pack", "In The Groove", ["In The Groove"])]
+        for _ in range(3000):
+            query = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 9)))
+            for target, value, new_values in targets:
+                self.assert_rewrite_keeps_meaning(query, target, value, new_values)
+
     def test_get_active_chart_filter(self):
         # Difficulty combobox takes priority over search query
         self.assertEqual(
