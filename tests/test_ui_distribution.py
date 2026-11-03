@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import library_data as data
@@ -63,11 +65,21 @@ class DistributionUITests(unittest.TestCase):
         instance.refresh_table.assert_called_once()
 
     def test_live_tk_distribution_ui(self):
-        """Test full live Tkinter UI when DISPLAY is available."""
+        """Test full live Tkinter UI; skipped when Tk or a display is not available."""
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
         try:
             root = app.tk.Tk()
-        except Exception:
-            return  # Headless without X11
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        # Keep the test away from the player's real settings file and saved library snapshot (the
+        # snapshot path is derived from the settings path).
+        settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(settings_dir.cleanup)
+        settings_path = Path(settings_dir.name) / "settings.json"
+        patcher = patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         try:
             application = app.LibraryApp(root)
             # Panel initially closed or matches saved settings
