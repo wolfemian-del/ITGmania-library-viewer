@@ -897,11 +897,9 @@ class LibraryApp:
             self.dist_ax = self.dist_fig.add_subplot(111)
             self.dist_canvas = FigureCanvasTkAgg(self.dist_fig, master=self.dist_chart_frame)
             self.dist_canvas.mpl_connect("button_press_event", self._on_chart_click)
+            # No resize binding is needed here: the canvas widget fills the chart frame, and matplotlib's
+            # Tk canvas already resizes the figure and redraws when its widget changes size.
             self.dist_canvas.get_tk_widget().pack(fill="both", expand=True)
-            self.dist_chart_frame.bind(
-                "<Configure>",
-                lambda _event: self.dist_canvas.draw_idle() if self.dist_canvas else None,
-            )
         return True
 
     def _set_distribution_visible(self, visible: bool):
