@@ -1075,7 +1075,10 @@ class LibraryApp:
         for i, (bar, count) in enumerate(zip(bars, counts)):
             y = bar.get_y()
             h = bar.get_height()
-            self._current_dist_bars.append((y, y + h, labels[i], tokens[i]))
+            # An empty row has nothing to filter to, so it is not clickable, unless it is the active
+            # filter, which has to stay clickable so that clicking it again can switch it off.
+            clickable = counts[i] > 0 or actives[i]
+            self._current_dist_bars.append((y, y + h, labels[i], tokens[i] if clickable else ""))
             if count > 0:
                 self.dist_ax.text(
                     count + max_count * 0.03, y + h / 2, str(count),

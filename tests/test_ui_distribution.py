@@ -202,6 +202,33 @@ class FullDistributionTests(unittest.TestCase):
         self.assertEqual(counts["Challenge"], 1)
         self.assertEqual(counts["Easy"], 0)
 
+    def draw_difficulty_chart(self, diff="All difficulties", query=""):
+        instance = self.make_app(query=query, diff=diff, metric="Difficulty")
+        bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(6)]
+        instance.dist_ax.barh.return_value = bars
+        with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
+            instance._update_distribution_panel(instance._filter_rows())
+        return instance, {bar[2]: bar[3] for bar in instance._current_dist_bars}
+
+    def test_rows_with_no_charts_are_not_clickable(self):
+        instance, tokens = self.draw_difficulty_chart()
+        self.assertEqual(tokens["Hard"], "Hard")
+        self.assertEqual(tokens["Challenge"], "Challenge")
+        for empty in ("Beginner", "Easy", "Medium", "Edit"):
+            self.assertEqual(tokens[empty], "", empty)
+
+        # Clicking an empty row changes nothing.
+        y_of_easy = next(lo for lo, hi, label, _ in instance._current_dist_bars if label == "Easy")
+        instance._on_chart_click(Mock(ydata=y_of_easy + 0.1))
+        instance.search_var.set.assert_not_called()
+        instance.refresh_table.assert_not_called()
+
+    def test_an_empty_row_that_is_the_active_filter_stays_clickable(self):
+        # The dropdown is on "Easy", which has no charts here; clicking it again must switch it off.
+        instance, tokens = self.draw_difficulty_chart(diff="Easy")
+        self.assertEqual(tokens["Easy"], "Easy")
+        self.assertEqual(tokens["Beginner"], "")
+
     def test_without_own_filter_chart_reuses_table_rows(self):
         instance = self.make_app(query="", metric="Meter", pack="Q")
         instance._filter_rows = Mock()
