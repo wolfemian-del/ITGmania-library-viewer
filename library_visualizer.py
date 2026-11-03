@@ -852,14 +852,6 @@ class LibraryApp:
                  font=("Segoe UI Semibold", 11)).pack(side="left")
         self._button(hdr, "✕", self.toggle_distribution_panel).pack(side="right")
 
-        # Active filter banner (hidden when not active)
-        self.dist_banner_frame = tk.Frame(self.dist_panel, bg="#202b38", padx=8, pady=5)
-        self.dist_banner_label = tk.Label(self.dist_banner_frame, text="", fg="#4fc3b0", bg="#202b38",
-                                          font=("Segoe UI", 9), wraplength=DIST_PANEL_WIDTH - 90,
-                                          justify="left", anchor="w")
-        self.dist_banner_label.pack(side="left", fill="x", expand=True)
-        self._button(self.dist_banner_frame, "Clear", self.clear_chart_filter).pack(side="right")
-
         # Metric selector
         metric_bar = tk.Frame(self.dist_panel, bg="#171f2a")
         metric_bar.pack(fill="x", pady=(4, 6))
@@ -876,6 +868,15 @@ class LibraryApp:
         self.dist_summary_var = tk.StringVar(value="")
         tk.Label(self.dist_panel, textvariable=self.dist_summary_var, fg="#9eacbb", bg="#171f2a",
                  font=("Segoe UI", 8), wraplength=DIST_PANEL_WIDTH - 24, justify="left").pack(fill="x", pady=(0, 6))
+
+        # Active filter banner: shown just above the chart, only while a chart filter is active.
+        # It is built here but not packed; _update_distribution_panel packs it before the chart container.
+        self.dist_banner_frame = tk.Frame(self.dist_panel, bg="#202b38", padx=8, pady=5)
+        self.dist_banner_label = tk.Label(self.dist_banner_frame, text="", fg="#4fc3b0", bg="#202b38",
+                                          font=("Segoe UI", 9), wraplength=DIST_PANEL_WIDTH - 90,
+                                          justify="left", anchor="w")
+        self.dist_banner_label.pack(side="left", fill="x", expand=True)
+        self._button(self.dist_banner_frame, "Clear", self.clear_chart_filter).pack(side="right")
 
         # Chart container
         self.dist_chart_frame = tk.Frame(self.dist_panel, bg="#171f2a")
