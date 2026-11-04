@@ -258,6 +258,9 @@ class LibraryApp:
         self.dist_button.pack(side="left", padx=4)
         self.content_frame = tk.Frame(self.root, bg="#10151d")
         self.content_frame.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+        self._build_distribution_panel()
+        if self.show_distribution_panel.get():
+            self.dist_panel.pack(side="right", fill="y", padx=(10, 0))
         self.table_frame = tk.Frame(self.content_frame, bg="#10151d")
         self.table_frame.pack(side="left", fill="both", expand=True)
         self.tree = ttk.Treeview(self.table_frame, columns=HEADERS, show="headings", selectmode="extended")
@@ -291,9 +294,6 @@ class LibraryApp:
         if visible_columns:
             self.tree.configure(displaycolumns=visible_columns)
         self._update_sort_headings()
-        self._build_distribution_panel()
-        if self.show_distribution_panel.get():
-            self.dist_panel.pack(side="right", fill="y", padx=(10, 0))
         self.progress = ttk.Progressbar(self.root, mode="indeterminate", style="Horizontal.TProgressbar")
         self.progress.pack(fill="x", padx=18, pady=(0, 4))
         footer = tk.Frame(self.root, bg="#10151d", padx=18, pady=7)
@@ -922,7 +922,7 @@ class LibraryApp:
             return
         self.show_distribution_panel.set(visible)
         if visible:
-            self.dist_panel.pack(side="right", fill="y", padx=(10, 0))
+            self.dist_panel.pack(side="right", fill="y", padx=(10, 0), before=self.table_frame)
             self.dist_button.configure(text="Distribution ◀")
             self._update_distribution_panel(getattr(self, "_last_visible_rows", []))
         else:
