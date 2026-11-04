@@ -39,8 +39,9 @@ On Linux and macOS, choose the cache and profile paths with **Browse…**; the a
   - BPM bars count a chart in every range its tempo touches, so a chart that runs 100–150 BPM is counted in the under-120, 120–139 and 140–159 bars, and the bars add up to more than the number of charts. Clicking a bar writes two search filters, such as `bpm:>=120 bpm:<140`, so the table shows exactly the number of charts on the bar.
 - Click a column heading to sort. Click it again to reverse the order. Difficulty sorts in gameplay order from Beginner through Edit. Grade sorts in ITGmania tier order (S+ before S before S−). BPM sorts by maximum tempo, then minimum.
 - Drag column headings to reorder them, and drag the divider between headings to resize a column.
-- Use **View → Columns** to show or hide columns by category; **View → Reset column layout** restores the defaults.
-- Scroll horizontally for the full set of score, radar, and ITGmania tech-count columns.
+- Use **View → Columns** to show or hide columns by category. The categories are Song & chart, Score, Tap judgments, Chart counts and Tech counts. Each category's menu starts with **Show whole group**, which is checked while every column of that category is shown; clicking it shows or hides the whole category at once. At least one column always stays visible.
+- A fresh install, and **View → Reset column layout**, show only the Song & chart and Score columns. Columns you have already shown or hidden keep your choice. The Tap judgments columns (W1–W5 and Miss) come from the same best score as the Score columns.
+- Scroll horizontally if the columns you turn on are wider than the window.
 - **Export CSV** writes the full library (not just the filtered rows) for use in other tools.
 - Select charts with Ctrl/Shift-click and choose **Build course…** to create an ordered course queue. You can add more charts, remove entries, reorder them, save a new `.CRS` file, or append the queued charts to an existing course. Appending preserves the existing file bytes and stops with a warning if trailing `#MODS` or `#GAINSECONDS` directives could affect the appended entries.
 
