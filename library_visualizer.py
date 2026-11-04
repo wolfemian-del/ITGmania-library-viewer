@@ -35,15 +35,8 @@ DIST_PANEL_WIDTH = 320
 # A bar can be clicked across at least this fraction of the chart's width, so a very short bar (one chart
 # among hundreds) is still easy to hit, while a click far to the right of it does nothing.
 CHART_MIN_CLICK_FRACTION = 0.15
-DIFFICULTY_COLORS = {
-    "Beginner": "#38bdf8",
-    "Easy": "#facc15",
-    "Medium": "#f43f5e",
-    "Hard": "#34d399",
-    "Challenge": "#a855f7",
-    "Edit": "#94a3b8",
-}
 
+import theme
 from library_data import (
     DIFFICULTY_ORDER,
     GRADE_OPTIONS,
@@ -102,7 +95,7 @@ class LibraryApp:
         self.root.title("ITGmania Library Visualizer")
         self.root.geometry("1500x850")
         self.root.minsize(900, 550)
-        self.root.configure(bg="#10151d")
+        self.root.configure(bg=theme.BG_WINDOW)
         self.rows: list[dict] = []
         self.loaded_source_paths = None
         self.settings_path = self._settings_file_path()
@@ -184,57 +177,57 @@ class LibraryApp:
     def _style(self):
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("Treeview", background="#151d28", foreground="#e8edf4", fieldbackground="#151d28",
-                        rowheight=27, borderwidth=0, font=("Segoe UI", 9))
-        style.configure("Treeview.Heading", background="#222d3b", foreground="#dbe7f4", relief="flat",
-                        font=("Segoe UI Semibold", 9))
-        style.map("Treeview", background=[("selected", "#285c74")], foreground=[("selected", "white")])
-        style.configure("TCombobox", fieldbackground="#202b38", background="#202b38", foreground="#ecf3f9")
+        style.configure("Treeview", background=theme.BG_TABLE, foreground=theme.TEXT_TABLE, fieldbackground=theme.BG_TABLE,
+                        rowheight=27, borderwidth=0, font=theme.FONT_BODY)
+        style.configure("Treeview.Heading", background=theme.BG_TABLE_HEADING, foreground=theme.TEXT_HEADING, relief="flat",
+                        font=theme.FONT_BODY_BOLD)
+        style.map("Treeview", background=[("selected", theme.SELECTION_BG)], foreground=[("selected", theme.TEXT_ON_ACCENT)])
+        style.configure("TCombobox", fieldbackground=theme.BG_INPUT, background=theme.BG_INPUT, foreground=theme.TEXT_PRIMARY)
         style.map(
             "TCombobox",
             fieldbackground=[
-                ("readonly", "focus", "#202b38"),
-                ("readonly", "pressed", "#202b38"),
-                ("readonly", "#202b38"),
-                ("focus", "#202b38"),
-                ("pressed", "#202b38"),
-                ("active", "#202b38"),
+                ("readonly", "focus", theme.BG_INPUT),
+                ("readonly", "pressed", theme.BG_INPUT),
+                ("readonly", theme.BG_INPUT),
+                ("focus", theme.BG_INPUT),
+                ("pressed", theme.BG_INPUT),
+                ("active", theme.BG_INPUT),
             ],
             foreground=[
-                ("disabled", "#8794a3"),
-                ("readonly", "focus", "#ecf3f9"),
-                ("readonly", "pressed", "#ecf3f9"),
-                ("readonly", "#ecf3f9"),
-                ("focus", "#ecf3f9"),
-                ("pressed", "#ecf3f9"),
-                ("active", "#ecf3f9"),
+                ("disabled", theme.TEXT_DISABLED),
+                ("readonly", "focus", theme.TEXT_PRIMARY),
+                ("readonly", "pressed", theme.TEXT_PRIMARY),
+                ("readonly", theme.TEXT_PRIMARY),
+                ("focus", theme.TEXT_PRIMARY),
+                ("pressed", theme.TEXT_PRIMARY),
+                ("active", theme.TEXT_PRIMARY),
             ],
-            selectbackground=[("readonly", "#287c78"), ("focus", "#287c78")],
-            selectforeground=[("readonly", "#ffffff"), ("focus", "#ffffff")],
-            background=[("pressed", "#202b38"), ("active", "#202b38")],
-            arrowcolor=[("disabled", "#8794a3"), ("!disabled", "#ecf3f9")],
+            selectbackground=[("readonly", theme.ACCENT_BG), ("focus", theme.ACCENT_BG)],
+            selectforeground=[("readonly", theme.WHITE), ("focus", theme.WHITE)],
+            background=[("pressed", theme.BG_INPUT), ("active", theme.BG_INPUT)],
+            arrowcolor=[("disabled", theme.TEXT_DISABLED), ("!disabled", theme.TEXT_PRIMARY)],
         )
-        style.configure("Horizontal.TProgressbar", troughcolor="#222d3b", background="#4fc3b0")
-        self.root.option_add("*TCombobox*Listbox.background", "#202b38")
-        self.root.option_add("*TCombobox*Listbox.foreground", "#ecf3f9")
-        self.root.option_add("*TCombobox*Listbox.selectBackground", "#287c78")
-        self.root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+        style.configure("Horizontal.TProgressbar", troughcolor=theme.BG_TABLE_HEADING, background=theme.ACCENT)
+        self.root.option_add("*TCombobox*Listbox.background", theme.BG_INPUT)
+        self.root.option_add("*TCombobox*Listbox.foreground", theme.TEXT_PRIMARY)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", theme.ACCENT_BG)
+        self.root.option_add("*TCombobox*Listbox.selectForeground", theme.WHITE)
 
     def _build(self):
-        top = tk.Frame(self.root, bg="#10151d", padx=18, pady=14)
+        top = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=18, pady=14)
         top.pack(fill="x")
-        tk.Label(top, text="ITGmania Library", fg="#f2f6fa", bg="#10151d",
-                 font=("Segoe UI Semibold", 19)).pack(side="left")
+        tk.Label(top, text="ITGmania Library", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
+                 font=theme.FONT_APP_TITLE).pack(side="left")
         self.status = tk.StringVar(value="Choose your cache's Songs folder and player Stats.xml to get started.")
-        tk.Label(top, textvariable=self.status, fg="#9eacbb", bg="#10151d",
-                 font=("Segoe UI", 9)).pack(side="right", padx=8)
-        paths = tk.Frame(self.root, bg="#171f2a", padx=12, pady=10)
+        tk.Label(top, textvariable=self.status, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW,
+                 font=theme.FONT_BODY).pack(side="right", padx=8)
+        paths = tk.Frame(self.root, bg=theme.BG_PANEL, padx=12, pady=10)
         paths.pack(fill="x", padx=18)
         self._path_row(paths, "Cache / Songs", self.cache_var, self.choose_cache)
         self._path_row(paths, "Player Stats.xml", self.stats_var, self.choose_stats)
-        bar = tk.Frame(self.root, bg="#10151d", padx=18, pady=12)
+        bar = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=18, pady=12)
         bar.pack(fill="x")
-        tk.Label(bar, text="Search", fg="#9eacbb", bg="#10151d", font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
+        tk.Label(bar, text="Search", fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(side="left", padx=(0, 6))
         self.search_entry = self._entry(bar, "", self.search_var)
         self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
         self._button(bar, "Advanced…", self.open_advanced_search).pack(side="left", padx=(0, 8))
@@ -244,9 +237,9 @@ class LibraryApp:
         self.type_filter.pack(side="left", padx=4)
         self.diff_filter = self._combo(bar, self.diff_var, ["All difficulties"])
         self.diff_filter.pack(side="left", padx=4)
-        tk.Checkbutton(bar, text="Scored only", variable=self.scored_var, bg="#10151d", fg="#dce5ee",
-                       activebackground="#10151d", activeforeground="white", selectcolor="#202b38",
-                       font=("Segoe UI", 9)).pack(side="left", padx=9)
+        tk.Checkbutton(bar, text="Scored only", variable=self.scored_var, bg=theme.BG_WINDOW, fg=theme.TEXT_LABEL,
+                       activebackground=theme.BG_WINDOW, activeforeground=theme.TEXT_ON_ACCENT, selectcolor=theme.BG_INPUT,
+                       font=theme.FONT_BODY).pack(side="left", padx=9)
         self._button(bar, "Load / refresh", self.load_data, primary=True).pack(side="left", padx=4)
         self._button(bar, "Export CSV", self.export_csv).pack(side="left", padx=4)
         self._button(bar, "Build course…", self.open_course_builder).pack(side="left", padx=4)
@@ -256,12 +249,12 @@ class LibraryApp:
             self.toggle_distribution_panel,
         )
         self.dist_button.pack(side="left", padx=4)
-        self.content_frame = tk.Frame(self.root, bg="#10151d")
+        self.content_frame = tk.Frame(self.root, bg=theme.BG_WINDOW)
         self.content_frame.pack(fill="both", expand=True, padx=18, pady=(0, 8))
         self._build_distribution_panel()
         if self.show_distribution_panel.get():
             self.dist_panel.pack(side="right", fill="y", padx=(10, 0))
-        self.table_frame = tk.Frame(self.content_frame, bg="#10151d")
+        self.table_frame = tk.Frame(self.content_frame, bg=theme.BG_WINDOW)
         self.table_frame.pack(side="left", fill="both", expand=True)
         self.tree = ttk.Treeview(self.table_frame, columns=HEADERS, show="headings", selectmode="extended")
         for col in HEADERS:
@@ -296,13 +289,13 @@ class LibraryApp:
         self._update_sort_headings()
         self.progress = ttk.Progressbar(self.root, mode="indeterminate", style="Horizontal.TProgressbar")
         self.progress.pack(fill="x", padx=18, pady=(0, 4))
-        footer = tk.Frame(self.root, bg="#10151d", padx=18, pady=7)
+        footer = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=18, pady=7)
         footer.pack(fill="x")
         self.count_label = tk.StringVar(value="0 charts")
-        tk.Label(footer, textvariable=self.count_label, fg="#9eacbb", bg="#10151d",
-                 font=("Segoe UI", 9)).pack(side="left")
+        tk.Label(footer, textvariable=self.count_label, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW,
+                 font=theme.FONT_BODY).pack(side="left")
         tk.Label(footer, text="Click to sort · Shift-click adds sort keys · Drag headings to reorder · Drag dividers to resize",
-                 fg="#6f7e8e", bg="#10151d", font=("Segoe UI", 9)).pack(side="right")
+                 fg=theme.TEXT_FOOTER, bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(side="right")
         self._build_menubar()
 
     def _build_menubar(self):
@@ -615,19 +608,19 @@ class LibraryApp:
         return (matches[0], matches[-1] + 1) if matches else None
 
     def _path_row(self, parent, label, variable, command):
-        row = tk.Frame(parent, bg="#171f2a")
+        row = tk.Frame(parent, bg=theme.BG_PANEL)
         row.pack(fill="x", pady=3)
-        tk.Label(row, text=label, width=17, anchor="w", bg="#171f2a", fg="#bdc9d5",
-                 font=("Segoe UI", 9)).pack(side="left")
+        tk.Label(row, text=label, width=17, anchor="w", bg=theme.BG_PANEL, fg=theme.TEXT_FIELD_LABEL,
+                 font=theme.FONT_BODY).pack(side="left")
         entry = self._entry(row, "", variable)
         entry.pack(side="left", fill="x", expand=True, padx=8)
         self._button(row, "Browse…", command).pack(side="left")
 
     @staticmethod
     def _entry(parent, placeholder, variable):
-        entry = tk.Entry(parent, textvariable=variable, bg="#202b38", fg="#ecf3f9", insertbackground="white",
-                         relief="flat", font=("Segoe UI", 9), highlightthickness=1,
-                         highlightbackground="#2c3948", highlightcolor="#4fc3b0")
+        entry = tk.Entry(parent, textvariable=variable, bg=theme.BG_INPUT, fg=theme.TEXT_PRIMARY, insertbackground=theme.CURSOR,
+                         relief="flat", font=theme.FONT_BODY, highlightthickness=1,
+                         highlightbackground=theme.BORDER, highlightcolor=theme.ACCENT)
         if placeholder:
             entry.insert(0, placeholder)
             entry.bind("<FocusIn>", lambda e: e.widget.delete(0, "end") if e.widget.get() == placeholder else None)
@@ -636,14 +629,14 @@ class LibraryApp:
     @staticmethod
     def _combo(parent, variable, values):
         return ttk.Combobox(parent, textvariable=variable, values=values, state="readonly", width=18,
-                            font=("Segoe UI", 9))
+                            font=theme.FONT_BODY)
 
     @staticmethod
     def _button(parent, text, command, primary=False):
-        return tk.Button(parent, text=text, command=command, bg="#287c78" if primary else "#263443",
-                         fg="white", activebackground="#368f89" if primary else "#344659",
-                         activeforeground="white", relief="flat", padx=11, pady=7,
-                         font=("Segoe UI Semibold", 9), cursor="hand2")
+        return tk.Button(parent, text=text, command=command, bg=theme.ACCENT_BG if primary else theme.BG_BUTTON,
+                         fg=theme.TEXT_ON_ACCENT, activebackground=theme.ACCENT_BG_HOVER if primary else theme.BG_BUTTON_HOVER,
+                         activeforeground=theme.TEXT_ON_ACCENT, relief="flat", padx=11, pady=7,
+                         font=theme.FONT_BODY_BOLD, cursor="hand2")
 
     def choose_cache(self):
         path = filedialog.askdirectory(title="Select the ITGmania Cache/Songs folder")
@@ -856,58 +849,58 @@ class LibraryApp:
             self.root.after(1, lambda: self._insert_batch(rows, stop, generation, selected_rows))
 
     def _build_distribution_panel(self):
-        self.dist_panel = tk.Frame(self.content_frame, bg="#171f2a", width=DIST_PANEL_WIDTH, padx=10, pady=10)
+        self.dist_panel = tk.Frame(self.content_frame, bg=theme.BG_PANEL, width=DIST_PANEL_WIDTH, padx=10, pady=10)
         self.dist_panel.pack_propagate(False)
 
         # Header: Title + Close button
-        hdr = tk.Frame(self.dist_panel, bg="#171f2a")
+        hdr = tk.Frame(self.dist_panel, bg=theme.BG_PANEL)
         hdr.pack(fill="x", pady=(0, 6))
-        tk.Label(hdr, text="Distribution", fg="#f2f6fa", bg="#171f2a",
-                 font=("Segoe UI Semibold", 11)).pack(side="left")
+        tk.Label(hdr, text="Distribution", fg=theme.TEXT_TITLE, bg=theme.BG_PANEL,
+                 font=theme.FONT_PANEL_TITLE).pack(side="left")
         self._button(hdr, "✕", self.toggle_distribution_panel).pack(side="right")
 
         # Metric selector
-        metric_bar = tk.Frame(self.dist_panel, bg="#171f2a")
+        metric_bar = tk.Frame(self.dist_panel, bg=theme.BG_PANEL)
         metric_bar.pack(fill="x", pady=(4, 6))
         for m in ("Meter", "Difficulty", "BPM"):
             b = tk.Radiobutton(
                 metric_bar, text=m, value=m, variable=self.distribution_metric,
-                indicatoron=False, bg="#202b38", fg="#ecf3f9", selectcolor="#287c78",
-                activebackground="#287c78", activeforeground="#ffffff", font=("Segoe UI", 8),
+                indicatoron=False, bg=theme.BG_INPUT, fg=theme.TEXT_PRIMARY, selectcolor=theme.ACCENT_BG,
+                activebackground=theme.ACCENT_BG, activeforeground=theme.WHITE, font=theme.FONT_SMALL,
                 command=self._on_distribution_metric_changed, padx=6, pady=3,
             )
             b.pack(side="left", padx=2, expand=True, fill="x")
 
         # Summary line
         self.dist_summary_var = tk.StringVar(value="")
-        tk.Label(self.dist_panel, textvariable=self.dist_summary_var, fg="#9eacbb", bg="#171f2a",
-                 font=("Segoe UI", 8), wraplength=DIST_PANEL_WIDTH - 24, justify="left").pack(fill="x", pady=(0, 6))
+        tk.Label(self.dist_panel, textvariable=self.dist_summary_var, fg=theme.TEXT_MUTED, bg=theme.BG_PANEL,
+                 font=theme.FONT_SMALL, wraplength=DIST_PANEL_WIDTH - 24, justify="left").pack(fill="x", pady=(0, 6))
 
         # Active filter banner: shown just above the chart, only while a chart filter is active.
         # It is built here but not packed; _update_distribution_panel packs it before the chart container.
-        self.dist_banner_frame = tk.Frame(self.dist_panel, bg="#202b38", padx=8, pady=5)
-        self.dist_banner_label = tk.Label(self.dist_banner_frame, text="", fg="#4fc3b0", bg="#202b38",
-                                          font=("Segoe UI", 9), wraplength=DIST_PANEL_WIDTH - 90,
+        self.dist_banner_frame = tk.Frame(self.dist_panel, bg=theme.BG_INPUT, padx=8, pady=5)
+        self.dist_banner_label = tk.Label(self.dist_banner_frame, text="", fg=theme.ACCENT, bg=theme.BG_INPUT,
+                                          font=theme.FONT_BODY, wraplength=DIST_PANEL_WIDTH - 90,
                                           justify="left", anchor="w")
         self.dist_banner_label.pack(side="left", fill="x", expand=True)
         self._button(self.dist_banner_frame, "Clear", self.clear_chart_filter).pack(side="right")
 
         # Chart container
-        self.dist_chart_frame = tk.Frame(self.dist_panel, bg="#171f2a")
+        self.dist_chart_frame = tk.Frame(self.dist_panel, bg=theme.BG_PANEL)
         self.dist_chart_frame.pack(fill="both", expand=True)
 
         if not MATPLOTLIB_AVAILABLE:
             tk.Label(
                 self.dist_chart_frame,
                 text="Install matplotlib to enable\ndistribution charts\n\nRun:\npip install matplotlib",
-                fg="#9eacbb", bg="#171f2a", font=("Segoe UI", 9), justify="center",
+                fg=theme.TEXT_MUTED, bg=theme.BG_PANEL, font=theme.FONT_BODY, justify="center",
             ).pack(expand=True, pady=40)
 
     def _ensure_distribution_canvas(self):
         if not MATPLOTLIB_AVAILABLE:
             return False
         if self.dist_canvas is None:
-            self.dist_fig = Figure(figsize=(3.0, 4.0), dpi=100, facecolor="#171f2a")
+            self.dist_fig = Figure(figsize=(3.0, 4.0), dpi=100, facecolor=theme.BG_PANEL)
             self.dist_ax = self.dist_fig.add_subplot(111)
             self.dist_canvas = FigureCanvasTkAgg(self.dist_fig, master=self.dist_chart_frame)
             self.dist_canvas.mpl_connect("button_press_event", self._on_chart_click)
@@ -1036,7 +1029,7 @@ class LibraryApp:
         if not chart_rows:
             self.dist_ax.text(
                 0.5, 0.5, "No charts match\ncurrent filters",
-                color="#9eacbb", fontsize=9, ha="center", va="center",
+                color=theme.TEXT_MUTED, fontsize=9, ha="center", va="center",
                 transform=self.dist_ax.transAxes,
             )
             self.dist_ax.axis("off")
@@ -1065,16 +1058,16 @@ class LibraryApp:
 
         for label, is_act in zip(labels, actives):
             if metric == "Difficulty":
-                base_color = DIFFICULTY_COLORS.get(label, "#94a3b8")
+                base_color = theme.DIFFICULTY_COLORS.get(label, theme.DIFFICULTY_COLOR_UNKNOWN)
             else:
-                base_color = "#4fc3b0" if label != "?" else "#64748b"
+                base_color = theme.ACCENT if label != "?" else theme.CHART_BAR_UNKNOWN
 
             bar_colors.append(base_color)
             if is_act:
-                edge_colors.append("#ffffff")
+                edge_colors.append(theme.WHITE)
                 linewidths.append(1.5)
             else:
-                edge_colors.append("#202b38")
+                edge_colors.append(theme.BG_INPUT)
                 linewidths.append(0.8)
 
         bars = self.dist_ax.barh(
@@ -1096,19 +1089,19 @@ class LibraryApp:
             if count > 0:
                 self.dist_ax.text(
                     count + max_count * 0.03, y + h / 2, str(count),
-                    va="center", ha="left", color="#ecf3f9", fontsize=7.5,
+                    va="center", ha="left", color=theme.TEXT_PRIMARY, fontsize=7.5,
                 )
 
         self.dist_ax.set_yticks(y_positions)
-        self.dist_ax.set_yticklabels(labels, color="#ecf3f9", fontsize=8)
+        self.dist_ax.set_yticklabels(labels, color=theme.TEXT_PRIMARY, fontsize=8)
         self.dist_ax.set_xlim(0, axis_max)
-        self.dist_ax.set_facecolor("#171f2a")
-        self.dist_fig.patch.set_facecolor("#171f2a")
-        self.dist_ax.tick_params(colors="#9eacbb", labelsize=8, left=False, bottom=True)
+        self.dist_ax.set_facecolor(theme.BG_PANEL)
+        self.dist_fig.patch.set_facecolor(theme.BG_PANEL)
+        self.dist_ax.tick_params(colors=theme.TEXT_MUTED, labelsize=8, left=False, bottom=True)
         self.dist_ax.spines["top"].set_visible(False)
         self.dist_ax.spines["right"].set_visible(False)
         self.dist_ax.spines["left"].set_visible(False)
-        self.dist_ax.spines["bottom"].set_color("#2a3749")
+        self.dist_ax.spines["bottom"].set_color(theme.CHART_AXIS_LINE)
         self.dist_fig.tight_layout(pad=1.0)
         self.dist_canvas.draw_idle()
 
@@ -1164,15 +1157,15 @@ class LibraryApp:
         window.title("Advanced Search")
         window.geometry("560x620")
         window.minsize(480, 520)
-        window.configure(bg="#10151d")
+        window.configure(bg=theme.BG_WINDOW)
         window.transient(self.root)
 
-        tk.Label(window, text="Advanced Search", fg="#f2f6fa", bg="#10151d",
-                 font=("Segoe UI Semibold", 15)).pack(anchor="w", padx=18, pady=(14, 2))
+        tk.Label(window, text="Advanced Search", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
+                 font=theme.FONT_DIALOG_TITLE).pack(anchor="w", padx=18, pady=(14, 2))
         tk.Label(window, text="Set field filters and a minimum grade. Free-text terms are ANDed; quote phrases.",
-                 fg="#9eacbb", bg="#10151d", font=("Segoe UI", 9)).pack(anchor="w", padx=18, pady=(0, 10))
+                 fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(anchor="w", padx=18, pady=(0, 10))
 
-        form = tk.Frame(window, bg="#10151d", padx=18)
+        form = tk.Frame(window, bg=theme.BG_WINDOW, padx=18)
         form.pack(fill="both", expand=True)
 
         free_text_var = tk.StringVar()
@@ -1210,55 +1203,55 @@ class LibraryApp:
         other_var.set(current["other"])
 
         def add_text_row(parent, label_text, var):
-            row = tk.Frame(parent, bg="#10151d")
+            row = tk.Frame(parent, bg=theme.BG_WINDOW)
             row.pack(fill="x", pady=3)
-            tk.Label(row, text=label_text, fg="#9eacbb", bg="#10151d", width=12, anchor="w",
-                     font=("Segoe UI", 9)).pack(side="left")
+            tk.Label(row, text=label_text, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, width=12, anchor="w",
+                     font=theme.FONT_BODY).pack(side="left")
             self._entry(row, "", var).pack(side="left", fill="x", expand=True)
 
         def add_range_row(parent, label_text, min_var, max_var, hint=""):
-            row = tk.Frame(parent, bg="#10151d")
+            row = tk.Frame(parent, bg=theme.BG_WINDOW)
             row.pack(fill="x", pady=3)
-            tk.Label(row, text=label_text, fg="#9eacbb", bg="#10151d", width=12, anchor="w",
-                     font=("Segoe UI", 9)).pack(side="left")
+            tk.Label(row, text=label_text, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, width=12, anchor="w",
+                     font=theme.FONT_BODY).pack(side="left")
             e1 = self._entry(row, "", min_var)
             e1.pack(side="left", fill="x", expand=True)
-            tk.Label(row, text="to", fg="#607285", bg="#10151d", padx=8, font=("Segoe UI", 9)).pack(side="left")
+            tk.Label(row, text="to", fg=theme.TEXT_HINT, bg=theme.BG_WINDOW, padx=8, font=theme.FONT_BODY).pack(side="left")
             e2 = self._entry(row, "", max_var)
             e2.pack(side="left", fill="x", expand=True)
             if hint:
-                tk.Label(row, text=hint, fg="#607285", bg="#10151d", font=("Segoe UI", 8), padx=6).pack(side="left")
+                tk.Label(row, text=hint, fg=theme.TEXT_HINT, bg=theme.BG_WINDOW, font=theme.FONT_SMALL, padx=6).pack(side="left")
 
         add_text_row(form, "Text", free_text_var)
         add_text_row(form, "Title", title_var)
         add_text_row(form, "Artist", artist_var)
         add_text_row(form, "Pack", pack_var)
 
-        tk.Frame(form, bg="#202b38", height=1).pack(fill="x", pady=10)
+        tk.Frame(form, bg=theme.BG_INPUT, height=1).pack(fill="x", pady=10)
 
         add_range_row(form, "Meter", meter_min_var, meter_max_var)
         add_range_row(form, "BPM", bpm_min_var, bpm_max_var)
         add_range_row(form, "Time", time_min_var, time_max_var, "e.g. 1:30 or 90")
         add_range_row(form, "Peak NPS", nps_min_var, nps_max_var)
 
-        g_row = tk.Frame(form, bg="#10151d")
+        g_row = tk.Frame(form, bg=theme.BG_WINDOW)
         g_row.pack(fill="x", pady=3)
-        tk.Label(g_row, text="Min Grade", fg="#9eacbb", bg="#10151d", width=12, anchor="w",
-                 font=("Segoe UI", 9)).pack(side="left")
+        tk.Label(g_row, text="Min Grade", fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, width=12, anchor="w",
+                 font=theme.FONT_BODY).pack(side="left")
         g_options = ["Any"] + list(GRADE_OPTIONS)
         self._combo(g_row, grade_min_var, g_options).pack(side="left")
 
-        tk.Frame(form, bg="#202b38", height=1).pack(fill="x", pady=10)
+        tk.Frame(form, bg=theme.BG_INPUT, height=1).pack(fill="x", pady=10)
         add_text_row(form, "Other filters", other_var)
         tk.Label(form, text="Kept from your search: filters without a box above. Edit or clear them here.",
-                 fg="#607285", bg="#10151d", font=("Segoe UI", 8), anchor="w").pack(fill="x")
+                 fg=theme.TEXT_HINT, bg=theme.BG_WINDOW, font=theme.FONT_SMALL, anchor="w").pack(fill="x")
 
-        preview_frame = tk.Frame(window, bg="#17202c", padx=12, pady=8)
+        preview_frame = tk.Frame(window, bg=theme.BG_PREVIEW, padx=12, pady=8)
         preview_frame.pack(fill="x", padx=18, pady=(10, 4))
-        tk.Label(preview_frame, text="Query:", fg="#9eacbb", bg="#17202c",
-                 font=("Segoe UI", 8)).pack(side="left", padx=(0, 6))
-        query_preview = tk.Label(preview_frame, text="", fg="#dce5ee", bg="#17202c",
-                                 font=("Consolas", 9, "bold"), anchor="w")
+        tk.Label(preview_frame, text="Query:", fg=theme.TEXT_MUTED, bg=theme.BG_PREVIEW,
+                 font=theme.FONT_SMALL).pack(side="left", padx=(0, 6))
+        query_preview = tk.Label(preview_frame, text="", fg=theme.TEXT_LABEL, bg=theme.BG_PREVIEW,
+                                 font=theme.FONT_MONO_BOLD, anchor="w")
         query_preview.pack(side="left", fill="x", expand=True)
 
         def build_query():
@@ -1281,7 +1274,7 @@ class LibraryApp:
             v.trace_add("write", update_preview)
         update_preview()
 
-        btn_row = tk.Frame(window, bg="#10151d", padx=18, pady=12)
+        btn_row = tk.Frame(window, bg=theme.BG_WINDOW, padx=18, pady=12)
         btn_row.pack(fill="x", side="bottom")
 
         def apply_search():
@@ -1310,26 +1303,26 @@ class LibraryApp:
         window.title("Build a course")
         window.geometry("900x620")
         window.minsize(700, 440)
-        window.configure(bg="#10151d")
+        window.configure(bg=theme.BG_WINDOW)
         window.transient(self.root)
         self.course_entries: list[dict] = []
 
-        tk.Label(window, text="Build a new course", fg="#f2f6fa", bg="#10151d",
-                 font=("Segoe UI Semibold", 17)).pack(anchor="w", padx=18, pady=(16, 2))
+        tk.Label(window, text="Build a new course", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
+                 font=theme.FONT_COURSE_TITLE).pack(anchor="w", padx=18, pady=(16, 2))
         tk.Label(window, text="Select charts in the library, then add them here and arrange the course order.",
-                 fg="#9eacbb", bg="#10151d", font=("Segoe UI", 9)).pack(anchor="w", padx=18, pady=(0, 12))
+                 fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(anchor="w", padx=18, pady=(0, 12))
 
-        title_row = tk.Frame(window, bg="#10151d", padx=18)
+        title_row = tk.Frame(window, bg=theme.BG_WINDOW, padx=18)
         title_row.pack(fill="x", pady=(0, 10))
-        tk.Label(title_row, text="Course title", width=13, anchor="w", fg="#bdc9d5", bg="#10151d",
-                 font=("Segoe UI", 9)).pack(side="left")
+        tk.Label(title_row, text="Course title", width=13, anchor="w", fg=theme.TEXT_FIELD_LABEL, bg=theme.BG_WINDOW,
+                 font=theme.FONT_BODY).pack(side="left")
         self.course_title_var = tk.StringVar()
-        tk.Entry(title_row, textvariable=self.course_title_var, bg="#202b38", fg="#ecf3f9",
-                 insertbackground="white", relief="flat", font=("Segoe UI", 10),
-                 highlightthickness=1, highlightbackground="#2c3948", highlightcolor="#4fc3b0").pack(
+        tk.Entry(title_row, textvariable=self.course_title_var, bg=theme.BG_INPUT, fg=theme.TEXT_PRIMARY,
+                 insertbackground=theme.CURSOR, relief="flat", font=theme.FONT_ENTRY_LARGE,
+                 highlightthickness=1, highlightbackground=theme.BORDER, highlightcolor=theme.ACCENT).pack(
                      side="left", fill="x", expand=True)
 
-        queue_frame = tk.Frame(window, bg="#10151d")
+        queue_frame = tk.Frame(window, bg=theme.BG_WINDOW)
         queue_frame.pack(fill="both", expand=True, padx=18)
         columns = ("Pack", "Title", "Type", "Difficulty", "Meter", "Time")
         self.course_tree = ttk.Treeview(queue_frame, columns=columns, show="headings", selectmode="extended")
@@ -1345,15 +1338,15 @@ class LibraryApp:
         queue_frame.grid_rowconfigure(0, weight=1)
         queue_frame.grid_columnconfigure(0, weight=1)
 
-        controls = tk.Frame(window, bg="#10151d", padx=18, pady=12)
+        controls = tk.Frame(window, bg=theme.BG_WINDOW, padx=18, pady=12)
         controls.pack(fill="x")
         self._button(controls, "Add selected charts", self.add_selected_to_course, primary=True).pack(side="left")
         self._button(controls, "Remove", self.remove_course_entries).pack(side="left", padx=(8, 0))
         self._button(controls, "Move up", lambda: self.move_course_entry(-1)).pack(side="left", padx=(8, 0))
         self._button(controls, "Move down", lambda: self.move_course_entry(1)).pack(side="left", padx=(8, 0))
         self.course_count_var = tk.StringVar(value="0 charts · 0:00 total")
-        tk.Label(controls, textvariable=self.course_count_var, fg="#9eacbb", bg="#10151d",
-                 font=("Segoe UI", 9)).pack(side="left", padx=12)
+        tk.Label(controls, textvariable=self.course_count_var, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW,
+                 font=theme.FONT_BODY).pack(side="left", padx=12)
         self._button(controls, "Append to .CRS…", self.append_course).pack(side="right", padx=(0, 8))
         self._button(controls, "Save new .CRS…", self.export_course, primary=True).pack(side="right")
 
