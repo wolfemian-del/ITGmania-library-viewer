@@ -213,6 +213,31 @@ class ColumnGroupTests(unittest.TestCase):
         self.assertTrue(instance.group_visibility["Song & chart"].get())
 
 
+    def test_difficulty_tags_and_batch_insertion(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.tree = Mock()
+        instance._render_generation = 1
+        instance.tree_item_rows = {}
+        instance.root = Mock()
+
+        instance._setup_tree_tags()
+        self.assertEqual(instance.tree.tag_configure.call_count, len(app.theme.DIFFICULTY_COLORS))
+        for diff, color in app.theme.DIFFICULTY_COLORS.items():
+            instance.tree.tag_configure.assert_any_call(f"diff_{diff}", foreground=color)
+
+        rows = [
+            {"Title": "Song A", "Difficulty": "Challenge", "Time": 120},
+            {"Title": "Song B", "Difficulty": "Hard", "Time": 90},
+        ]
+        instance._insert_batch(rows, 0, 1)
+        self.assertEqual(instance.tree.insert.call_count, 2)
+        args1, kwargs1 = instance.tree.insert.call_args_list[0]
+        self.assertEqual(kwargs1.get("tags"), ("diff_Challenge",))
+        diff_idx = app.HEADERS.index("Difficulty")
+        self.assertEqual(kwargs1.get("values")[diff_idx], "Challenge")
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

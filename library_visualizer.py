@@ -304,6 +304,7 @@ class LibraryApp:
         if visible_columns:
             self.tree.configure(displaycolumns=visible_columns)
         self._update_sort_headings()
+        self._setup_tree_tags()
         self.progress = ttk.Progressbar(self.root, mode="indeterminate", style="Horizontal.TProgressbar")
         self.progress.pack(fill="x", padx=18, pady=(0, 4))
         footer = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=18, pady=7)
@@ -867,6 +868,12 @@ class LibraryApp:
                 heading = column
             self.tree.heading(column, text=heading)
 
+    def _setup_tree_tags(self):
+        if not hasattr(self, "tree") or not self.tree:
+            return
+        for diff, color in theme.DIFFICULTY_COLORS.items():
+            self.tree.tag_configure(f"diff_{diff}", foreground=color)
+
     def _insert_batch(self, rows, start, generation, selected_rows=None):
         if generation != self._render_generation:
             return
@@ -881,7 +888,9 @@ class LibraryApp:
                 elif isinstance(value, float):
                     value = f"{value:g}"
                 values.append(value)
-            item = self.tree.insert("", "end", values=values)
+            diff_raw = str(row.get("Difficulty", "")).strip()
+            tags = (f"diff_{diff_raw}",) if diff_raw in theme.DIFFICULTY_COLORS else ()
+            item = self.tree.insert("", "end", values=values, tags=tags)
             self.tree_item_rows[item] = row
             if id(row) in selected_rows:
                 self.tree.selection_add(item)
