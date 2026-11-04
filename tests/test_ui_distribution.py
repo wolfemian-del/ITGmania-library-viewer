@@ -20,6 +20,7 @@ class DistributionUITests(unittest.TestCase):
         instance.distribution_metric.get.return_value = "Meter"
         instance.dist_button = Mock()
         instance.dist_panel = Mock()
+        instance.table_frame = Mock()
         instance.dist_banner_frame = Mock()
         instance.dist_banner_label = Mock()
         instance.dist_summary_var = Mock()
