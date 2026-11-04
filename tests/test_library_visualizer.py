@@ -213,6 +213,87 @@ class ColumnGroupTests(unittest.TestCase):
         self.assertTrue(instance.group_visibility["Song & chart"].get())
 
 
+
+class RowTintTests(unittest.TestCase):
+    def test_setup_tree_tags_configures_all_difficulties_and_selection(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.tree = Mock()
+
+        instance._setup_tree_tags()
+        # One tag per difficulty, one for unknown difficulties, and the selection tag.
+        self.assertEqual(instance.tree.tag_configure.call_count, len(app.theme.DIFFICULTY_COLORS) + 2)
+        for diff, color in app.theme.DIFFICULTY_COLORS.items():
+            instance.tree.tag_configure.assert_any_call(f"diff_{diff}", foreground=color)
+        instance.tree.tag_configure.assert_any_call(
+            app.UNKNOWN_DIFFICULTY_TAG, foreground=app.theme.DIFFICULTY_COLOR_UNKNOWN)
+        # The selection tag must be configured last, or selected rows would not turn white.
+        self.assertEqual(instance.tree.tag_configure.call_args_list[-1].args[0], "selected_row")
+        instance.tree.tag_configure.assert_any_call("selected_row", foreground=app.theme.TEXT_ON_ACCENT)
+
+    def test_insert_batch_tags_rows_by_difficulty_and_selection(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.tree = Mock()
+        instance._render_generation = 1
+        instance.tree_item_rows = {}
+        instance._selected_tree_items = set()
+        instance.root = Mock()
+        instance.tree.insert.side_effect = ["item0", "item1", "item2"]
+
+        rows = [
+            {"Title": "Song A", "Difficulty": "Challenge", "Time": 120},
+            {"Title": "Song B", "Difficulty": "Hard", "Time": 90},
+            {"Title": "Song C", "Difficulty": "CustomUnknown", "Time": 60},
+        ]
+        # Song B is pre-selected
+        instance._insert_batch(rows, 0, 1, selected_rows={id(rows[1])})
+
+        self.assertEqual(instance.tree.insert.call_count, 3)
+        # Song A: unselected Challenge
+        args0, kwargs0 = instance.tree.insert.call_args_list[0]
+        self.assertEqual(kwargs0.get("tags"), ("diff_Challenge",))
+        # Song B: selected Hard has selected_row tag
+        args1, kwargs1 = instance.tree.insert.call_args_list[1]
+        self.assertEqual(kwargs1.get("tags"), ("diff_Hard", "selected_row"))
+        # Song C: a difficulty name that is not in the theme gets the gray unknown tag
+        args2, kwargs2 = instance.tree.insert.call_args_list[2]
+        self.assertEqual(kwargs2.get("tags"), (app.UNKNOWN_DIFFICULTY_TAG,))
+        # Only the pre-selected row is remembered as selected
+        self.assertEqual(instance._selected_tree_items, {"item1"})
+        instance.tree.selection_add.assert_called_once_with("item1")
+
+    def test_on_tree_select_toggles_selected_row_tag(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.tree = Mock()
+        instance.tree.exists.return_value = True
+        instance._selected_tree_items = {"item1"}
+
+        # Initial tags
+        instance.tree.item.side_effect = lambda item_id, option=None, **kwargs: (
+            ["diff_Challenge", "selected_row"] if item_id == "item1" else ["diff_Hard"]
+        )
+
+        # Selection changes: item1 deselected, item2 selected
+        instance.tree.selection.return_value = ["item2"]
+        instance._on_tree_select()
+
+        # item1 should have selected_row removed
+        instance.tree.item.assert_any_call("item1", tags=["diff_Challenge"])
+        # item2 should have selected_row added
+        instance.tree.item.assert_any_call("item2", tags=["diff_Hard", "selected_row"])
+        self.assertEqual(instance._selected_tree_items, {"item2"})
+
+    def test_on_tree_select_skips_rows_a_refresh_already_removed(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.tree = Mock()
+        instance.tree.exists.return_value = False
+        instance._selected_tree_items = {"gone"}
+        instance.tree.selection.return_value = []
+
+        instance._on_tree_select()
+
+        instance.tree.item.assert_not_called()
+        self.assertEqual(instance._selected_tree_items, set())
+
+
 if __name__ == "__main__":
     unittest.main()
-
