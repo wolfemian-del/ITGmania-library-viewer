@@ -1029,7 +1029,7 @@ class LibraryApp:
         if not chart_rows:
             self.dist_ax.text(
                 0.5, 0.5, "No charts match\ncurrent filters",
-                color=theme.TEXT_MUTED, fontsize=9, ha="center", va="center",
+                color=theme.TEXT_MUTED, fontsize=theme.CHART_TEXT_SIZE_MESSAGE, ha="center", va="center",
                 transform=self.dist_ax.transAxes,
             )
             self.dist_ax.axis("off")
@@ -1089,15 +1089,15 @@ class LibraryApp:
             if count > 0:
                 self.dist_ax.text(
                     count + max_count * 0.03, y + h / 2, str(count),
-                    va="center", ha="left", color=theme.TEXT_PRIMARY, fontsize=7.5,
+                    va="center", ha="left", color=theme.TEXT_PRIMARY, fontsize=theme.CHART_TEXT_SIZE_COUNT,
                 )
 
         self.dist_ax.set_yticks(y_positions)
-        self.dist_ax.set_yticklabels(labels, color=theme.TEXT_PRIMARY, fontsize=8)
+        self.dist_ax.set_yticklabels(labels, color=theme.TEXT_PRIMARY, fontsize=theme.CHART_TEXT_SIZE_LABEL)
         self.dist_ax.set_xlim(0, axis_max)
         self.dist_ax.set_facecolor(theme.BG_PANEL)
         self.dist_fig.patch.set_facecolor(theme.BG_PANEL)
-        self.dist_ax.tick_params(colors=theme.TEXT_MUTED, labelsize=8, left=False, bottom=True)
+        self.dist_ax.tick_params(colors=theme.TEXT_MUTED, labelsize=theme.CHART_TEXT_SIZE_LABEL, left=False, bottom=True)
         self.dist_ax.spines["top"].set_visible(False)
         self.dist_ax.spines["right"].set_visible(False)
         self.dist_ax.spines["left"].set_visible(False)

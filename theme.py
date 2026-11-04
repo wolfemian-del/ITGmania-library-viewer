@@ -64,3 +64,8 @@ FONT_DIALOG_TITLE = ("Segoe UI Semibold", 15) # Advanced Search heading
 FONT_COURSE_TITLE = ("Segoe UI Semibold", 17) # course builder heading
 FONT_APP_TITLE = ("Segoe UI Semibold", 19)    # main window heading
 FONT_MONO_BOLD = ("Consolas", 9, "bold")      # query text in Advanced Search
+
+# --- Distribution chart text sizes (points; the chart is drawn by matplotlib, which picks its own font family) ---
+CHART_TEXT_SIZE_MESSAGE = 9   # "no data" message in the chart area
+CHART_TEXT_SIZE_COUNT = 7.5   # count printed beside each bar
+CHART_TEXT_SIZE_LABEL = 8     # bar labels on the left and the axis tick numbers

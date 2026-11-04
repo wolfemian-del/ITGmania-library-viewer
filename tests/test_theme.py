@@ -37,6 +37,10 @@ class WindowUsesThemeTests(unittest.TestCase):
         found = re.findall(r"""\bfont\s*=\s*\(""", WINDOW_SOURCE)
         self.assertEqual(found, [], "fonts belong in theme.py")
 
+    def test_no_text_size_literals_in_window_code(self):
+        found = re.findall(r"\b(?:fontsize|labelsize)\s*=\s*[0-9.]+", WINDOW_SOURCE)
+        self.assertEqual(found, [], "chart text sizes belong in theme.py")
+
     def test_every_theme_name_the_window_uses_exists(self):
         missing = sorted(name for name in theme_names_used_by_window() if not hasattr(theme, name))
         self.assertEqual(missing, [], "a typo here would only crash when that dialog opens")
