@@ -305,6 +305,7 @@ class LibraryApp:
             self.tree.configure(displaycolumns=visible_columns)
         self._update_sort_headings()
         self._setup_tree_tags()
+        self.tree.bind("<<TreeviewSelect>>", self._on_tree_select, add="+")
         self.progress = ttk.Progressbar(self.root, mode="indeterminate", style="Horizontal.TProgressbar")
         self.progress.pack(fill="x", padx=18, pady=(0, 4))
         footer = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=18, pady=7)
@@ -853,6 +854,7 @@ class LibraryApp:
             visible = present + missing
         self.tree.delete(*self.tree.get_children())
         self.tree_item_rows = {}
+        self._selected_tree_items = set()
         self._insert_batch(visible, 0, generation, selected_rows)
         self.count_label.set(f"{len(visible):,} charts shown · {len(self.rows):,} total")
         self._update_distribution_panel(visible)
@@ -869,10 +871,31 @@ class LibraryApp:
             self.tree.heading(column, text=heading)
 
     def _setup_tree_tags(self):
-        if not hasattr(self, "tree") or not self.tree:
-            return
         for diff, color in theme.DIFFICULTY_COLORS.items():
             self.tree.tag_configure(f"diff_{diff}", foreground=color)
+        self.tree.tag_configure("selected_row", foreground=theme.TEXT_ON_ACCENT)
+
+    def _on_tree_select(self, _event=None):
+        if not hasattr(self, "tree"):
+            return
+        current = set(self.tree.selection())
+        prev = getattr(self, "_selected_tree_items", set())
+        for item in prev - current:
+            try:
+                if self.tree.exists(item):
+                    tags = [t for t in self.tree.item(item, "tags") if t != "selected_row"]
+                    self.tree.item(item, tags=tags)
+            except Exception:
+                pass
+        for item in current - prev:
+            try:
+                if self.tree.exists(item):
+                    tags = [t for t in self.tree.item(item, "tags") if t != "selected_row"]
+                    tags.append("selected_row")
+                    self.tree.item(item, tags=tags)
+            except Exception:
+                pass
+        self._selected_tree_items = current
 
     def _insert_batch(self, rows, start, generation, selected_rows=None):
         if generation != self._render_generation:
@@ -889,11 +912,15 @@ class LibraryApp:
                     value = f"{value:g}"
                 values.append(value)
             diff_raw = str(row.get("Difficulty", "")).strip()
-            tags = (f"diff_{diff_raw}",) if diff_raw in theme.DIFFICULTY_COLORS else ()
-            item = self.tree.insert("", "end", values=values, tags=tags)
+            tags = [f"diff_{diff_raw}"] if diff_raw in theme.DIFFICULTY_COLORS else []
+            if id(row) in selected_rows:
+                tags.append("selected_row")
+            item = self.tree.insert("", "end", values=values, tags=tuple(tags))
             self.tree_item_rows[item] = row
             if id(row) in selected_rows:
                 self.tree.selection_add(item)
+                if hasattr(self, "_selected_tree_items"):
+                    self._selected_tree_items.add(item)
         if stop < len(rows):
             self.root.after(1, lambda: self._insert_batch(rows, stop, generation, selected_rows))
 

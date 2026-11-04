@@ -213,31 +213,65 @@ class ColumnGroupTests(unittest.TestCase):
         self.assertTrue(instance.group_visibility["Song & chart"].get())
 
 
-    def test_difficulty_tags_and_batch_insertion(self):
+
+class RowTintTests(unittest.TestCase):
+    def test_setup_tree_tags_configures_all_difficulties_and_selection(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.tree = Mock()
+
+        instance._setup_tree_tags()
+        self.assertEqual(instance.tree.tag_configure.call_count, len(app.theme.DIFFICULTY_COLORS) + 1)
+        for diff, color in app.theme.DIFFICULTY_COLORS.items():
+            instance.tree.tag_configure.assert_any_call(f"diff_{diff}", foreground=color)
+        instance.tree.tag_configure.assert_any_call("selected_row", foreground=app.theme.TEXT_ON_ACCENT)
+
+    def test_insert_batch_tags_rows_by_difficulty_and_selection(self):
         instance = object.__new__(app.LibraryApp)
         instance.tree = Mock()
         instance._render_generation = 1
         instance.tree_item_rows = {}
         instance.root = Mock()
 
-        instance._setup_tree_tags()
-        self.assertEqual(instance.tree.tag_configure.call_count, len(app.theme.DIFFICULTY_COLORS))
-        for diff, color in app.theme.DIFFICULTY_COLORS.items():
-            instance.tree.tag_configure.assert_any_call(f"diff_{diff}", foreground=color)
-
         rows = [
             {"Title": "Song A", "Difficulty": "Challenge", "Time": 120},
             {"Title": "Song B", "Difficulty": "Hard", "Time": 90},
+            {"Title": "Song C", "Difficulty": "CustomUnknown", "Time": 60},
         ]
-        instance._insert_batch(rows, 0, 1)
-        self.assertEqual(instance.tree.insert.call_count, 2)
-        args1, kwargs1 = instance.tree.insert.call_args_list[0]
-        self.assertEqual(kwargs1.get("tags"), ("diff_Challenge",))
-        diff_idx = app.HEADERS.index("Difficulty")
-        self.assertEqual(kwargs1.get("values")[diff_idx], "Challenge")
+        # Song B is pre-selected
+        instance._insert_batch(rows, 0, 1, selected_rows={id(rows[1])})
+
+        self.assertEqual(instance.tree.insert.call_count, 3)
+        # Song A: unselected Challenge
+        args0, kwargs0 = instance.tree.insert.call_args_list[0]
+        self.assertEqual(kwargs0.get("tags"), ("diff_Challenge",))
+        # Song B: selected Hard has selected_row tag
+        args1, kwargs1 = instance.tree.insert.call_args_list[1]
+        self.assertEqual(kwargs1.get("tags"), ("diff_Hard", "selected_row"))
+        # Song C: unknown difficulty has no tags
+        args2, kwargs2 = instance.tree.insert.call_args_list[2]
+        self.assertEqual(kwargs2.get("tags"), ())
+
+    def test_on_tree_select_toggles_selected_row_tag(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.tree = Mock()
+        instance.tree.exists.return_value = True
+        instance._selected_tree_items = {"item1"}
+
+        # Initial tags
+        instance.tree.item.side_effect = lambda item_id, option=None, **kwargs: (
+            ["diff_Challenge", "selected_row"] if item_id == "item1" else ["diff_Hard"]
+        )
+
+        # Selection changes: item1 deselected, item2 selected
+        instance.tree.selection.return_value = ["item2"]
+        instance._on_tree_select()
+
+        # item1 should have selected_row removed
+        instance.tree.item.assert_any_call("item1", tags=["diff_Challenge"])
+        # item2 should have selected_row added
+        instance.tree.item.assert_any_call("item2", tags=["diff_Hard", "selected_row"])
+        self.assertEqual(instance._selected_tree_items, {"item2"})
 
 
 if __name__ == "__main__":
     unittest.main()
-
-
