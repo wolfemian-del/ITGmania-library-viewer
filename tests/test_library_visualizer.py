@@ -128,6 +128,91 @@ class LibrarySnapshotTests(unittest.TestCase):
             app.MATPLOTLIB_AVAILABLE = original_avail
 
 
+class FakeVariable:
+    """Stands in for a Tk BooleanVar so column logic can be tested without a window."""
+
+    def __init__(self, value=False):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
+
+
+class ColumnGroupTests(unittest.TestCase):
+    @staticmethod
+    def make_app(visible_columns):
+        instance = object.__new__(app.LibraryApp)
+        instance.column_order = list(app.HEADERS)
+        instance.column_visibility = {col: FakeVariable(col in visible_columns) for col in app.HEADERS}
+        instance.group_visibility = {group: FakeVariable() for group in app.COLUMN_GROUPS}
+        instance.default_column_widths = {}
+        instance.tree = Mock()
+        instance._save_settings = Mock()
+        instance._sync_group_checks()
+        return instance
+
+    @staticmethod
+    def shown(instance):
+        return {col for col, var in instance.column_visibility.items() if var.get()}
+
+    def test_every_column_is_in_exactly_one_group(self):
+        grouped = [column for columns in app.COLUMN_GROUPS.values() for column in columns]
+        self.assertEqual(sorted(grouped), sorted(app.HEADERS))
+
+    def test_groups_are_listed_in_menu_order(self):
+        self.assertEqual(list(app.COLUMN_GROUPS),
+                         ["Song & chart", "Score", "Tap judgments", "Chart counts", "Tech counts"])
+
+    def test_default_columns_are_song_and_chart_plus_score(self):
+        expected = {*app.COLUMN_GROUPS["Song & chart"], *app.COLUMN_GROUPS["Score"]}
+        self.assertEqual(set(app.DEFAULT_VISIBLE_COLUMNS), expected)
+
+    def test_group_check_is_on_only_when_the_whole_group_is_shown(self):
+        instance = self.make_app(app.DEFAULT_VISIBLE_COLUMNS)
+        self.assertTrue(instance.group_visibility["Score"].get())
+        self.assertFalse(instance.group_visibility["Tap judgments"].get())
+        instance.column_visibility["Grade"].set(False)
+        instance._column_visibility_changed("Grade")
+        self.assertFalse(instance.group_visibility["Score"].get())
+
+    def test_group_switch_shows_then_hides_a_whole_group_with_one_save(self):
+        instance = self.make_app(app.DEFAULT_VISIBLE_COLUMNS)
+        instance.group_visibility["Tap judgments"].set(True)  # what Tk does before calling the command
+        instance._group_visibility_changed("Tap judgments")
+        self.assertTrue(set(app.TAP_FIELDS) <= self.shown(instance))
+        instance.tree.configure.assert_called_once()
+        instance._save_settings.assert_called_once()
+
+        instance.group_visibility["Tap judgments"].set(False)
+        instance._group_visibility_changed("Tap judgments")
+        self.assertFalse(set(app.TAP_FIELDS) & self.shown(instance))
+        self.assertEqual(set(instance.tree.configure.call_args.kwargs["displaycolumns"]),
+                         set(app.DEFAULT_VISIBLE_COLUMNS))
+
+    def test_group_switch_cannot_hide_the_last_visible_columns(self):
+        instance = self.make_app(app.COLUMN_GROUPS["Score"])
+        instance.group_visibility["Score"].set(False)
+        instance._group_visibility_changed("Score")
+        self.assertEqual(self.shown(instance), set(app.COLUMN_GROUPS["Score"]))
+        self.assertTrue(instance.group_visibility["Score"].get())
+        instance.tree.configure.assert_not_called()
+        instance._save_settings.assert_not_called()
+
+    def test_reset_column_layout_restores_the_default_columns(self):
+        instance = self.make_app(app.HEADERS)
+        instance.column_order = list(reversed(app.HEADERS))
+        instance.reset_column_layout()
+        self.assertEqual(self.shown(instance), set(app.DEFAULT_VISIBLE_COLUMNS))
+        self.assertEqual(instance.column_order, list(app.HEADERS))
+        self.assertEqual(instance.tree.configure.call_args.kwargs["displaycolumns"],
+                         [col for col in app.HEADERS if col in app.DEFAULT_VISIBLE_COLUMNS])
+        self.assertFalse(instance.group_visibility["Tech counts"].get())
+        self.assertTrue(instance.group_visibility["Song & chart"].get())
+
+
 if __name__ == "__main__":
     unittest.main()
 

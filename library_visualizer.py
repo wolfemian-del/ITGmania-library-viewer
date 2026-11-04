@@ -74,6 +74,18 @@ HEADERS = ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BP
 NUMERIC_COLUMNS = {"Meter", "Time", "Score", "Best %", "Plays", "Peak NPS", "Taps/Holds", "Jumps",
                    "Holds", "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4",
                    "W5", "Miss", "Max combo", *TECH_FIELDS}
+# The groups shown under View > Columns, in menu order. Every column in HEADERS belongs to exactly one group.
+COLUMN_GROUPS = {
+    "Song & chart": ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart"),
+    "Score": ("Score", "Grade", "Best %", "Plays", "Last played", "Max combo"),
+    "Tap judgments": TAP_FIELDS,
+    "Chart counts": ("Peak NPS", "Taps/Holds", "Jumps", "Holds", "Rolls", "Mines", "Hands", "Lifts"),
+    "Tech counts": TECH_FIELDS,
+}
+# Groups whose columns are shown on a fresh install and after "Reset column layout".
+DEFAULT_VISIBLE_GROUPS = ("Song & chart", "Score")
+DEFAULT_VISIBLE_COLUMNS = frozenset(
+    column for group in DEFAULT_VISIBLE_GROUPS for column in COLUMN_GROUPS[group])
 
 
 class ChartBar(NamedTuple):
@@ -130,13 +142,18 @@ class LibraryApp:
         saved_visibility = self.saved_settings.get("column_visibility", {})
         if not isinstance(saved_visibility, dict):
             saved_visibility = {}
+        # A column with no saved choice follows the default set; saved choices are always kept.
         self.column_visibility = {
             column: tk.BooleanVar(value=saved_visibility.get(column)
-                                  if isinstance(saved_visibility.get(column), bool) else True)
+                                  if isinstance(saved_visibility.get(column), bool)
+                                  else column in DEFAULT_VISIBLE_COLUMNS)
             for column in HEADERS
         }
         if not any(variable.get() for variable in self.column_visibility.values()):
             self.column_visibility[HEADERS[0]].set(True)
+        # One check box per group in the Columns menu; it is checked while every column of the group is shown.
+        self.group_visibility = {group: tk.BooleanVar() for group in COLUMN_GROUPS}
+        self._sync_group_checks()
         saved_widths = self.saved_settings.get("column_widths", {})
         if not isinstance(saved_widths, dict):
             saved_widths = {}
@@ -316,15 +333,14 @@ class LibraryApp:
 
         view_menu = tk.Menu(menubar, tearoff=False)
         columns_menu = tk.Menu(view_menu, tearoff=False)
-        groups = (
-            ("Song & chart", ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart")),
-            ("Score", ("Score", "Grade", "Best %", "Plays", "Last played", "Max combo")),
-            ("Chart counts", ("Peak NPS", "Taps/Holds", "Jumps", "Holds", "Rolls", "Mines", "Hands", "Lifts")),
-            ("Tap judgments", TAP_FIELDS),
-            ("Tech counts", TECH_FIELDS),
-        )
-        for group, columns in groups:
+        for group, columns in COLUMN_GROUPS.items():
             group_menu = tk.Menu(columns_menu, tearoff=False)
+            group_menu.add_checkbutton(
+                label="Show whole group",
+                variable=self.group_visibility[group],
+                command=lambda name=group: self._group_visibility_changed(name),
+            )
+            group_menu.add_separator()
             for column in columns:
                 group_menu.add_checkbutton(
                     label=column,
@@ -547,16 +563,40 @@ class LibraryApp:
         if not visible:
             self.column_visibility[changed_column].set(True)
             return
+        self._sync_group_checks()
+        self.tree.configure(displaycolumns=visible)
+        self._save_settings()
+
+    def _sync_group_checks(self):
+        for group, variable in self.group_visibility.items():
+            variable.set(all(self.column_visibility[column].get() for column in COLUMN_GROUPS[group]))
+
+    def _group_visibility_changed(self, group):
+        """Show or hide every column of a group at once, then redraw and save a single time."""
+        show = self.group_visibility[group].get()
+        previous = {column: self.column_visibility[column].get() for column in COLUMN_GROUPS[group]}
+        for column in previous:
+            self.column_visibility[column].set(show)
+        visible = [column for column in self.column_order if self.column_visibility[column].get()]
+        if not visible:
+            # Same rule as a single column: at least one column must stay on, so the click is undone.
+            for column, was_visible in previous.items():
+                self.column_visibility[column].set(was_visible)
+            self._sync_group_checks()
+            return
+        self._sync_group_checks()
         self.tree.configure(displaycolumns=visible)
         self._save_settings()
 
     def reset_column_layout(self):
         self.column_order = list(HEADERS)
-        for variable in self.column_visibility.values():
-            variable.set(True)
+        for column, variable in self.column_visibility.items():
+            variable.set(column in DEFAULT_VISIBLE_COLUMNS)
+        self._sync_group_checks()
         for column, width in self.default_column_widths.items():
             self.tree.column(column, width=width)
-        self.tree.configure(displaycolumns=self.column_order)
+        visible = [column for column in self.column_order if self.column_visibility[column].get()]
+        self.tree.configure(displaycolumns=visible)
         self._save_settings()
 
     def _column_drag_start(self, event):
