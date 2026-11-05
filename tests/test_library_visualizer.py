@@ -295,5 +295,32 @@ class RowTintTests(unittest.TestCase):
         self.assertEqual(instance._selected_tree_items, set())
 
 
+class CourseBuilderValidationTests(unittest.TestCase):
+    def test_validate_course_entries_delegates_and_rejects_unsafe_comments(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.course_window = Mock()
+        instance.course_entries = [{"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"}]
+
+        from unittest.mock import patch
+        mock_mb = Mock()
+        with patch.object(app, "messagebox", mock_mb):
+            valid = instance.validate_course_entries("Bad // Title")
+            self.assertFalse(valid)
+            mock_mb.showerror.assert_called_once()
+            self.assertIn("//", mock_mb.showerror.call_args[0][1])
+
+    def test_validate_course_entries_accepts_clean_entries(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.course_window = Mock()
+        instance.course_entries = [{"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"}]
+
+        from unittest.mock import patch
+        mock_mb = Mock()
+        with patch.object(app, "messagebox", mock_mb):
+            valid = instance.validate_course_entries("Clean Title")
+            self.assertTrue(valid)
+            mock_mb.showerror.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -316,7 +316,7 @@ def format_new_course(title: str, song_lines: list[str], newline: str = "\n") ->
 
 
 def _contains_unsafe_course_text(value: str) -> bool:
-    return any(char in value for char in COURSE_UNSAFE_CHARS)
+    return "//" in value or any(char in value for char in COURSE_UNSAFE_CHARS)
 
 
 def validate_course_fields(rows: list[dict], title: str | None = None) -> str | None:
@@ -333,15 +333,15 @@ def validate_course_fields(rows: list[dict], title: str | None = None) -> str | 
         if not cleaned:
             return "Enter a title for this course."
         if _contains_unsafe_course_text(cleaned):
-            return "Course titles cannot contain semicolons, colons, or newlines."
+            return "Course titles cannot contain semicolons, colons, newlines, or '//' comment markers."
     if not rows:
         return "Add at least one chart to the course."
     if any(not row.get("Course path") or not row.get("Difficulty") for row in rows):
         return "One or more selected charts are missing a song path or difficulty."
     if any(_contains_unsafe_course_text(str(row.get("Course path", ""))) for row in rows):
-        return "Song paths cannot contain semicolons, colons, or newlines."
+        return "Song paths cannot contain semicolons, colons, newlines, or '//' comment markers."
     if any(_contains_unsafe_course_text(str(row.get("Difficulty", ""))) for row in rows):
-        return "Difficulties cannot contain semicolons, colons, or newlines."
+        return "Difficulties cannot contain semicolons, colons, newlines, or '//' comment markers."
     return None
 
 
@@ -358,14 +358,14 @@ def parse_course_text(text: str) -> dict:
     title = course_match.group(1).strip() if course_match else None
     songs = []
     for match in re.finditer(
-        r"#SONG\s*:([^:;\r\n]*):([^:;\r\n]*):([^;]*);", text, re.IGNORECASE
+        r"#SONG\s*:([^:;\r\n]*):([^:;\r\n]*)(?::([^;]*))?;", text, re.IGNORECASE
     ):
         songs.append({
             "path": match.group(1).strip(),
             "difficulty": match.group(2).strip(),
             "raw": match.group(0),
         })
-    song_starts = list(re.finditer(r"#SONG\s*:", text, re.IGNORECASE))
+    song_starts = list(re.finditer(r"#(?:SONG|SONGSELECT)\s*:", text, re.IGNORECASE))
     trailing_risk = None
     if song_starts:
         trailing_risk = course_trailing_risk(text)
@@ -378,8 +378,8 @@ def parse_course_text(text: str) -> dict:
 
 
 def course_trailing_risk(text: str) -> str | None:
-    """Return 'MODS' or 'GAINSECONDS' if that directive follows the last #SONG, else None."""
-    songs = list(re.finditer(r"#SONG\s*:", text, re.IGNORECASE))
+    """Return 'MODS' or 'GAINSECONDS' if that directive follows the last #SONG or #SONGSELECT, else None."""
+    songs = list(re.finditer(r"#(?:SONG|SONGSELECT)\s*:", text, re.IGNORECASE))
     if not songs:
         return None
     risky = re.search(r"#(MODS|GAINSECONDS)\s*:", text[songs[-1].end():], re.IGNORECASE)
@@ -392,8 +392,9 @@ def course_append_bytes(existing: bytes, song_lines: list[str]) -> bytes:
     """Validate an existing CRS and return only the bytes safe to append."""
     text = existing.decode("utf-8-sig")
     parsed = parse_course_text(text)
-    if not parsed["has_course"] or not list(re.finditer(r"#SONG\s*:", text, re.IGNORECASE)):
-        raise ValueError("The selected file must contain #COURSE and at least one #SONG entry.")
+    has_entries = bool(re.search(r"#(?:SONG|SONGSELECT)\s*:", text, re.IGNORECASE))
+    if not parsed["has_course"] or not has_entries:
+        raise ValueError("The selected file must contain #COURSE and at least one #SONG or #SONGSELECT entry.")
     risk = parsed["trailing_risk"]
     if risk:
         raise ValueError(
