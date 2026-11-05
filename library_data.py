@@ -174,21 +174,27 @@ def bpm_sort_key(row: dict):
 
 
 def tag_map(text: str) -> dict[str, str]:
-    return {m.group(1).upper(): m.group(2).strip() for m in
-            re.finditer(r"(?m)^#([^:;\r\n]+):([^;\r\n]*);", text)}
+    tags = {}
+    # ITGmania MSD tags start with #KEY: and end at an unescaped ;.
+    # A backslash escapes the next character (e.g. \; is a literal semicolon, \\ is a literal backslash).
+    for m in re.finditer(r"(?m)^#([^:;\r\n]+):((?:\\.|[^;\r\n])*?);", text):
+        raw_val = m.group(2).strip()
+        decoded_val = raw_val.replace(r"\;", ";").replace(r"\\", "\\")
+        tags[m.group(1).upper()] = decoded_val
+    return tags
 
 
 def split_path(value: str) -> str:
-    """Normalize an ITGmania song path to its path below the Songs directory.
+    """Normalize an ITGmania song path to its path below the Songs or AdditionalSongs directory.
 
     Cache entries usually use ``/Songs/Pack/Song/file.sm`` while Stats.xml
-    commonly uses ``Songs/Pack/Song``. Some installations may instead store
-    a filesystem-absolute path, so strip the prefix through the *component*
-    named Songs wherever it occurs.
+    commonly uses ``Songs/Pack/Song`` or ``AdditionalSongs/Pack/Song``. Some installations
+    may instead store a filesystem-absolute path, so strip the prefix through the
+    first component named Songs or AdditionalSongs wherever it occurs.
     """
     parts = value.replace("\\", "/").split("/")
     for index, part in enumerate(parts):
-        if part.casefold() == "songs":
+        if part.casefold() in ("songs", "additionalsongs"):
             return "/".join(parts[index + 1:]).strip("/")
     return "/".join(parts).strip("/")
 
@@ -272,7 +278,8 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
             "Grade": GRADE_NAMES.get(score.get("Grade", ""), score.get("Grade", "")),
             "Best %": round(percent, 2) if score else "", "Plays": number(score.get("plays")),
             "Last played": score.get("last_played", ""),
-            "Peak NPS": number(tags.get("PEAKNPS")) if tags.get("PEAKNPS") else "",
+            # ITGmania formats #PEAKNPS as player-separated sections (P1|P2); take player 1.
+            "Peak NPS": number(tags.get("PEAKNPS", "").split("|")[0]) if tags.get("PEAKNPS") else "",
             "Taps/Holds": radar.get("TapsAndHolds", ""), "Jumps": radar.get("Jumps", ""),
             "Holds": radar.get("Holds", ""), "Rolls": radar.get("Rolls", ""),
             "Mines": radar.get("Mines", ""), "Hands": radar.get("Hands", ""),
