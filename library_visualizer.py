@@ -1488,8 +1488,9 @@ class LibraryApp:
     def validate_course_entries(self, title=None):
         error = validate_course_fields(self.course_entries, title)
         if error:
-            dialog_title = "Unsupported course text" if "cannot contain" in error else "Cannot save course"
-            messagebox.showerror(dialog_title, error, parent=self.course_window)
+            # One title for every validation error: the message says what is wrong, and this check runs for
+            # both saving a new course and appending to one.
+            messagebox.showerror("Course problem", error, parent=self.course_window)
             return False
 
         types = sorted({row.get("Type", "") for row in self.course_entries if row.get("Type")})
