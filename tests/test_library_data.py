@@ -275,6 +275,144 @@ class ParsingTests(unittest.TestCase):
         tags = data.tag_map("#SONGFILENAME:Songs/Pack/My\\/\\/Song/audio.ogg;\n")
         self.assertEqual(tags["SONGFILENAME"], "Songs/Pack/My//Song/audio.ogg")
 
+    def test_tag_map_supports_multiline_values_and_hash_in_text(self):
+        text = (
+            "#TITLE:Track #1 - Summer;\n"
+            "#ARTIST:Artist #9 & Friends;\n"
+            "#BPMS:0.000=120.000,\r\n"
+            "16.000=140.000,\r\n"
+            "32.000=160.000;\n"
+            "#GENRE:Dance;\n"
+        )
+        tags = data.tag_map(text)
+        self.assertEqual(tags["TITLE"], "Track #1 - Summer")
+        self.assertEqual(tags["ARTIST"], "Artist #9 & Friends")
+        self.assertEqual(tags["GENRE"], "Dance")
+        self.assertEqual(data.parse_bpms(tags["BPMS"]), (120.0, 160.0))
+
+    def test_cache_file_parses_multiline_bpms_correctly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "tempo.cache"
+            cache_file.write_text(
+                "#TITLE:Tempo Change;\n"
+                "#SONGFILENAME:Songs/Pack/Tempo/audio.ogg;\n"
+                "#BPMS:0.000=100.000,\n"
+                "16.000=150.000,\n"
+                "32.000=200.000;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Hard;\n",
+                encoding="utf-8",
+            )
+            rows = data.parse_cache_file(cache_file, {})
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["BPM"], "100–200")
+        self.assertEqual(rows[0]["bpm_min"], 100.0)
+        self.assertEqual(rows[0]["bpm_max"], 200.0)
+
+    def test_edit_charts_match_scores_by_description(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores>"
+                "<Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Edit' Description='Alpha Edit'>"
+                "<HighScoreList>"
+                "<NumTimesPlayed>7</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            scores = data.stats_index(stats_file)
+
+            cache_file = Path(directory) / "edits.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Edit;\n"
+                "#DESCRIPTION:Alpha Edit;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Edit;\n"
+                "#DESCRIPTION:Beta Edit;\n",
+                encoding="utf-8",
+            )
+            rows = data.parse_cache_file(cache_file, scores)
+
+        self.assertEqual(len(rows), 2)
+        alpha_row = next(r for r in rows if r["Chart"] == "Alpha Edit")
+        beta_row = next(r for r in rows if r["Chart"] == "Beta Edit")
+
+        self.assertEqual(alpha_row["Score"], 950000)
+        self.assertEqual(alpha_row["Best %"], 95.0)
+        self.assertEqual(alpha_row["Plays"], 7)
+
+        self.assertEqual(beta_row["Score"], "")
+        self.assertEqual(beta_row["Best %"], "")
+        self.assertEqual(beta_row["Plays"], 0)
+
+    def test_edit_charts_match_with_whitespace_and_case_differences(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores>"
+                "<Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Edit' Description='  MY EDIT  '>"
+                "<HighScoreList><NumTimesPlayed>3</NumTimesPlayed>"
+                "<HighScore><PercentDP>0.98</PercentDP><Score>980000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            scores = data.stats_index(stats_file)
+
+            cache_file = Path(directory) / "edits.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Edit;\n"
+                "#CHARTNAME:my edit;\n",
+                encoding="utf-8",
+            )
+            rows = data.parse_cache_file(cache_file, scores)
+
+        self.assertEqual(rows[0]["Score"], 980000)
+
+    def test_edit_charts_fall_back_to_shared_score_when_description_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            # Stats.xml has no Description attribute on Edit steps
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores>"
+                "<Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Edit'>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+                "<HighScore><PercentDP>0.92</PercentDP><Score>920000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            scores = data.stats_index(stats_file)
+
+            cache_file = Path(directory) / "edits.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Edit;\n"
+                "#CHARTNAME:Custom Chart;\n",
+                encoding="utf-8",
+            )
+            rows = data.parse_cache_file(cache_file, scores)
+
+        self.assertEqual(rows[0]["Score"], 920000)
+
     def test_stats_index_reads_score_and_ignores_case_in_matching_key(self):
         with tempfile.TemporaryDirectory() as directory:
             stats_file = Path(directory) / "Stats.xml"

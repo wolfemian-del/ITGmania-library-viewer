@@ -176,9 +176,10 @@ def bpm_sort_key(row: dict):
 def tag_map(text: str) -> dict[str, str]:
     tags = {}
     # ITGmania MSD tags start with #KEY: and end at an unescaped ;.
+    # Values may span lines (e.g. multi-segment #BPMS joined with ',\r\n' or ',\n').
     # A backslash escapes the next character (e.g. \; is a literal semicolon, \\ is a literal backslash).
-    # Exclude both ; and \ from the non-escape class to ensure linear-time parsing without ReDoS.
-    for m in re.finditer(r"(?m)^#([^:;\r\n]+):((?:\\.|[^;\r\n\\])*);", text):
+    # Line breaks are consumed as long as they are not followed by '#' (which begins a new tag line).
+    for m in re.finditer(r"(?m)^#([^:;\r\n]+):((?:\\.|[^;\\\r\n]|[\r\n]+(?!#))*);", text):
         raw_val = m.group(2).strip()
         decoded_val = re.sub(r"\\(.)", r"\1", raw_val)
         tags[m.group(1).upper()] = decoded_val
@@ -200,17 +201,18 @@ def split_path(value: str) -> str:
     return "/".join(parts).strip("/")
 
 
-def stats_index(stats_file: Path) -> dict[tuple[str, str, str], dict]:
+def stats_index(stats_file: Path) -> dict[tuple, dict]:
     root = ET.parse(stats_file).getroot()
-    result: dict[tuple[str, str, str], dict] = {}
+    result: dict[tuple, dict] = {}
     song_scores = root.find("SongScores")
     if song_scores is None:
         return result
     for song in song_scores.findall("Song"):
         song_path = split_path(song.get("Dir", ""))
         for steps in song.findall("Steps"):
-            key = (song_path.casefold(), steps.get("StepsType", "").casefold(),
-                   steps.get("Difficulty", "").casefold())
+            steps_type = steps.get("StepsType", "").casefold()
+            diff = steps.get("Difficulty", "").casefold()
+            desc = (steps.get("Description") or "").strip().casefold()
             score_list = steps.find("HighScoreList")
             if score_list is None:
                 continue
@@ -226,6 +228,13 @@ def stats_index(stats_file: Path) -> dict[tuple[str, str, str], dict]:
                 radar = best.find("RadarValues")
                 if radar is not None:
                     best_data.update({"score_" + name: radar.findtext(name, "") for name in RADAR_FIELDS})
+            
+            # Determine key: 4-tuple for Edit charts with a description, 3-tuple for non-Edit or empty description
+            if diff == "edit" and desc:
+                key = (song_path.casefold(), steps_type, diff, desc)
+            else:
+                key = (song_path.casefold(), steps_type, diff)
+
             entry = result.setdefault(key, {"plays": "0", "last_played": ""})
             plays = score_list.findtext("NumTimesPlayed", "0")
             if number(plays) > number(entry["plays"]):
@@ -264,10 +273,14 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
         radar_values = tags.get("RADARVALUES", "").split(",")
         radar = {name: number(value) for name, value in zip(RADAR_FIELDS, radar_values)}
         tech = [number(v, -1) for v in tags.get("TECHCOUNTS", "").split(",")]
-        key = (song_dir.casefold(), chart_type.casefold(), difficulty.casefold())
-        score = scores.get(key, {})
-        percent = number(score.get("PercentDP")) * 100
         display_name = tags.get("CHARTNAME") or tags.get("DESCRIPTION", "")
+        if difficulty.casefold() == "edit" and display_name.strip():
+            key = (song_dir.casefold(), chart_type.casefold(), "edit", display_name.strip().casefold())
+            score = scores.get(key) or scores.get((song_dir.casefold(), chart_type.casefold(), "edit"), {})
+        else:
+            key = (song_dir.casefold(), chart_type.casefold(), difficulty.casefold())
+            score = scores.get(key, {})
+        percent = number(score.get("PercentDP")) * 100
         rows.append({
             "Title": song_tags.get("TITLE", path.stem), "Artist": song_tags.get("ARTIST", ""),
             "Pack": pack, "Type": chart_type, "Difficulty": difficulty, "Course path": song_dir,
