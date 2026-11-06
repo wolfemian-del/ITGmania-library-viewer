@@ -421,13 +421,40 @@ class CourseModelTests(unittest.TestCase):
         )
         self.assertIsNone(parsed["trailing_risk"])
 
+    def test_parse_course_text_reads_two_and_three_parameter_songs(self):
+        text = (
+            "#COURSE:Mixed Course;\n"
+            "#SONG:Pack/One:Hard;\n"
+            "#SONG:Pack/Two:Challenge:;\n"
+            "#SONG:Pack/Three:Medium:failoff;\n"
+        )
+        parsed = data.parse_course_text(text)
+        self.assertTrue(parsed["has_course"])
+        self.assertEqual(parsed["title"], "Mixed Course")
+        self.assertEqual(
+            [(song["path"], song["difficulty"]) for song in parsed["songs"]],
+            [("Pack/One", "Hard"), ("Pack/Two", "Challenge"), ("Pack/Three", "Medium")],
+        )
+        self.assertIsNone(parsed["trailing_risk"])
+
     def test_course_trailing_risk_detects_mods_after_last_song(self):
         text = "#COURSE:Example;\n#SONG:Pack/One:Hard:;\n#MODS:xmod;\n"
         self.assertEqual(data.course_trailing_risk(text), "MODS")
         self.assertEqual(data.parse_course_text(text)["trailing_risk"], "MODS")
 
+    def test_course_trailing_risk_detects_modifiers_after_songselect(self):
+        for directive, expected in (("#MODS:xmod;\n", "MODS"), ("#GAINSECONDS:15;\n", "GAINSECONDS")):
+            with self.subTest(directive=directive):
+                text = f"#COURSE:Example;\n#SONGSELECT:METER=10;\n{directive}"
+                self.assertEqual(data.course_trailing_risk(text), expected)
+                self.assertEqual(data.parse_course_text(text)["trailing_risk"], expected)
+
     def test_course_trailing_risk_ignores_directives_before_last_song(self):
         text = "#COURSE:Example;\n#MODS:xmod;\n#SONG:Pack/One:Hard:;\n"
+        self.assertIsNone(data.course_trailing_risk(text))
+
+    def test_course_trailing_risk_ignores_directives_before_last_songselect(self):
+        text = "#COURSE:Example;\n#MODS:xmod;\n#SONGSELECT:METER=10;\n"
         self.assertIsNone(data.course_trailing_risk(text))
 
     def test_validate_course_fields_rejects_empty_and_unsafe_text(self):
@@ -477,6 +504,35 @@ class CourseModelTests(unittest.TestCase):
             )
         )
 
+    def test_validate_course_fields_rejects_double_slash_comments(self):
+        self.assertIn(
+            "//",
+            data.validate_course_fields(
+                [{"Course path": "Pack/One", "Difficulty": "Hard"}],
+                title="Spring // Autumn",
+            ),
+        )
+        self.assertIn(
+            "//",
+            data.validate_course_fields(
+                [{"Course path": "Pack//One", "Difficulty": "Hard"}],
+            ),
+        )
+        self.assertIn(
+            "//",
+            data.validate_course_fields(
+                [{"Course path": "Pack/One", "Difficulty": "Hard//Edit"}],
+            ),
+        )
+
+    def test_validate_course_fields_allows_single_slash(self):
+        self.assertIsNone(
+            data.validate_course_fields(
+                [{"Course path": "Pack/Song/Title", "Difficulty": "Hard"}],
+                title="Safe / Single / Slash",
+            )
+        )
+
 
 class CourseAppendTests(unittest.TestCase):
     def test_appends_to_crlf_file_without_rewriting_existing_bytes(self):
@@ -494,10 +550,26 @@ class CourseAppendTests(unittest.TestCase):
         )
         self.assertEqual(addition, b"\n#SONG:Pack/Two:Challenge:;\n")
 
+    def test_appends_to_course_with_songselect(self):
+        existing = b"#COURSE:Existing;\n#SONGSELECT:METER=10;\n"
+        addition = data.course_append_bytes(existing, ["#SONG:Pack/Two:Challenge:;"])
+        self.assertEqual(addition, b"#SONG:Pack/Two:Challenge:;\n")
+        self.assertEqual(
+            existing + addition,
+            b"#COURSE:Existing;\n#SONGSELECT:METER=10;\n#SONG:Pack/Two:Challenge:;\n",
+        )
+
     def test_refuses_trailing_modifiers(self):
         for directive in ("#MODS:xmod;", "#GAINSECONDS:10;"):
             with self.subTest(directive=directive):
                 existing = f"#COURSE:Existing;\n#SONG:Pack/One:Hard:;\n{directive}".encode()
+                with self.assertRaisesRegex(ValueError, "ends with"):
+                    data.course_append_bytes(existing, ["#SONG:Pack/Two:Challenge:;"])
+
+    def test_refuses_trailing_modifiers_after_songselect(self):
+        for directive in ("#MODS:xmod;", "#GAINSECONDS:10;"):
+            with self.subTest(directive=directive):
+                existing = f"#COURSE:Existing;\n#SONGSELECT:METER=10;\n{directive}".encode()
                 with self.assertRaisesRegex(ValueError, "ends with"):
                     data.course_append_bytes(existing, ["#SONG:Pack/Two:Challenge:;"])
 

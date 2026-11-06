@@ -44,9 +44,9 @@ On Linux and macOS, choose the cache and profile paths with **Browse…**; the a
 - A fresh install, and **View → Reset column layout**, show only the Song & chart and Score columns. Columns you have already shown or hidden keep your choice. The Tap judgments columns (W1–W5 and Miss) come from the same best score as the Score columns.
 - Scroll horizontally if the columns you turn on are wider than the window.
 - **Export CSV** writes the full library (not just the filtered rows) for use in other tools.
-- Select charts with Ctrl/Shift-click and choose **Build course…** to create an ordered course queue. You can add more charts, remove entries, reorder them, save a new `.CRS` file, or append the queued charts to an existing course. Appending preserves the existing file bytes and stops with a warning if trailing `#MODS` or `#GAINSECONDS` directives could affect the appended entries.
+- Select charts with Ctrl/Shift-click and choose **Build course…** to create an ordered course queue. You can add more charts, remove entries, reorder them, save a new `.CRS` file, or append the queued charts to an existing course. Appending preserves the existing file bytes and stops with a warning if trailing `#MODS` or `#GAINSECONDS` directives could affect the appended entries (including after `#SONGSELECT` directives).
 
-New courses contain a `#COURSE:title;` line followed by one `#SONG:path:difficulty:;` line per queued chart. The app does not edit existing chart entries or modifiers when appending.
+New courses contain a `#COURSE:title;` line followed by one `#SONG:path:difficulty:;` line per queued chart. Existing courses can use either two-field (`#SONG:path:diff;`) or three-field directives, or `#SONGSELECT`. Titles, paths, and difficulties cannot contain semicolons, colons, newlines, or `//` comment markers. The app does not edit existing chart entries or modifiers when appending.
 
 The table includes chart meter, peak NPS, radar note counts, the player's highest `PercentDP` score for the chart, grade, play count, last played date, best-score tap judgments and combo, and cached tech counts. `Stats.xml` scores are matched to cached charts by song directory, steps type, and difficulty.
 

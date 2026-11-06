@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import library_visualizer as app
 
@@ -293,6 +293,74 @@ class RowTintTests(unittest.TestCase):
 
         instance.tree.item.assert_not_called()
         self.assertEqual(instance._selected_tree_items, set())
+
+
+class CourseBuilderValidationTests(unittest.TestCase):
+    def test_validate_course_entries_delegates_and_rejects_unsafe_comments(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.course_window = Mock()
+        instance.course_entries = [{"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"}]
+
+        mock_mb = Mock()
+        with patch.object(app, "messagebox", mock_mb):
+            valid = instance.validate_course_entries("Bad // Title")
+            self.assertFalse(valid)
+            mock_mb.showerror.assert_called_once()
+            self.assertIn("//", mock_mb.showerror.call_args[0][1])
+
+    def test_validate_course_entries_accepts_clean_entries(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.course_window = Mock()
+        instance.course_entries = [{"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"}]
+
+        mock_mb = Mock()
+        with patch.object(app, "messagebox", mock_mb):
+            valid = instance.validate_course_entries("Clean Title")
+            self.assertTrue(valid)
+            mock_mb.showerror.assert_not_called()
+
+    def _validate(self, entries, *title_argument):
+        """Run validate_course_entries with a fake message box; return (result, mock message box)."""
+        instance = object.__new__(app.LibraryApp)
+        instance.course_window = Mock()
+        instance.course_entries = entries
+        mock_mb = Mock()
+        with patch.object(app, "messagebox", mock_mb):
+            return instance.validate_course_entries(*title_argument), mock_mb
+
+    def test_append_flow_validates_without_a_title(self):
+        # Appending to an existing course calls validate_course_entries() with no title, so a missing title
+        # must not be reported as an error.
+        entry = {"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"}
+        valid, mock_mb = self._validate([entry])
+        self.assertTrue(valid)
+        mock_mb.showerror.assert_not_called()
+
+        valid, mock_mb = self._validate([])
+        self.assertFalse(valid)
+        self.assertEqual(mock_mb.showerror.call_args[0][1], "Add at least one chart to the course.")
+
+        valid, mock_mb = self._validate([{**entry, "Course path": "Pack//Song"}])
+        self.assertFalse(valid)
+        self.assertIn("//", mock_mb.showerror.call_args[0][1])
+
+    def test_every_validation_error_uses_the_same_dialog_title(self):
+        entry = {"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"}
+        cases = (
+            ([entry], "Bad // Title"),
+            ([entry], "Bad: Title"),
+            ([], "Title"),
+            ([{**entry, "Difficulty": ""}], "Title"),
+            ([{**entry, "Course path": "Pack;Song"}], "Title"),
+        )
+        titles = set()
+        for entries, title in cases:
+            with self.subTest(title=title, entries=entries):
+                valid, mock_mb = self._validate(entries, title)
+                self.assertFalse(valid)
+                mock_mb.showerror.assert_called_once()
+                titles.add(mock_mb.showerror.call_args[0][0])
+        self.assertEqual(len(titles), 1)
 
 
 if __name__ == "__main__":

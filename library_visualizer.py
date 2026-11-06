@@ -63,6 +63,7 @@ from library_data import (
     replace_search_directive,
     split_dialog_query,
     stats_index,
+    validate_course_fields,
 )
 
 SEARCH_DEBOUNCE_MS = 200
@@ -1485,28 +1486,11 @@ class LibraryApp:
         self.refresh_course_queue(sorted(moving))
 
     def validate_course_entries(self, title=None):
-        title = (title or "").strip()
-        if title and any(char in title for char in (";", ":", "\r", "\n")):
-            messagebox.showerror(
-                "Unsupported course text",
-                "Course titles cannot contain semicolons, colons, or newlines.",
-                parent=self.course_window,
-            )
-            return False
-        if not self.course_entries:
-            messagebox.showerror("No charts added", "Add at least one chart to the course.", parent=self.course_window)
-            return False
-        if any(not row.get("Course path") or not row.get("Difficulty") for row in self.course_entries):
-            messagebox.showerror("Missing chart data", "One or more selected charts are missing a song path or difficulty.",
-                                 parent=self.course_window)
-            return False
-        text_fields = [row["Course path"] for row in self.course_entries]
-        if any(any(char in value for char in (";", ":", "\r", "\n")) for value in text_fields):
-            messagebox.showerror(
-                "Unsupported course text",
-                "Song paths cannot contain semicolons, colons, or newlines.",
-                parent=self.course_window,
-            )
+        error = validate_course_fields(self.course_entries, title)
+        if error:
+            # One title for every validation error: the message says what is wrong, and this check runs for
+            # both saving a new course and appending to one.
+            messagebox.showerror("Course problem", error, parent=self.course_window)
             return False
 
         types = sorted({row.get("Type", "") for row in self.course_entries if row.get("Type")})
