@@ -363,5 +363,114 @@ class CourseBuilderValidationTests(unittest.TestCase):
         self.assertEqual(len(titles), 1)
 
 
+class RefreshGenerationTests(unittest.TestCase):
+    def test_load_worker_ignores_superseded_generation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache"
+            cache_dir.mkdir()
+            (cache_dir / "test.cache").write_text("#SONGFILENAME:Songs/P/S/a.ogg;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n", encoding="utf-8")
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>", encoding="utf-8")
+
+            instance = object.__new__(app.LibraryApp)
+            instance._load_generation = 2
+            instance._save_library_cache = Mock()
+            instance.root = Mock()
+
+            # Run worker with stale generation 1
+            instance._load_worker(cache_dir, stats_file, generation=1)
+
+            instance._save_library_cache.assert_not_called()
+            instance.root.after.assert_not_called()
+
+    def test_loaded_and_load_failed_ignore_stale_generation(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_generation = 5
+        instance.progress = Mock()
+        instance.status = Mock()
+        instance.refresh_table = Mock()
+        mock_mb = Mock()
+
+        with patch.object(app, "messagebox", mock_mb):
+            # Stale _loaded call (generation 4 < 5)
+            instance._loaded([], 0, generation=4)
+            instance.progress.stop.assert_not_called()
+            instance.refresh_table.assert_not_called()
+
+            # Stale _load_failed call
+            instance._load_failed("Some error", generation=4)
+            instance.progress.stop.assert_not_called()
+            mock_mb.showerror.assert_not_called()
+
+            # Current generation works
+            instance._load_failed("Real error", generation=5)
+            instance.progress.stop.assert_called_once()
+            mock_mb.showerror.assert_called_once_with("Could not load library", "Real error")
+
+
+class DialogKeyBindingTests(unittest.TestCase):
+    def test_open_advanced_search_binds_escape_and_return(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.root = Mock()
+        instance.advanced_search_window = None
+        instance.search_var = Mock()
+        instance.search_entry = Mock()
+        instance.clear_search = Mock()
+
+        mock_window = Mock()
+        bindings = {}
+        def mock_bind(seq, func):
+            bindings[seq] = func
+        mock_window.bind.side_effect = mock_bind
+        mock_tk = Mock()
+        mock_tk.Toplevel.return_value = mock_window
+        mock_ttk = Mock()
+
+        with patch.object(app, "tk", mock_tk), patch.object(app, "ttk", mock_ttk):
+            instance._button = Mock(return_value=Mock())
+            instance.open_advanced_search()
+
+        self.assertIn("<Escape>", bindings)
+        self.assertIn("<Return>", bindings)
+
+        # Invoking escape callback calls window.destroy, returns 'break', and does NOT call clear_search
+        res_esc = bindings["<Escape>"]()
+        self.assertEqual(res_esc, "break")
+        mock_window.destroy.assert_called_once()
+        instance.clear_search.assert_not_called()
+
+        # Invoking return callback applies and returns 'break'
+        res_ret = bindings["<Return>"]()
+        self.assertEqual(res_ret, "break")
+
+    def test_open_course_builder_binds_escape(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.root = Mock()
+        instance.course_window = None
+        instance.clear_search = Mock()
+        instance.tree = Mock()
+        instance.tree.selection.return_value = []
+
+        mock_window = Mock()
+        bindings = {}
+        def mock_bind(seq, func):
+            bindings[seq] = func
+        mock_window.bind.side_effect = mock_bind
+        mock_tk = Mock()
+        mock_tk.Toplevel.return_value = mock_window
+        mock_ttk = Mock()
+
+        with patch.object(app, "tk", mock_tk), patch.object(app, "ttk", mock_ttk):
+            instance._button = Mock(return_value=Mock())
+            instance.open_course_builder()
+
+        self.assertIn("<Escape>", bindings)
+        res_esc = bindings["<Escape>"]()
+        self.assertEqual(res_esc, "break")
+        mock_window.destroy.assert_called_once()
+        instance.clear_search.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
