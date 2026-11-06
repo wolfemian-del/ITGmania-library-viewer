@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -289,6 +290,14 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(tags["ARTIST"], "Artist #9 & Friends")
         self.assertEqual(tags["GENRE"], "Dance")
         self.assertEqual(data.parse_bpms(tags["BPMS"]), (120.0, 160.0))
+
+    def test_tag_map_does_not_backtrack_over_blank_lines_in_unterminated_value(self):
+        text = "#TITLE:" + "\n" * 25 + "unterminated\n#ARTIST:Artist;"
+        started = time.perf_counter()
+        tags = data.tag_map(text)
+        elapsed = time.perf_counter() - started
+        self.assertEqual(tags, {"ARTIST": "Artist"})
+        self.assertLess(elapsed, 1.0)
 
     def test_cache_file_parses_multiline_bpms_correctly(self):
         with tempfile.TemporaryDirectory() as directory:

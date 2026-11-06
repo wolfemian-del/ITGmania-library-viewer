@@ -178,8 +178,10 @@ def tag_map(text: str) -> dict[str, str]:
     # ITGmania MSD tags start with #KEY: and end at an unescaped ;.
     # Values may span lines (e.g. multi-segment #BPMS joined with ',\r\n' or ',\n').
     # A backslash escapes the next character (e.g. \; is a literal semicolon, \\ is a literal backslash).
-    # Line breaks are consumed as long as they are not followed by '#' (which begins a new tag line).
-    for m in re.finditer(r"(?m)^#([^:;\r\n]+):((?:\\.|[^;\\\r\n]|[\r\n]+(?!#))*);", text):
+    # Line breaks are consumed as whole CRLF/LF/CR units as long as they are not
+    # followed by '#' (which begins a new tag line). Matching each unit in only
+    # one way keeps the alternatives disjoint and parsing linear-time.
+    for m in re.finditer(r"(?m)^#([^:;\r\n]+):((?:\\.|[^;\\\r\n]|(?:\r\n(?!#)|\r(?!\n)(?!#)|\n(?!#)))*);", text):
         raw_val = m.group(2).strip()
         decoded_val = re.sub(r"\\(.)", r"\1", raw_val)
         tags[m.group(1).upper()] = decoded_val
