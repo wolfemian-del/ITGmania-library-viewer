@@ -141,7 +141,7 @@ class ParsingTests(unittest.TestCase):
     def test_cache_peak_nps_is_parsed_when_present(self):
         with tempfile.TemporaryDirectory() as directory:
             cache_file = Path(directory) / "peak.cache"
-            # Single value (legacy/synthetic)
+            # One value: what ITGmania writes for ordinary charts such as dance-single
             cache_file.write_text(
                 "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
                 "#NOTEDATA:;\n"
@@ -153,11 +153,11 @@ class ParsingTests(unittest.TestCase):
             row = data.parse_cache_file(cache_file, {})[0]
             self.assertEqual(row["Peak NPS"], 12.5)
 
-            # Piped player sections (ITGmania standard: P1|P2)
+            # Two values, one per player: written only for couples and routine charts
             cache_file.write_text(
                 "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
                 "#NOTEDATA:;\n"
-                "#STEPSTYPE:dance-single;\n"
+                "#STEPSTYPE:dance-couple;\n"
                 "#DIFFICULTY:Hard;\n"
                 "#PEAKNPS:14.250|14.250;\n",
                 encoding="utf-8",
@@ -165,11 +165,11 @@ class ParsingTests(unittest.TestCase):
             row_piped = data.parse_cache_file(cache_file, {})[0]
             self.assertEqual(row_piped["Peak NPS"], 14.25)
 
-            # Asymmetric piped player sections
+            # Different values per player: the first player's value is used
             cache_file.write_text(
                 "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
                 "#NOTEDATA:;\n"
-                "#STEPSTYPE:dance-single;\n"
+                "#STEPSTYPE:dance-couple;\n"
                 "#DIFFICULTY:Hard;\n"
                 "#PEAKNPS:16.8|10.5;\n",
                 encoding="utf-8",
@@ -218,6 +218,62 @@ class ParsingTests(unittest.TestCase):
             scores = data.stats_index(stats_file)
 
         self.assertEqual(scores[("pack/song", "dance-single", "hard")]["Score"], "456")
+
+    def test_additionalsongs_score_attaches_to_cached_chart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores>"
+                "<Song Dir='AdditionalSongs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Hard'>"
+                "<HighScoreList NumTimesPlayed='3'>"
+                "<HighScore><PercentDP>0.96</PercentDP><Score>456</Score></HighScore>"
+                "</HighScoreList></Steps></Song>"
+                "</SongScores></Stats>",
+                encoding="utf-8",
+            )
+            cache_file = Path(directory) / "song.cache"
+            cache_file.write_text(
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Hard;\n",
+                encoding="utf-8",
+            )
+            rows = data.parse_cache_file(cache_file, data.stats_index(stats_file))
+
+        self.assertEqual(rows[0]["Score"], 456)
+
+    def test_stats_index_merges_legacy_additionalsongs_and_songs_entries(self):
+        legacy = (
+            "<Song Dir='AdditionalSongs/Pack/Song'>"
+            "<Steps StepsType='dance-single' Difficulty='Hard'>"
+            "<HighScoreList><NumTimesPlayed>9</NumTimesPlayed>"
+            "<HighScore><PercentDP>0.90</PercentDP><Score>100</Score></HighScore>"
+            "</HighScoreList></Steps></Song>"
+        )
+        current = (
+            "<Song Dir='Songs/Pack/Song'>"
+            "<Steps StepsType='dance-single' Difficulty='Hard'>"
+            "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+            "<HighScore><PercentDP>0.95</PercentDP><Score>200</Score></HighScore>"
+            "</HighScoreList></Steps></Song>"
+        )
+        # The legacy entry has more plays, the current one the better score; the merged
+        # result must keep both, whichever entry comes first in the file.
+        for label, entries in (("legacy first", legacy + current), ("current first", current + legacy)):
+            with self.subTest(label), tempfile.TemporaryDirectory() as directory:
+                stats_file = Path(directory) / "Stats.xml"
+                stats_file.write_text(
+                    f"<Stats><SongScores>{entries}</SongScores></Stats>", encoding="utf-8")
+                entry = data.stats_index(stats_file)[("pack/song", "dance-single", "hard")]
+            self.assertEqual(entry["Score"], "200")
+            self.assertEqual(entry["plays"], "9")
+
+    def test_tag_map_decodes_escaped_slashes(self):
+        # ITGmania writes "//" in text as "\/\/" so it is not read as a comment.
+        tags = data.tag_map("#SONGFILENAME:Songs/Pack/My\\/\\/Song/audio.ogg;\n")
+        self.assertEqual(tags["SONGFILENAME"], "Songs/Pack/My//Song/audio.ogg")
 
     def test_stats_index_reads_score_and_ignores_case_in_matching_key(self):
         with tempfile.TemporaryDirectory() as directory:
