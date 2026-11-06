@@ -209,7 +209,7 @@ class ParsingTests(unittest.TestCase):
                 "<Stats><SongScores>"
                 "<Song Dir='AdditionalSongs/Pack/Song'>"
                 "<Steps StepsType='dance-single' Difficulty='Hard'>"
-                "<HighScoreList NumTimesPlayed='3'>"
+                "<HighScoreList><NumTimesPlayed>3</NumTimesPlayed>"
                 "<HighScore><PercentDP>0.96</PercentDP><Score>456</Score></HighScore>"
                 "</HighScoreList></Steps></Song>"
                 "</SongScores></Stats>",
@@ -218,6 +218,7 @@ class ParsingTests(unittest.TestCase):
             scores = data.stats_index(stats_file)
 
         self.assertEqual(scores[("pack/song", "dance-single", "hard")]["Score"], "456")
+        self.assertEqual(scores[("pack/song", "dance-single", "hard")]["plays"], "3")
 
     def test_additionalsongs_score_attaches_to_cached_chart(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -226,7 +227,7 @@ class ParsingTests(unittest.TestCase):
                 "<Stats><SongScores>"
                 "<Song Dir='AdditionalSongs/Pack/Song'>"
                 "<Steps StepsType='dance-single' Difficulty='Hard'>"
-                "<HighScoreList NumTimesPlayed='3'>"
+                "<HighScoreList><NumTimesPlayed>3</NumTimesPlayed>"
                 "<HighScore><PercentDP>0.96</PercentDP><Score>456</Score></HighScore>"
                 "</HighScoreList></Steps></Song>"
                 "</SongScores></Stats>",
@@ -243,6 +244,7 @@ class ParsingTests(unittest.TestCase):
             rows = data.parse_cache_file(cache_file, data.stats_index(stats_file))
 
         self.assertEqual(rows[0]["Score"], 456)
+        self.assertEqual(rows[0]["Plays"], 3)
 
     def test_stats_index_merges_legacy_additionalsongs_and_songs_entries(self):
         legacy = (
@@ -280,7 +282,7 @@ class ParsingTests(unittest.TestCase):
             stats_file = Path(directory) / "Stats.xml"
             stats_file.write_text(
                 "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
-                "<Steps StepsType='dance-single' Difficulty='Hard'><HighScoreList NumTimesPlayed='2'>"
+                "<Steps StepsType='dance-single' Difficulty='Hard'><HighScoreList><NumTimesPlayed>2</NumTimesPlayed>"
                 "<HighScore><PercentDP>0.97</PercentDP><Score>123</Score></HighScore>"
                 "</HighScoreList></Steps></Song></SongScores></Stats>",
                 encoding="utf-8",
@@ -288,6 +290,7 @@ class ParsingTests(unittest.TestCase):
             scores = data.stats_index(stats_file)
 
         self.assertEqual(scores[("pack/song", "dance-single", "hard")]["Score"], "123")
+        self.assertEqual(scores[("pack/song", "dance-single", "hard")]["plays"], "2")
 
     def test_stats_index_keeps_best_score_across_duplicate_normalized_paths(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -296,12 +299,12 @@ class ParsingTests(unittest.TestCase):
                 "<Stats><SongScores>"
                 "<Song Dir='/home/player/ITGmania/Songs/Pack/Song'>"
                 "<Steps StepsType='dance-single' Difficulty='Hard'>"
-                "<HighScoreList NumTimesPlayed='8' LastPlayed='2026-01-01'>"
+                "<HighScoreList><NumTimesPlayed>8</NumTimesPlayed><LastPlayed>2026-01-01</LastPlayed>"
                 "<HighScore><PercentDP>0.99</PercentDP><Score>999</Score></HighScore>"
                 "</HighScoreList></Steps></Song>"
                 "<Song Dir='Songs/Pack/Song'>"
                 "<Steps StepsType='dance-single' Difficulty='Hard'>"
-                "<HighScoreList NumTimesPlayed='5' LastPlayed='2026-02-01'>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
                 "<HighScore><PercentDP>0.95</PercentDP><Score>950</Score></HighScore>"
                 "</HighScoreList></Steps></Song>"
                 "</SongScores></Stats>",
@@ -312,6 +315,10 @@ class ParsingTests(unittest.TestCase):
         entry = scores[("pack/song", "dance-single", "hard")]
         self.assertEqual(entry["Score"], "999")
         self.assertEqual(entry["PercentDP"], "0.99")
+        # The duplicate entries disagree on plays and last-played, so the merged
+        # entry must keep the highest play count and the latest date.
+        self.assertEqual(entry["plays"], "8")
+        self.assertEqual(entry["last_played"], "2026-02-01")
 
     def test_stats_index_accepts_profile_with_no_song_scores(self):
         with tempfile.TemporaryDirectory() as directory:
