@@ -457,6 +457,45 @@ class CourseModelTests(unittest.TestCase):
         text = "#COURSE:Example;\n#MODS:xmod;\n#SONGSELECT:METER=10;\n"
         self.assertIsNone(data.course_trailing_risk(text))
 
+    def test_course_trailing_risk_ignores_commented_out_song(self):
+        # A commented-out #SONG is not a real entry, so a #MODS before it
+        # still trails the last real song (issue #56).
+        text = (
+            "#COURSE:Example;\n"
+            "#SONG:Pack/One:Hard;\n"
+            "#MODS:TIME=0:LEN=5:MODS=failoff;\n"
+            "// #SONG:Pack/Old:Hard;\n"
+        )
+        self.assertEqual(data.course_trailing_risk(text), "MODS")
+        self.assertEqual(data.parse_course_text(text)["trailing_risk"], "MODS")
+
+    def test_course_trailing_risk_ignores_commented_out_directives(self):
+        for commented in ("//#MODS:xmod;", "// #GAINSECONDS:10;"):
+            with self.subTest(commented=commented):
+                text = f"#COURSE:Example;\n#SONG:Pack/One:Hard:;\n{commented}\n"
+                self.assertIsNone(data.course_trailing_risk(text))
+
+    def test_parse_course_text_ignores_comments(self):
+        text = (
+            "#COURSE:Example; // title note\n"
+            "// #SONG:Pack/Old:Hard:;\n"
+            "#SONG:Pack/One:Hard:; // trailing note\n"
+        )
+        parsed = data.parse_course_text(text)
+        self.assertEqual(parsed["title"], "Example")
+        self.assertEqual(
+            [(song["path"], song["difficulty"]) for song in parsed["songs"]],
+            [("Pack/One", "Hard")],
+        )
+        self.assertIsNone(parsed["trailing_risk"])
+
+    def test_course_scan_treats_escaped_slashes_as_not_a_comment(self):
+        # \/\/ is an escaped slash pair, so the #MODS after it is real.
+        text = "#COURSE:Example;\n#SONG:Pack/One:Hard:; \\/\\/ #MODS:xmod;\n"
+        self.assertEqual(data.course_trailing_risk(text), "MODS")
+        parsed = data.parse_course_text("#COURSE:My \\/\\/ Course;\n#SONG:Pack/One:Hard:;\n")
+        self.assertEqual(parsed["title"], "My \\/\\/ Course")
+
     def test_validate_course_fields_rejects_empty_and_unsafe_text(self):
         self.assertEqual(data.validate_course_fields([]), "Add at least one chart to the course.")
         self.assertEqual(
@@ -576,6 +615,24 @@ class CourseAppendTests(unittest.TestCase):
     def test_refuses_files_that_are_not_courses(self):
         with self.assertRaisesRegex(ValueError, "#COURSE"):
             data.course_append_bytes(b"#TITLE:Not a course;", ["#SONG:Pack/Two:Challenge:;"])
+
+    def test_refuses_mods_hidden_by_commented_out_song(self):
+        existing = (
+            b"#COURSE:Existing;\n#SONG:Pack/One:Hard;\n"
+            b"#MODS:TIME=0:LEN=5:MODS=failoff;\n// #SONG:Pack/Old:Hard;\n"
+        )
+        with self.assertRaisesRegex(ValueError, "ends with #MODS"):
+            data.course_append_bytes(existing, ["#SONG:Pack/Two:Challenge:;"])
+
+    def test_allows_commented_out_trailing_directives(self):
+        existing = b"#COURSE:Existing;\n#SONG:Pack/One:Hard:;\n//#MODS:xmod;\n"
+        addition = data.course_append_bytes(existing, ["#SONG:Pack/Two:Challenge:;"])
+        self.assertEqual(addition, b"#SONG:Pack/Two:Challenge:;\n")
+
+    def test_refuses_course_whose_only_entries_are_commented_out(self):
+        existing = b"#COURSE:Existing;\n// #SONG:Pack/Old:Hard;\n"
+        with self.assertRaisesRegex(ValueError, "at least one #SONG"):
+            data.course_append_bytes(existing, ["#SONG:Pack/Two:Challenge:;"])
 
 
 class SearchQueryTests(unittest.TestCase):
