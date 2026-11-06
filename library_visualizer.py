@@ -185,7 +185,8 @@ class LibraryApp:
         self._current_dist_bars = []
         self._last_visible_rows = []
         self._selected_tree_items = set()  # table rows currently carrying the white "selected_row" tag
-        self._load_generation = 0
+        self._load_generation = 0  # counts Load / refresh requests; a scan from an older request is dropped
+        self._snapshot_lock = threading.Lock()  # one scan at a time may check its generation and write the snapshot
         self._style()
         self._build()
         self.search_var.trace_add("write", lambda *_: self._schedule_search_refresh())
@@ -713,7 +714,12 @@ class LibraryApp:
         generation = self._load_generation
         threading.Thread(target=self._load_worker, args=(cache, stats, generation), daemon=True).start()
 
-    def _load_worker(self, cache: Path, stats_file: Path, generation: int = 0):
+    def _load_is_stale(self, generation):
+        return self._load_generation != generation
+
+    def _load_worker(self, cache: Path, stats_file: Path, generation: int):
+        # A scan whose generation is no longer the latest stops quietly. The newer scan keeps the
+        # progress bar running, and _loaded / _load_failed ignore anything from an older generation.
         try:
             scores = stats_index(stats_file)
             rows = []
@@ -721,9 +727,7 @@ class LibraryApp:
             skipped_files = 0
             files_without_charts = 0
             for path in files:
-                # If superseded by a newer load request, silently abort early.
-                # The progress bar is kept running by the active load.
-                if getattr(self, "_load_generation", 0) != generation:
+                if self._load_is_stale(generation):
                     return
                 try:
                     chart_rows = parse_cache_file(path, scores)
@@ -733,21 +737,21 @@ class LibraryApp:
                 except (OSError, UnicodeError):
                     skipped_files += 1
 
-            if getattr(self, "_load_generation", 0) != generation:
-                return
-
             nested_song_tree = looks_like_song_tree(cache) if not files else False
             cache_error = ""
-            try:
-                refreshed_at = self._save_library_cache(
-                    cache, stats_file, rows, len(files), skipped_files,
-                    files_without_charts, nested_song_tree)
-            except (OSError, TypeError, ValueError) as exc:
-                refreshed_at = ""
-                cache_error = str(exc)
-
-            if getattr(self, "_load_generation", 0) != generation:
-                return
+            # The generation check and the snapshot write happen under one lock. Without it, an older
+            # scan that passed the check could still be writing after a newer scan had written its
+            # own snapshot, leaving the older data on disk.
+            with self._snapshot_lock:
+                if self._load_is_stale(generation):
+                    return
+                try:
+                    refreshed_at = self._save_library_cache(
+                        cache, stats_file, rows, len(files), skipped_files,
+                        files_without_charts, nested_song_tree)
+                except (OSError, TypeError, ValueError) as exc:
+                    refreshed_at = ""
+                    cache_error = str(exc)
 
             self.root.after(0, lambda: self._loaded(
                 rows, len(files), skipped_files, files_without_charts, nested_song_tree,
@@ -755,21 +759,18 @@ class LibraryApp:
                 source_paths=(str(cache), str(stats_file)),
                 generation=generation))
         except ET.ParseError as exc:
-            if getattr(self, "_load_generation", 0) == generation:
-                self.root.after(0, lambda message=str(exc): self._load_failed(
-                    f"Stats.xml is malformed or incomplete and could not be parsed.\n\n{message}",
-                    generation=generation))
+            self.root.after(0, lambda message=str(exc): self._load_failed(
+                f"Stats.xml is malformed or incomplete and could not be parsed.\n\n{message}",
+                generation=generation))
         except OSError as exc:
-            if getattr(self, "_load_generation", 0) == generation:
-                self.root.after(0, lambda message=str(exc): self._load_failed(
-                    f"Could not read the selected cache folder or Stats.xml.\n\n{message}",
-                    generation=generation))
+            self.root.after(0, lambda message=str(exc): self._load_failed(
+                f"Could not read the selected cache folder or Stats.xml.\n\n{message}",
+                generation=generation))
         except Exception as exc:
-            if getattr(self, "_load_generation", 0) == generation:
-                self.root.after(0, lambda message=str(exc): self._load_failed(message, generation=generation))
+            self.root.after(0, lambda message=str(exc): self._load_failed(message, generation=generation))
 
     def _load_failed(self, message, generation=None):
-        if generation is not None and getattr(self, "_load_generation", 0) != generation:
+        if generation is not None and self._load_is_stale(generation):
             return
         self.progress.stop()
         self.status.set("Could not load library.")
@@ -777,7 +778,7 @@ class LibraryApp:
 
     def _loaded(self, rows, files, skipped_files=0, files_without_charts=0, nested_song_tree=False,
                 refreshed_at="", cache_error="", from_cache=False, source_paths=None, generation=None):
-        if generation is not None and getattr(self, "_load_generation", 0) != generation:
+        if generation is not None and self._load_is_stale(generation):
             return
         self.progress.stop()
         self.rows = rows
@@ -1467,6 +1468,13 @@ class LibraryApp:
         self._button(controls, "Save new .CRS…", self.export_course, primary=True).pack(side="right")
 
         def _close(_event=None):
+            # Reopening this window starts an empty queue, so closing with charts queued loses them.
+            queued = len(self.course_entries)
+            if queued and not messagebox.askyesno(
+                    "Discard course queue?",
+                    f"Closing this window discards the {queued} queued chart(s). Close anyway?",
+                    parent=window):
+                return "break"
             window.destroy()
             return "break"
 
