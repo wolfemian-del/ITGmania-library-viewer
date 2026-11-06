@@ -451,6 +451,68 @@ class ParsingTests(unittest.TestCase):
 
         self.assertEqual(rows[0]["Score"], 920000)
 
+    def test_edit_chart_without_description_uses_described_stats_score(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores>"
+                "<Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Edit' Description='Alpha Edit'>"
+                "<HighScoreList><NumTimesPlayed>7</NumTimesPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            cache_file = Path(directory) / "edits.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Edit;\n",
+                encoding="utf-8",
+            )
+            rows = data.parse_cache_file(cache_file, data.stats_index(stats_file))
+
+        self.assertEqual(rows[0]["Score"], 950000)
+        self.assertEqual(rows[0]["Plays"], 7)
+
+    def test_edit_chart_without_description_merges_described_stats_scores(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores>"
+                "<Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Edit' Description='Alpha Edit'>"
+                "<HighScoreList><NumTimesPlayed>9</NumTimesPlayed><LastPlayed>2026-01-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "<Steps StepsType='dance-single' Difficulty='Edit' Description='Beta Edit'>"
+                "<HighScoreList><NumTimesPlayed>7</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.99</PercentDP><Score>990000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            cache_file = Path(directory) / "edits.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Edit;\n",
+                encoding="utf-8",
+            )
+            rows = data.parse_cache_file(cache_file, data.stats_index(stats_file))
+
+        # With no description on the cache side the viewer cannot tell the two
+        # Edits apart, so it keeps the pre-isolation merged result: best score,
+        # highest play count and latest last-played date across both entries.
+        self.assertEqual(rows[0]["Score"], 990000)
+        self.assertEqual(rows[0]["Plays"], 9)
+        self.assertEqual(rows[0]["Last played"], "2026-02-01")
+
     def test_stats_index_reads_score_and_ignores_case_in_matching_key(self):
         with tempfile.TemporaryDirectory() as directory:
             stats_file = Path(directory) / "Stats.xml"

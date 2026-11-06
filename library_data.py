@@ -252,6 +252,34 @@ def stats_index(stats_file: Path) -> dict[tuple, dict]:
     return result
 
 
+def _merged_edit_fallback(scores: dict, base_key: tuple[str, str, str]) -> dict:
+    """Rebuild the shared Edit score used when the cache chart has no description.
+
+    stats_index keeps described Edits apart, but a cache chart without a
+    description cannot be matched to one of them. In that case keep the
+    pre-isolation result: the best score entry, the highest play count and
+    the latest last-played date across the song's Edit entries (including an
+    undescribed entry stored under the plain 3-tuple key).
+    """
+    candidates = [entry for key, entry in scores.items()
+                  if isinstance(key, tuple) and len(key) in (3, 4) and key[:3] == base_key]
+    if not candidates:
+        return {}
+    scored = [entry for entry in candidates if "PercentDP" in entry]
+    merged = dict(max(scored, key=lambda entry: number(entry.get("PercentDP")))
+                  if scored else candidates[0])
+    plays = candidates[0].get("plays", "0")
+    last_played = candidates[0].get("last_played", "")
+    for entry in candidates[1:]:
+        if number(entry.get("plays")) > number(plays):
+            plays = entry.get("plays", "0")
+        if entry.get("last_played", "") > last_played:
+            last_played = entry.get("last_played", "")
+    merged["plays"] = plays
+    merged["last_played"] = last_played
+    return merged
+
+
 def parse_cache_file(path: Path, scores: dict) -> list[dict]:
     # Cache files are UTF-8 Simfile text; split away the song metadata before chart parsing.
     text = path.read_text(encoding="utf-8-sig", errors="replace")
@@ -280,12 +308,18 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
         # #CHARTNAME is only a fallback for caches where the description landed
         # there instead (older SSC loading), not a replacement for it.
         score_description = tags.get("DESCRIPTION", "").strip() or tags.get("CHARTNAME", "").strip()
+        base_key = (song_dir.casefold(), chart_type.casefold(), difficulty.casefold())
         if difficulty.casefold() == "edit" and score_description:
-            key = (song_dir.casefold(), chart_type.casefold(), "edit", score_description.casefold())
-            score = scores.get(key) or scores.get((song_dir.casefold(), chart_type.casefold(), "edit"), {})
+            score = scores.get((*base_key, score_description.casefold()))
+            if score is None:
+                # The Stats entry itself has no description: use its shared key.
+                score = scores.get(base_key, {})
+        elif difficulty.casefold() == "edit":
+            # The cache chart has no description: fall back to the shared
+            # result across the song's Edit entries, described or not.
+            score = _merged_edit_fallback(scores, base_key)
         else:
-            key = (song_dir.casefold(), chart_type.casefold(), difficulty.casefold())
-            score = scores.get(key, {})
+            score = scores.get(base_key, {})
         percent = number(score.get("PercentDP")) * 100
         rows.append({
             "Title": song_tags.get("TITLE", path.stem), "Artist": song_tags.get("ARTIST", ""),
