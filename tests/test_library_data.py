@@ -51,6 +51,7 @@ class ParsingTests(unittest.TestCase):
             "#TAG_WITH_BACKSLASH:Prefix\\\\Suffix;\n"
             "#TAG_ENDING_IN_SEMI:Ending with semi\\;;\n"
             "#TAG_WITH_ESCAPED_BACKSLASH_THEN_SEMI:Path\\\\;\n"
+            "#TAG_WITH_ESCAPED_COLON:Key\\:Value;\n"
             "#NORMAL:NormalValue;\n"
         )
         tags = data.tag_map(text)
@@ -59,6 +60,7 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(tags["TAG_WITH_BACKSLASH"], "Prefix\\Suffix")
         self.assertEqual(tags["TAG_ENDING_IN_SEMI"], "Ending with semi;")
         self.assertEqual(tags["TAG_WITH_ESCAPED_BACKSLASH_THEN_SEMI"], "Path\\")
+        self.assertEqual(tags["TAG_WITH_ESCAPED_COLON"], "Key:Value")
         self.assertEqual(tags["NORMAL"], "NormalValue")
 
     def test_cache_chart_matches_stats_by_normalized_key(self):
