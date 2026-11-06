@@ -659,13 +659,20 @@ def match_chart_query(row: dict, query: str | dict) -> bool:
             if raw_val.casefold() not in str(row.get("Type", "")).casefold():
                 return False
         elif field == "grade":
-            chart_grade = str(row.get("Grade", ""))
+            chart_grade = str(row.get("Grade", "")).strip()
             if raw_val.startswith((">=", "<=", ">", "<")):
+                if not chart_grade:
+                    return False
                 op = raw_val[:2] if raw_val[:2] in (">=", "<=") else raw_val[:1]
                 target_grade = raw_val[len(op):].strip()
-                c_rank = grade_sort_key(chart_grade)
-                t_rank = grade_sort_key(target_grade)
-                # Lower grade_sort_key rank means higher/better grade
+                target_key = target_grade.casefold()
+                if target_key not in GRADE_RANK:
+                    return False
+                c_rank = GRADE_RANK.get(chart_grade.casefold())
+                if c_rank is None:
+                    return False
+                t_rank = GRADE_RANK[target_key]
+                # Lower GRADE_RANK index means higher/better grade
                 if op == ">=" and not (c_rank <= t_rank):
                     return False
                 if op == "<=" and not (c_rank >= t_rank):
