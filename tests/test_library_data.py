@@ -10,16 +10,58 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(data.split_path("Songs/Pack/Song"), "Pack/Song")
         self.assertEqual(data.split_path("/Songs/Pack/Song"), "Pack/Song")
         self.assertEqual(data.split_path("Songs\\Pack\\Song"), "Pack/Song")
+        self.assertEqual(data.split_path("AdditionalSongs/Pack/Song"), "Pack/Song")
+        self.assertEqual(data.split_path("/AdditionalSongs/Pack/Song"), "Pack/Song")
+        self.assertEqual(data.split_path("AdditionalSongs\\Pack\\Song"), "Pack/Song")
+
+    def test_split_path_case_insensitivity_and_precedence(self):
+        self.assertEqual(data.split_path("additionalsongs/Pack/Song"), "Pack/Song")
+        self.assertEqual(data.split_path("ADDITIONALSONGS/Pack/Song"), "Pack/Song")
+        self.assertEqual(data.split_path("songs/Pack/Song"), "Pack/Song")
+        # When both occur in a path, the first matching component wins
+        self.assertEqual(
+            data.split_path("/Archive/Songs/Backup/AdditionalSongs/Pack/Song"),
+            "Backup/AdditionalSongs/Pack/Song",
+        )
+        self.assertEqual(
+            data.split_path("/Archive/AdditionalSongs/Backup/Songs/Pack/Song"),
+            "Backup/Songs/Pack/Song",
+        )
 
     def test_split_path_normalizes_filesystem_absolute_paths(self):
         self.assertEqual(
             data.split_path(r"C:\Games\ITGmania\Songs\Pack\Song"), "Pack/Song")
         self.assertEqual(
+            data.split_path(r"D:\Games\ITGmania\AdditionalSongs\Pack\Song"), "Pack/Song")
+        self.assertEqual(
             data.split_path("/home/player/ITGmania/Songs/Pack/Song"), "Pack/Song")
+        self.assertEqual(
+            data.split_path("/home/player/ITGmania/AdditionalSongs/Pack/Song"), "Pack/Song")
 
-    def test_split_path_requires_songs_component(self):
+    def test_split_path_requires_songs_or_additionalsongs_component(self):
         path = r"C:\Games\MySongs\Pack\Song"
         self.assertEqual(data.split_path(path), "C:/Games/MySongs/Pack/Song")
+        path2 = r"C:\Games\CustomSongs\Pack\Song"
+        self.assertEqual(data.split_path(path2), "C:/Games/CustomSongs/Pack/Song")
+
+    def test_tag_map_parses_escaped_delimiters(self):
+        text = (
+            "#TITLE:Song Title \\; Subtitle;\n"
+            "#ARTIST:Artist \\; Feat;\n"
+            "#TAG_WITH_BACKSLASH:Prefix\\\\Suffix;\n"
+            "#TAG_ENDING_IN_SEMI:Ending with semi\\;;\n"
+            "#TAG_WITH_ESCAPED_BACKSLASH_THEN_SEMI:Path\\\\;\n"
+            "#TAG_WITH_ESCAPED_COLON:Key\\:Value;\n"
+            "#NORMAL:NormalValue;\n"
+        )
+        tags = data.tag_map(text)
+        self.assertEqual(tags["TITLE"], "Song Title ; Subtitle")
+        self.assertEqual(tags["ARTIST"], "Artist ; Feat")
+        self.assertEqual(tags["TAG_WITH_BACKSLASH"], "Prefix\\Suffix")
+        self.assertEqual(tags["TAG_ENDING_IN_SEMI"], "Ending with semi;")
+        self.assertEqual(tags["TAG_WITH_ESCAPED_BACKSLASH_THEN_SEMI"], "Path\\")
+        self.assertEqual(tags["TAG_WITH_ESCAPED_COLON"], "Key:Value")
+        self.assertEqual(tags["NORMAL"], "NormalValue")
 
     def test_cache_chart_matches_stats_by_normalized_key(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -99,6 +141,7 @@ class ParsingTests(unittest.TestCase):
     def test_cache_peak_nps_is_parsed_when_present(self):
         with tempfile.TemporaryDirectory() as directory:
             cache_file = Path(directory) / "peak.cache"
+            # One value: what ITGmania writes for ordinary charts such as dance-single
             cache_file.write_text(
                 "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
                 "#NOTEDATA:;\n"
@@ -108,7 +151,129 @@ class ParsingTests(unittest.TestCase):
                 encoding="utf-8",
             )
             row = data.parse_cache_file(cache_file, {})[0]
-        self.assertEqual(row["Peak NPS"], 12.5)
+            self.assertEqual(row["Peak NPS"], 12.5)
+
+            # Two values, one per player: written only for couples and routine charts
+            cache_file.write_text(
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-couple;\n"
+                "#DIFFICULTY:Hard;\n"
+                "#PEAKNPS:14.250|14.250;\n",
+                encoding="utf-8",
+            )
+            row_piped = data.parse_cache_file(cache_file, {})[0]
+            self.assertEqual(row_piped["Peak NPS"], 14.25)
+
+            # Different values per player: the first player's value is used
+            cache_file.write_text(
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-couple;\n"
+                "#DIFFICULTY:Hard;\n"
+                "#PEAKNPS:16.8|10.5;\n",
+                encoding="utf-8",
+            )
+            row_asym = data.parse_cache_file(cache_file, {})[0]
+            self.assertEqual(row_asym["Peak NPS"], 16.8)
+
+    def test_cache_file_handles_escaped_delimiters_in_title_and_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "escaped.cache"
+            cache_file.write_text(
+                "#TITLE:Song Title \\; Subtitle;\n"
+                "#ARTIST:Artist \\; Feat;\n"
+                "#SONGFILENAME:Songs/Pack/Special \\; Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Hard;\n"
+                "#METER:9;\n",
+                encoding="utf-8",
+            )
+            scores = {
+                ("pack/special ; song", "dance-single", "hard"): {
+                    "Score": "950000", "Grade": "Tier06", "PercentDP": "0.95", "plays": "3",
+                }
+            }
+            rows = data.parse_cache_file(cache_file, scores)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["Title"], "Song Title ; Subtitle")
+            self.assertEqual(rows[0]["Artist"], "Artist ; Feat")
+            self.assertEqual(rows[0]["Course path"], "Pack/Special ; Song")
+            self.assertEqual(rows[0]["Score"], 950000)
+
+    def test_stats_index_matches_additionalsongs_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores>"
+                "<Song Dir='AdditionalSongs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Hard'>"
+                "<HighScoreList NumTimesPlayed='3'>"
+                "<HighScore><PercentDP>0.96</PercentDP><Score>456</Score></HighScore>"
+                "</HighScoreList></Steps></Song>"
+                "</SongScores></Stats>",
+                encoding="utf-8",
+            )
+            scores = data.stats_index(stats_file)
+
+        self.assertEqual(scores[("pack/song", "dance-single", "hard")]["Score"], "456")
+
+    def test_additionalsongs_score_attaches_to_cached_chart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores>"
+                "<Song Dir='AdditionalSongs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Hard'>"
+                "<HighScoreList NumTimesPlayed='3'>"
+                "<HighScore><PercentDP>0.96</PercentDP><Score>456</Score></HighScore>"
+                "</HighScoreList></Steps></Song>"
+                "</SongScores></Stats>",
+                encoding="utf-8",
+            )
+            cache_file = Path(directory) / "song.cache"
+            cache_file.write_text(
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Hard;\n",
+                encoding="utf-8",
+            )
+            rows = data.parse_cache_file(cache_file, data.stats_index(stats_file))
+
+        self.assertEqual(rows[0]["Score"], 456)
+
+    def test_stats_index_merges_legacy_additionalsongs_and_songs_entries(self):
+        legacy = (
+            "<Song Dir='AdditionalSongs/Pack/Song'>"
+            "<Steps StepsType='dance-single' Difficulty='Hard'>"
+            "<HighScoreList><NumTimesPlayed>9</NumTimesPlayed>"
+            "<HighScore><PercentDP>0.90</PercentDP><Score>100</Score></HighScore>"
+            "</HighScoreList></Steps></Song>"
+        )
+        current = (
+            "<Song Dir='Songs/Pack/Song'>"
+            "<Steps StepsType='dance-single' Difficulty='Hard'>"
+            "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+            "<HighScore><PercentDP>0.95</PercentDP><Score>200</Score></HighScore>"
+            "</HighScoreList></Steps></Song>"
+        )
+        # The legacy entry has more plays, the current one the better score; the merged
+        # result must keep both, whichever entry comes first in the file.
+        for label, entries in (("legacy first", legacy + current), ("current first", current + legacy)):
+            with self.subTest(label), tempfile.TemporaryDirectory() as directory:
+                stats_file = Path(directory) / "Stats.xml"
+                stats_file.write_text(
+                    f"<Stats><SongScores>{entries}</SongScores></Stats>", encoding="utf-8")
+                entry = data.stats_index(stats_file)[("pack/song", "dance-single", "hard")]
+            self.assertEqual(entry["Score"], "200")
+            self.assertEqual(entry["plays"], "9")
+
+    def test_tag_map_decodes_escaped_slashes(self):
+        # ITGmania writes "//" in text as "\/\/" so it is not read as a comment.
+        tags = data.tag_map("#SONGFILENAME:Songs/Pack/My\\/\\/Song/audio.ogg;\n")
+        self.assertEqual(tags["SONGFILENAME"], "Songs/Pack/My//Song/audio.ogg")
 
     def test_stats_index_reads_score_and_ignores_case_in_matching_key(self):
         with tempfile.TemporaryDirectory() as directory:
