@@ -1,0 +1,55 @@
+# Runs the unit test suite automatically on every push and pull request
+# to main, so a regression shows up as a red/green check on GitHub.
+# See issue #22.
+
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # The full suite on Linux across the supported Python versions
+  # (the app needs Python 3.10 or newer). These tests are headless:
+  # the one live-window test skips itself here, and is covered by
+  # the windows-ui job below instead.
+  ubuntu:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # requirements.txt lists only matplotlib, which the distribution
+      # chart tests need in order not to be skipped.
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run tests
+        run: python -m unittest discover -s tests
+
+  # This job exists so the live Tk test
+  # (test_live_tk_distribution_ui in tests/test_ui_distribution.py)
+  # actually runs somewhere: it needs a real display, which the
+  # headless Linux runners do not have, so it always skips there.
+  # Windows runners do have a display, and Python 3.14 on Windows
+  # matches the owner's own setup. Only the UI distribution tests
+  # run here; the full suite is covered by the ubuntu job.
+  windows-ui:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run UI distribution tests
+        run: python -m unittest discover -s tests -p test_ui_distribution.py
