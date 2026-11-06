@@ -677,6 +677,47 @@ class SearchQueryTests(unittest.TestCase):
         self.assertTrue(data.match_chart_query(row, "percent:>=95"))
         self.assertFalse(data.match_chart_query(row, "percent:>=96"))
 
+    def test_match_chart_query_grade_ranges_and_unplayed_charts(self):
+        played_b = {"Grade": "B", "Score": 800000}
+        played_s = {"Grade": "S", "Score": 960000}
+        played_star = {"Grade": "★★★★", "Score": 1000000}
+        unplayed = {"Grade": "", "Score": ""}
+        unplayed_none = {"Grade": None}
+
+        # Played chart matches valid grade bounds
+        self.assertTrue(data.match_chart_query(played_b, "grade:<=B"))
+        self.assertTrue(data.match_chart_query(played_b, "grade:>=B"))
+        self.assertTrue(data.match_chart_query(played_b, "grade:<A"))
+        self.assertTrue(data.match_chart_query(played_b, "grade:>C"))
+        self.assertFalse(data.match_chart_query(played_b, "grade:>B"))
+        self.assertFalse(data.match_chart_query(played_b, "grade:<B"))
+
+        self.assertTrue(data.match_chart_query(played_s, "grade:>=A"))
+        self.assertTrue(data.match_chart_query(played_s, "grade:<★★★★"))
+        self.assertFalse(data.match_chart_query(played_s, "grade:<=B"))
+
+        # Tier notation works identically
+        self.assertTrue(data.match_chart_query(played_s, "grade:>=Tier06"))
+        self.assertTrue(data.match_chart_query(played_b, "grade:<=Tier12"))
+
+        # Unplayed charts must NEVER match inequality comparisons
+        for query in ("grade:<=B", "grade:<A", "grade:>=D", "grade:>C", "grade:<=Tier17"):
+            with self.subTest(query=query):
+                self.assertFalse(data.match_chart_query(unplayed, query))
+                self.assertFalse(data.match_chart_query(unplayed_none, query))
+
+        # Invalid target grade names must evaluate to False rather than matching all charts
+        for invalid_query in ("grade:>=Foo", "grade:<=Invalid", "grade:>Unknown", "grade:<Bar"):
+            with self.subTest(query=invalid_query):
+                self.assertFalse(data.match_chart_query(played_b, invalid_query))
+                self.assertFalse(data.match_chart_query(unplayed, invalid_query))
+
+        # Exact equality matching behaves as expected
+        self.assertTrue(data.match_chart_query(played_b, "grade:B"))
+        self.assertFalse(data.match_chart_query(played_b, "grade:S"))
+        self.assertTrue(data.match_chart_query(unplayed, "grade:''"))
+        self.assertFalse(data.match_chart_query(unplayed, "grade:B"))
+
 
 
 
