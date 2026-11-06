@@ -276,8 +276,12 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
         radar = {name: number(value) for name, value in zip(RADAR_FIELDS, radar_values)}
         tech = [number(v, -1) for v in tags.get("TECHCOUNTS", "").split(",")]
         display_name = tags.get("CHARTNAME") or tags.get("DESCRIPTION", "")
-        if difficulty.casefold() == "edit" and display_name.strip():
-            key = (song_dir.casefold(), chart_type.casefold(), "edit", display_name.strip().casefold())
+        # Stats.xml keys an Edit by its description. #DESCRIPTION is that field;
+        # #CHARTNAME is only a fallback for caches where the description landed
+        # there instead (older SSC loading), not a replacement for it.
+        score_description = tags.get("DESCRIPTION", "").strip() or tags.get("CHARTNAME", "").strip()
+        if difficulty.casefold() == "edit" and score_description:
+            key = (song_dir.casefold(), chart_type.casefold(), "edit", score_description.casefold())
             score = scores.get(key) or scores.get((song_dir.casefold(), chart_type.casefold(), "edit"), {})
         else:
             key = (song_dir.casefold(), chart_type.casefold(), difficulty.casefold())
