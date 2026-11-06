@@ -353,6 +353,32 @@ def validate_course_fields(rows: list[dict], title: str | None = None) -> str | 
     return None
 
 
+def _strip_course_comments(text: str) -> str:
+    """Return a copy of CRS text with ``//`` comments removed, for scanning only.
+
+    ITGmania ignores everything from ``//`` to the end of the line. A backslash
+    escapes the next character, so an escaped slash pair is not a comment,
+    while a ``//`` following an escaped backslash still starts one. Newlines
+    are kept, so the copy keeps the original line structure. Callers scan this
+    copy but must write the original text/bytes when appending.
+    """
+    out = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and index + 1 < len(text):
+            out.append(text[index:index + 2])
+            index += 2
+            continue
+        if char == "/" and text[index + 1:index + 2] == "/":
+            while index < len(text) and text[index] not in "\r\n":
+                index += 1
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
 def parse_course_text(text: str) -> dict:
     """Parse CRS text into title, ordered song entries, and trailing-risk info.
 
@@ -362,6 +388,7 @@ def parse_course_text(text: str) -> dict:
       trailing_risk: 'MODS' | 'GAINSECONDS' | None
       has_course: bool
     """
+    text = _strip_course_comments(text)
     course_match = re.search(r"#COURSE\s*:([^;]*);", text, re.IGNORECASE)
     title = course_match.group(1).strip() if course_match else None
     songs = []
@@ -387,6 +414,7 @@ def parse_course_text(text: str) -> dict:
 
 def course_trailing_risk(text: str) -> str | None:
     """Return 'MODS' or 'GAINSECONDS' if that directive follows the last #SONG or #SONGSELECT, else None."""
+    text = _strip_course_comments(text)
     songs = list(re.finditer(r"#(?:SONG|SONGSELECT)\s*:", text, re.IGNORECASE))
     if not songs:
         return None
@@ -400,7 +428,8 @@ def course_append_bytes(existing: bytes, song_lines: list[str]) -> bytes:
     """Validate an existing CRS and return only the bytes safe to append."""
     text = existing.decode("utf-8-sig")
     parsed = parse_course_text(text)
-    has_entries = bool(re.search(r"#(?:SONG|SONGSELECT)\s*:", text, re.IGNORECASE))
+    scan_text = _strip_course_comments(text)
+    has_entries = bool(re.search(r"#(?:SONG|SONGSELECT)\s*:", scan_text, re.IGNORECASE))
     if not parsed["has_course"] or not has_entries:
         raise ValueError("The selected file must contain #COURSE and at least one #SONG or #SONGSELECT entry.")
     risk = parsed["trailing_risk"]
