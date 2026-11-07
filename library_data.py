@@ -226,7 +226,7 @@ def stats_index(stats_file: Path) -> dict[tuple, dict]:
                 taps = best.find("TapNoteScores")
                 if taps is not None:
                     best_data.update({"tap_" + name: taps.findtext(name, "") for name in TAP_FIELDS})
-            
+
             # Determine key: 4-tuple for Edit charts with a description, 3-tuple for non-Edit or empty description
             if diff == "edit" and desc:
                 key = (song_path.casefold(), steps_type, diff, desc)
