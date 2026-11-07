@@ -33,6 +33,9 @@ try:
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
+# The release number, shown in Help > About. Keep it equal to the newest heading in CHANGELOG.md (a test checks).
+__version__ = "1.0.0"
+
 DIST_PANEL_WIDTH = 320
 # A bar can be clicked across at least this fraction of the chart's width, so a very short bar (one chart
 # among hundreds) is still easy to hit, while a click far to the right of it does nothing.
@@ -222,6 +225,7 @@ class LibraryApp:
         # open_course_builder, which starts a fresh queue every time it opens.
         self.advanced_search_window = None
         self.course_window = None
+        self.about_window = None
         self.course_entries: list[dict] = []
         self.course_title_var = None
         self.course_tree = None
@@ -406,6 +410,10 @@ class LibraryApp:
             command=self._sync_distribution_toggle,
         )
         menubar.add_cascade(label="View", menu=view_menu)
+
+        help_menu = tk.Menu(menubar, tearoff=False)
+        help_menu.add_command(label="About ITGmania Library Visualizer…", command=self.open_about)
+        menubar.add_cascade(label="Help", menu=help_menu)
         self.root.configure(menu=menubar)
         self.root.bind("<Control-f>", lambda _event: self.focus_search())
         self.root.bind("<Control-F>", lambda _event: self.focus_search())
@@ -577,7 +585,7 @@ class LibraryApp:
         self.search_entry.focus_set()
 
     def _dialog_is_open(self):
-        for window in (self.advanced_search_window, self.course_window):
+        for window in (self.advanced_search_window, self.course_window, self.about_window):
             if window is not None and window.winfo_exists():
                 return True
         return False
@@ -1346,6 +1354,36 @@ class LibraryApp:
         except OSError as exc:
             self.status.set(f"Could not export CSV: {exc}")
             messagebox.showerror("Export failed", f"Could not write to {path}:\n\n{exc}")
+
+    def open_about(self):
+        if self.about_window is not None and self.about_window.winfo_exists():
+            self.about_window.lift()
+            return
+
+        window = tk.Toplevel(self.root)
+        self.about_window = window
+        window.title("About ITGmania Library Visualizer")
+        window.resizable(False, False)
+        window.configure(bg=theme.BG_WINDOW)
+        window.transient(self.root)
+
+        tk.Label(window, text="ITGmania Library Visualizer", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
+                 font=theme.FONT_DIALOG_TITLE).pack(anchor="w", padx=24, pady=(18, 2))
+        tk.Label(window, text=f"Version {__version__}", fg=theme.TEXT_PRIMARY, bg=theme.BG_WINDOW,
+                 font=theme.FONT_BODY_BOLD).pack(anchor="w", padx=24)
+        tk.Label(window, text="Released under the MIT License (see the LICENSE file).", fg=theme.TEXT_MUTED,
+                 bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(anchor="w", padx=24, pady=(10, 14))
+
+        btn_row = tk.Frame(window, bg=theme.BG_WINDOW, padx=24)
+        btn_row.pack(fill="x", pady=(0, 16))
+        self._button(btn_row, "Close", window.destroy, primary=True).pack(side="right")
+
+        def _close(_event=None):
+            window.destroy()
+            return "break"
+
+        window.bind("<Escape>", _close)
+        window.bind("<Return>", _close)
 
     def open_advanced_search(self):
         if self.advanced_search_window is not None and self.advanced_search_window.winfo_exists():
