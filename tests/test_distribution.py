@@ -75,10 +75,10 @@ class DistributionTests(unittest.TestCase):
         self.assert_rewrite_keeps_meaning('"my pack: foo" meter:11', "meter", None, [])
 
     def test_quote_for_search_reads_back_unchanged(self):
-        import shlex
         for text in ("plain", "two words", 'say "hi"', "it's", "back\\slash", 'a: "b" \\ c', ""):
-            self.assertEqual(shlex.split(data._quote_for_search(text)) or [""], [text], repr(text))
+            self.assertEqual(data.split_search_query(data._quote_for_search(text)) or [""], [text], repr(text))
         self.assertEqual(data._quote_for_search("plain"), "plain")
+        self.assertEqual(data._quote_for_search("it's"), "it's")
 
     def test_rewrite_with_an_unbalanced_quote_keeps_meaning(self):
         # parse_search_query splits on spaces when a quote is never closed, so these are plain words.

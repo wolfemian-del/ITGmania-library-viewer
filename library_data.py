@@ -663,6 +663,21 @@ def _compare_bpm_bound(bound: tuple, row: dict) -> bool:
     return False
 
 
+def split_search_query(query: str) -> list[str]:
+    """Split a search query into tokens using shell-style double quotes for phrases.
+
+    Only double quotes (") group multi-word phrases and protect colons or spaces.
+    Single quotes and apostrophes (') are treated as normal text characters, so words
+    with contractions (don't), possessives (Smiley's), or informal spellings (rock 'n' roll)
+    remain intact and never trigger unclosed-quotation errors.
+    """
+    lex = shlex.shlex(query, posix=True)
+    lex.whitespace_split = True
+    lex.commenters = ""
+    lex.quotes = '"'
+    return list(lex)
+
+
 def parse_search_query(query: str) -> dict:
     """Parse a query string into free-text terms and structured field criteria."""
     query = str(query or "").strip()
@@ -670,7 +685,7 @@ def parse_search_query(query: str) -> dict:
         return {"free_terms": [], "free_text": "", "directives": []}
 
     try:
-        tokens = shlex.split(query)
+        tokens = split_search_query(query)
     except ValueError:
         tokens = query.split()
 
@@ -686,12 +701,12 @@ def parse_search_query(query: str) -> dict:
             field = prefix.strip().casefold()
             if field in SEARCH_FIELD_ALIASES:
                 canonical = SEARCH_FIELD_ALIASES[field]
-                val = val.strip().strip('"').strip("'")
+                val = val.strip().strip('"')
                 directives.append((canonical, val))
                 continue
         free_terms.append(token.casefold())
 
-    free_text = " ".join(shlex.quote(term) for term in free_terms)
+    free_text = " ".join(_quote_for_search(term) for term in free_terms)
     return {"free_terms": free_terms, "free_text": free_text, "directives": directives}
 
 
@@ -820,14 +835,14 @@ def filter_texts_match(first, second) -> bool:
 
 
 def _needs_quotes(text: str) -> bool:
-    return not text or any(char.isspace() or char in "\"'\\" for char in text)
+    return not text or any(char.isspace() or char in '"\\' for char in text)
 
 
 def _quote_for_search(text: str) -> str:
-    """Quote text for the search box so that shlex.split reads it back unchanged.
+    """Quote text for the search box so that split_search_query reads it back unchanged.
 
-    Text with no spaces or quote characters stays as it is. Anything else goes in double quotes,
-    with backslashes and double quotes escaped (the only escapes shlex honors inside them).
+    Text with no spaces or quote/backslash characters stays as it is. Anything else goes in double quotes,
+    with backslashes and double quotes escaped (the only escapes split_search_query honors inside them).
     """
     if not _needs_quotes(text):
         return text
@@ -835,7 +850,7 @@ def _quote_for_search(text: str) -> str:
 
 
 def _format_search_token(token: str) -> str:
-    """Write one token from shlex.split back as search text that reads as the same single token.
+    """Write one token from split_search_query back as search text that reads as the same single token.
 
     A directive such as `pack:In The Groove` gets only its value quoted (pack:"In The Groove").
     Every other token, including free text that happens to contain a colon, is quoted as a whole,
@@ -851,7 +866,7 @@ def _format_search_token(token: str) -> str:
 def replace_search_directive(query: str, directive_prefix: str, new_value: str | tuple[str, ...] | list[str] | None) -> str:
     """Replace or remove a directive in a search query, preserving free-text terms and other directives.
 
-    Uses shlex tokenization consistent with parse_search_query and SEARCH_FIELD_ALIASES.
+    Uses tokenization consistent with parse_search_query and SEARCH_FIELD_ALIASES.
     If new_value is None, removes any directives matching directive_prefix or its aliases.
     If new_value is a string, replaces the first matching directive in-place or appends it.
     If new_value is several values, they are written as several directives of that field
@@ -879,7 +894,7 @@ def replace_search_directive(query: str, directive_prefix: str, new_value: str |
         return " ".join(_directive_tokens())
 
     try:
-        tokens = shlex.split(raw_query)
+        tokens = split_search_query(raw_query)
         unbalanced = False
     except ValueError:
         # Unbalanced quote: parse_search_query splits on spaces in this case, so the words are raw text.
@@ -904,7 +919,7 @@ def replace_search_directive(query: str, directive_prefix: str, new_value: str |
         pieces.extend((text, True) for text in _directive_tokens())
 
     if not unbalanced:
-        # shlex took the quotes off, so each kept word is written back with quotes where it needs them.
+        # split_search_query took the quotes off, so each kept word is written back with quotes where it needs them.
         return " ".join(text if is_new else _format_search_token(text) for text, is_new in pieces)
 
     # Unbalanced case: keep the words as typed, so the search still reads the same way, unless that would
@@ -913,7 +928,7 @@ def replace_search_directive(query: str, directive_prefix: str, new_value: str |
     # its quotes stripped. Then each kept word's quotes are escaped so it is still read as typed.
     typed = " ".join(text for text, _ in pieces)
     try:
-        shlex.split(typed)
+        split_search_query(typed)
         typed_reads_as_typed = False
     except ValueError:
         typed_reads_as_typed = not any(is_new and _needs_quotes(text) for text, is_new in pieces)
@@ -1159,17 +1174,17 @@ _DIALOG_RANGE_TOKEN_NAMES = {"meter": "meter", "bpm": "bpm", "time": "time", "pe
 
 
 def _has_quote_chars(text: str) -> bool:
-    return any(char in text for char in "\"'\\")
+    return any(char in text for char in '"\\')
 
 
 def _format_dialog_token(field: str, value: str) -> str:
     """Write ``field:value`` so parse_search_query reads the same value back."""
     token = f"{field}:{value}"
-    if not any(char.isspace() or char in "\"'\\" for char in token):
+    if not any(char.isspace() or char in '"\\' for char in token):
         return token
     if not _has_quote_chars(value):
         return f'{field}:"{value}"'
-    return shlex.quote(token)
+    return f"{field}:{_quote_for_search(value)}"
 
 
 def _format_bound_number(value: float, is_duration: bool) -> str:

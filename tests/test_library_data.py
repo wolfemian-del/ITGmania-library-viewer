@@ -951,6 +951,60 @@ class SearchQueryTests(unittest.TestCase):
         self.assertEqual(restored["free_terms"], parsed["free_terms"])
         self.assertIn(("meter", "11"), restored["directives"])
 
+    def test_parse_search_query_with_apostrophes(self):
+        # Single contraction, word-final, and embedded apostrophes
+        res1 = data.parse_search_query("don't")
+        self.assertEqual(res1["free_terms"], ["don't"])
+        self.assertEqual(res1["free_text"], "don't")
+
+        res2 = data.parse_search_query("don't stop believin'")
+        self.assertEqual(res2["free_terms"], ["don't", "stop", "believin'"])
+        self.assertEqual(res2["free_text"], "don't stop believin'")
+
+        res3 = data.parse_search_query("rock 'n' roll")
+        self.assertEqual(res3["free_terms"], ["rock", "'n'", "roll"])
+
+        # Quoted directive with apostrophe free text
+        res4 = data.parse_search_query('pack:"In The Groove" don\'t')
+        self.assertEqual(res4["directives"], [("pack", "In The Groove")])
+        self.assertEqual(res4["free_terms"], ["don't"])
+
+        # Directives with apostrophes in double quotes or bare
+        res5 = data.parse_search_query('title:"Don\'t Stop" artist:Guns')
+        self.assertEqual(res5["directives"], [("title", "Don't Stop"), ("artist", "Guns")])
+
+        # Trailing apostrophe in directive value is preserved
+        res6 = data.parse_search_query("title:believin'")
+        self.assertEqual(res6["directives"], [("title", "believin'")])
+
+    def test_parse_search_query_keeps_apostrophes_at_directive_value_edges(self):
+        # Single quotes are literal text now, so a directive value that begins
+        # and ends with apostrophes keeps them. (Regression: a leftover
+        # compatibility branch stripped one matched pair, turning 'Tis' into Tis.)
+        res = data.parse_search_query("title:'Tis'")
+        self.assertEqual(res["directives"], [("title", "'Tis'")])
+
+        res = data.parse_search_query("title:'n'")
+        self.assertEqual(res["directives"], [("title", "'n'")])
+
+        # A value of nothing but apostrophes is kept as typed.
+        res = data.parse_search_query("title:''")
+        self.assertEqual(res["directives"], [("title", "''")])
+
+        # Double-quoting the value does not change this: the apostrophes are the value.
+        res = data.parse_search_query('title:"\'Tis\'"')
+        self.assertEqual(res["directives"], [("title", "'Tis'")])
+
+        res = data.parse_search_query('artist:"\'Guns N\' Roses\'"')
+        self.assertEqual(res["directives"], [("artist", "'Guns N' Roses'")])
+
+    def test_match_chart_query_with_apostrophes(self):
+        row = {"Title": "Don't Stop Believin'", "Artist": "Journey", "Pack": "Rock"}
+        self.assertTrue(data.match_chart_query(row, "don't stop believin'"))
+        self.assertTrue(data.match_chart_query(row, 'pack:"Rock" don\'t'))
+        self.assertTrue(data.match_chart_query(row, "believin'"))
+        self.assertTrue(data.match_chart_query(row, 'title:"Don\'t Stop Believin\'"'))
+
     def test_match_chart_query_meter_exact_and_range(self):
         row = {"Meter": 11, "Title": "Summer", "Artist": "Smiley", "Pack": "ITG"}
         self.assertTrue(data.match_chart_query(row, "meter:11"))
@@ -1049,7 +1103,7 @@ class SearchQueryTests(unittest.TestCase):
         # Exact equality matching behaves as expected
         self.assertTrue(data.match_chart_query(played_b, "grade:B"))
         self.assertFalse(data.match_chart_query(played_b, "grade:S"))
-        self.assertTrue(data.match_chart_query(unplayed, "grade:''"))
+        self.assertTrue(data.match_chart_query(unplayed, 'grade:""'))
         self.assertFalse(data.match_chart_query(unplayed, "grade:B"))
 
 
@@ -1107,6 +1161,31 @@ class AdvancedSearchDialogTests(unittest.TestCase):
         self.assertEqual(parts["artist"], "a b")
         self.assertEqual(data.build_dialog_query(parts),
                          'title:"Alpha Song" artist:"a b" plays:">= 3"')
+
+    def test_dialog_absorbs_and_formats_apostrophes(self):
+        parts = data.split_dialog_query('title:"Don\'t Stop" artist:"Guns N\' Roses" pack:"80\'s Hits"')
+        self.assertEqual(parts["title"], "Don't Stop")
+        self.assertEqual(parts["artist"], "Guns N' Roses")
+        self.assertEqual(parts["pack"], "80's Hits")
+        self.assertEqual(parts["other"], "")
+        self.assertEqual(
+            data.build_dialog_query(parts),
+            'title:"Don\'t Stop" artist:"Guns N\' Roses" pack:"80\'s Hits"'
+        )
+
+    def test_dialog_round_trip_keeps_apostrophes_at_value_edges(self):
+        # A Title box value that begins and ends with apostrophes must come
+        # back exactly. (Regression: the parser stripped the pair, so the
+        # dialog read 'Tis' back as Tis.)
+        built = data.build_dialog_query({"title": "'Tis'"})
+        self.assertEqual(data.split_dialog_query(built)["title"], "'Tis'")
+        self.assertEqual(data.parse_search_query(built)["directives"],
+                         [("title", "'Tis'")])
+
+        parts = data.split_dialog_query(
+            data.build_dialog_query({"title": "'Guns N' Roses'"}))
+        self.assertEqual(parts["title"], "'Guns N' Roses'")
+        self.assertEqual(parts["other"], "")
 
     def test_grade_label_is_matched_without_regard_to_case(self):
         self.assertEqual(data.split_dialog_query("grade:>=s")["grade"], "S")
