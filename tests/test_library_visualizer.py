@@ -1,4 +1,6 @@
+import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -361,6 +363,223 @@ class CourseBuilderValidationTests(unittest.TestCase):
                 mock_mb.showerror.assert_called_once()
                 titles.add(mock_mb.showerror.call_args[0][0])
         self.assertEqual(len(titles), 1)
+
+
+class RefreshGenerationTests(unittest.TestCase):
+    def test_load_worker_ignores_superseded_generation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache"
+            cache_dir.mkdir()
+            (cache_dir / "test.cache").write_text("#SONGFILENAME:Songs/P/S/a.ogg;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n", encoding="utf-8")
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>", encoding="utf-8")
+
+            instance = object.__new__(app.LibraryApp)
+            instance._load_generation = 2
+            instance._save_library_cache = Mock()
+            instance.root = Mock()
+
+            # Run worker with stale generation 1
+            instance._load_worker(cache_dir, stats_file, generation=1)
+
+            instance._save_library_cache.assert_not_called()
+            instance.root.after.assert_not_called()
+
+    def test_load_worker_superseded_after_scan_does_not_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache"
+            cache_dir.mkdir()
+            (cache_dir / "test.cache").write_text("#SONGFILENAME:Songs/P/S/a.ogg;\n", encoding="utf-8")
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>", encoding="utf-8")
+
+            instance = object.__new__(app.LibraryApp)
+            instance._load_generation = 1
+            instance._snapshot_lock = threading.Lock()
+            instance._save_library_cache = Mock()
+            instance.root = Mock()
+
+            def newer_refresh_starts_while_parsing(path, scores):
+                instance._load_generation = 2  # the only file is parsed, so the scan loop will not notice
+                return []
+
+            with patch.object(app, "parse_cache_file", newer_refresh_starts_while_parsing):
+                instance._load_worker(cache_dir, stats_file, generation=1)
+
+            instance._save_library_cache.assert_not_called()
+            instance.root.after.assert_not_called()
+
+    def test_older_scan_cannot_overwrite_newer_snapshot(self):
+        sample = "#SONGFILENAME:Songs/P/S/a.ogg;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old_folder, new_folder = root / "old_folder", root / "new_folder"
+            for folder in (old_folder, new_folder):
+                folder.mkdir()
+                (folder / "a.cache").write_text(sample, encoding="utf-8")
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>", encoding="utf-8")
+
+            instance = object.__new__(app.LibraryApp)
+            instance.settings_path = root / "settings.json"
+            instance._load_generation = 1
+            instance._snapshot_lock = threading.Lock()
+            instance.root = Mock()
+
+            real_save = app.LibraryApp._save_library_cache
+            old_is_saving, new_has_saved = threading.Event(), threading.Event()
+
+            def slow_save_for_old_folder(cache_dir, *args):
+                if Path(cache_dir) == old_folder:
+                    old_is_saving.set()
+                    new_has_saved.wait(0.3)  # long enough for an unlocked newer scan to finish first
+                refreshed_at = real_save(instance, cache_dir, *args)
+                if Path(cache_dir) == new_folder:
+                    new_has_saved.set()
+                return refreshed_at
+
+            instance._save_library_cache = slow_save_for_old_folder
+            old_scan = threading.Thread(target=instance._load_worker, args=(old_folder, stats_file, 1))
+            old_scan.start()
+            self.assertTrue(old_is_saving.wait(5))
+            instance._load_generation = 2  # a newer Load / refresh is requested during the old save
+            new_scan = threading.Thread(target=instance._load_worker, args=(new_folder, stats_file, 2))
+            new_scan.start()
+            old_scan.join(5)
+            new_scan.join(5)
+
+            snapshot = json.loads((root / "library_cache.json").read_text(encoding="utf-8"))
+            self.assertEqual(Path(snapshot["cache_dir"]), new_folder)
+
+    def test_loaded_and_load_failed_ignore_stale_generation(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_generation = 5
+        instance.progress = Mock()
+        instance.status = Mock()
+        instance.refresh_table = Mock()
+        mock_mb = Mock()
+
+        with patch.object(app, "messagebox", mock_mb):
+            # Stale _loaded call (generation 4 < 5)
+            instance._loaded([], 0, generation=4)
+            instance.progress.stop.assert_not_called()
+            instance.refresh_table.assert_not_called()
+
+            # Stale _load_failed call
+            instance._load_failed("Some error", generation=4)
+            instance.progress.stop.assert_not_called()
+            mock_mb.showerror.assert_not_called()
+
+            # Current generation works
+            instance._load_failed("Real error", generation=5)
+            instance.progress.stop.assert_called_once()
+            mock_mb.showerror.assert_called_once_with("Could not load library", "Real error")
+
+
+class DialogKeyBindingTests(unittest.TestCase):
+    def test_open_advanced_search_binds_escape_and_return(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.root = Mock()
+        instance.advanced_search_window = None
+        instance.search_var = Mock()
+        instance.search_entry = Mock()
+
+        mock_window = Mock()
+        bindings = {}
+        def mock_bind(seq, func):
+            bindings[seq] = func
+        mock_window.bind.side_effect = mock_bind
+        mock_tk = Mock()
+        mock_tk.Toplevel.return_value = mock_window
+        mock_ttk = Mock()
+
+        with patch.object(app, "tk", mock_tk), patch.object(app, "ttk", mock_ttk):
+            instance._button = Mock(return_value=Mock())
+            instance.open_advanced_search()
+
+        self.assertIn("<Escape>", bindings)
+        self.assertIn("<Return>", bindings)
+
+        # Escape closes the dialog without touching the main search text and stops the key event.
+        res_esc = bindings["<Escape>"]()
+        self.assertEqual(res_esc, "break")
+        mock_window.destroy.assert_called_once()
+        instance.search_var.set.assert_not_called()
+
+        # Return writes the built query to the main search box, closes the dialog and stops the key event.
+        mock_window.destroy.reset_mock()
+        res_ret = bindings["<Return>"]()
+        self.assertEqual(res_ret, "break")
+        instance.search_var.set.assert_called_once()
+        mock_window.destroy.assert_called_once()
+
+    def test_open_course_builder_binds_escape(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.root = Mock()
+        instance.course_window = None
+        instance.tree = Mock()
+        instance.tree.selection.return_value = []
+
+        mock_window = Mock()
+        bindings = {}
+        def mock_bind(seq, func):
+            bindings[seq] = func
+        mock_window.bind.side_effect = mock_bind
+        mock_tk = Mock()
+        mock_tk.Toplevel.return_value = mock_window
+        mock_ttk = Mock()
+
+        with patch.object(app, "tk", mock_tk), patch.object(app, "ttk", mock_ttk):
+            instance._button = Mock(return_value=Mock())
+            instance.open_course_builder()
+
+        self.assertIn("<Escape>", bindings)
+        mock_messagebox = Mock()
+        with patch.object(app, "messagebox", mock_messagebox):
+            # Empty queue: closes at once, no question.
+            res_esc = bindings["<Escape>"]()
+            self.assertEqual(res_esc, "break")
+            mock_window.destroy.assert_called_once()
+            mock_messagebox.askyesno.assert_not_called()
+
+            # Queued charts, user answers No: the window stays open.
+            mock_window.destroy.reset_mock()
+            instance.course_entries = [{"Title": "A"}, {"Title": "B"}]
+            mock_messagebox.askyesno.return_value = False
+            self.assertEqual(bindings["<Escape>"](), "break")
+            mock_messagebox.askyesno.assert_called_once()
+            mock_window.destroy.assert_not_called()
+
+            # Queued charts, user answers Yes: the window closes.
+            mock_messagebox.askyesno.return_value = True
+            self.assertEqual(bindings["<Escape>"](), "break")
+            mock_window.destroy.assert_called_once()
+
+
+    def test_main_escape_clears_search_only_when_no_dialog_is_open(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.clear_search = Mock()
+        open_window = Mock()
+        open_window.winfo_exists.return_value = True
+        closed_window = Mock()
+        closed_window.winfo_exists.return_value = False
+
+        instance.advanced_search_window = None
+        instance.course_window = closed_window
+        instance._on_main_escape()
+        instance.clear_search.assert_called_once()  # no dialog open: Escape clears the search
+
+        instance.clear_search.reset_mock()
+        instance.course_window = open_window
+        instance._on_main_escape()
+        instance.clear_search.assert_not_called()  # Build course open
+
+        instance.course_window = None
+        instance.advanced_search_window = open_window
+        instance._on_main_escape()
+        instance.clear_search.assert_not_called()  # Advanced Search open
 
 
 if __name__ == "__main__":

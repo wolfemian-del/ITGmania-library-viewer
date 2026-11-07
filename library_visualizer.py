@@ -185,6 +185,8 @@ class LibraryApp:
         self._current_dist_bars = []
         self._last_visible_rows = []
         self._selected_tree_items = set()  # table rows currently carrying the white "selected_row" tag
+        self._load_generation = 0  # counts Load / refresh requests; a scan from an older request is dropped
+        self._snapshot_lock = threading.Lock()  # one scan at a time may check its generation and write the snapshot
         self._style()
         self._build()
         self.search_var.trace_add("write", lambda *_: self._schedule_search_refresh())
@@ -367,7 +369,7 @@ class LibraryApp:
         self.root.bind("<Control-F>", lambda _event: self.focus_search())
         self.root.bind("<Control-Shift-f>", lambda _event: self.open_advanced_search())
         self.root.bind("<Control-Shift-F>", lambda _event: self.open_advanced_search())
-        self.root.bind("<Escape>", lambda _event: self.clear_search())
+        self.root.bind("<Escape>", self._on_main_escape)
 
     @staticmethod
     def _settings_file_path():
@@ -526,6 +528,19 @@ class LibraryApp:
     def clear_search(self):
         self.search_var.set("")
         self.search_entry.focus_set()
+
+    def _dialog_is_open(self):
+        for name in ("advanced_search_window", "course_window"):
+            window = getattr(self, name, None)
+            if window is not None and window.winfo_exists():
+                return True
+        return False
+
+    def _on_main_escape(self, _event=None):
+        # Escape in a dialog is handled by the dialog. This covers focus left in the main window while a
+        # dialog is open, where Escape should not silently wipe the search bar.
+        if not self._dialog_is_open():
+            self.clear_search()
 
     def _refresh_unless_batching(self):
         if not self._batching_filter_changes:
@@ -708,9 +723,16 @@ class LibraryApp:
         self._save_settings()
         self.progress.start(12)
         self.status.set("Reading chart cache and player scores…")
-        threading.Thread(target=self._load_worker, args=(cache, stats), daemon=True).start()
+        self._load_generation += 1
+        generation = self._load_generation
+        threading.Thread(target=self._load_worker, args=(cache, stats, generation), daemon=True).start()
 
-    def _load_worker(self, cache: Path, stats_file: Path):
+    def _load_is_stale(self, generation):
+        return self._load_generation != generation
+
+    def _load_worker(self, cache: Path, stats_file: Path, generation: int):
+        # A scan whose generation is no longer the latest stops quietly. The newer scan keeps the
+        # progress bar running, and _loaded / _load_failed ignore anything from an older generation.
         try:
             scores = stats_index(stats_file)
             rows = []
@@ -718,6 +740,8 @@ class LibraryApp:
             skipped_files = 0
             files_without_charts = 0
             for path in files:
+                if self._load_is_stale(generation):
+                    return
                 try:
                     chart_rows = parse_cache_file(path, scores)
                     if not chart_rows:
@@ -725,35 +749,50 @@ class LibraryApp:
                     rows.extend(chart_rows)
                 except (OSError, UnicodeError):
                     skipped_files += 1
+
             nested_song_tree = looks_like_song_tree(cache) if not files else False
             cache_error = ""
-            try:
-                refreshed_at = self._save_library_cache(
-                    cache, stats_file, rows, len(files), skipped_files,
-                    files_without_charts, nested_song_tree)
-            except (OSError, TypeError, ValueError) as exc:
-                refreshed_at = ""
-                cache_error = str(exc)
+            # The generation check and the snapshot write happen under one lock. Without it, an older
+            # scan that passed the check could still be writing after a newer scan had written its
+            # own snapshot, leaving the older data on disk.
+            with self._snapshot_lock:
+                if self._load_is_stale(generation):
+                    return
+                try:
+                    refreshed_at = self._save_library_cache(
+                        cache, stats_file, rows, len(files), skipped_files,
+                        files_without_charts, nested_song_tree)
+                except (OSError, TypeError, ValueError) as exc:
+                    refreshed_at = ""
+                    cache_error = str(exc)
+
             self.root.after(0, lambda: self._loaded(
                 rows, len(files), skipped_files, files_without_charts, nested_song_tree,
                 refreshed_at=refreshed_at, cache_error=cache_error,
-                source_paths=(str(cache), str(stats_file))))
+                source_paths=(str(cache), str(stats_file)),
+                generation=generation))
         except ET.ParseError as exc:
             self.root.after(0, lambda message=str(exc): self._load_failed(
-                f"Stats.xml is malformed or incomplete and could not be parsed.\n\n{message}"))
+                f"Stats.xml is malformed or incomplete and could not be parsed.\n\n{message}",
+                generation=generation))
         except OSError as exc:
             self.root.after(0, lambda message=str(exc): self._load_failed(
-                f"Could not read the selected cache folder or Stats.xml.\n\n{message}"))
+                f"Could not read the selected cache folder or Stats.xml.\n\n{message}",
+                generation=generation))
         except Exception as exc:
-            self.root.after(0, lambda message=str(exc): self._load_failed(message))
+            self.root.after(0, lambda message=str(exc): self._load_failed(message, generation=generation))
 
-    def _load_failed(self, message):
+    def _load_failed(self, message, generation=None):
+        if generation is not None and self._load_is_stale(generation):
+            return
         self.progress.stop()
         self.status.set("Could not load library.")
         messagebox.showerror("Could not load library", message)
 
     def _loaded(self, rows, files, skipped_files=0, files_without_charts=0, nested_song_tree=False,
-                refreshed_at="", cache_error="", from_cache=False, source_paths=None):
+                refreshed_at="", cache_error="", from_cache=False, source_paths=None, generation=None):
+        if generation is not None and self._load_is_stale(generation):
+            return
         self.progress.stop()
         self.rows = rows
         if source_paths:
@@ -1373,6 +1412,17 @@ class LibraryApp:
         self._button(btn_row, "Close", window.destroy).pack(side="right")
         self._button(btn_row, "Clear", clear_fields).pack(side="left")
 
+        def _close(_event=None):
+            window.destroy()
+            return "break"
+
+        def _apply_and_close(_event=None):
+            apply_search()
+            return "break"
+
+        window.bind("<Escape>", _close)
+        window.bind("<Return>", _apply_and_close)
+
     def open_course_builder(self):
         if getattr(self, "course_window", None) is not None and self.course_window.winfo_exists():
             self.course_window.lift()
@@ -1429,6 +1479,19 @@ class LibraryApp:
                  font=theme.FONT_BODY).pack(side="left", padx=12)
         self._button(controls, "Append to .CRS…", self.append_course).pack(side="right", padx=(0, 8))
         self._button(controls, "Save new .CRS…", self.export_course, primary=True).pack(side="right")
+
+        def _close(_event=None):
+            # Reopening this window starts an empty queue, so closing with charts queued loses them.
+            queued = len(self.course_entries)
+            if queued and not messagebox.askyesno(
+                    "Discard course queue?",
+                    f"Closing this window discards the {queued} queued chart(s). Close anyway?",
+                    parent=window):
+                return "break"
+            window.destroy()
+            return "break"
+
+        window.bind("<Escape>", _close)
 
         self.add_selected_to_course()
 
