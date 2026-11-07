@@ -558,5 +558,29 @@ class DialogKeyBindingTests(unittest.TestCase):
             mock_window.destroy.assert_called_once()
 
 
+    def test_main_escape_clears_search_only_when_no_dialog_is_open(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.clear_search = Mock()
+        open_window = Mock()
+        open_window.winfo_exists.return_value = True
+        closed_window = Mock()
+        closed_window.winfo_exists.return_value = False
+
+        instance.advanced_search_window = None
+        instance.course_window = closed_window
+        instance._on_main_escape()
+        instance.clear_search.assert_called_once()  # no dialog open: Escape clears the search
+
+        instance.clear_search.reset_mock()
+        instance.course_window = open_window
+        instance._on_main_escape()
+        instance.clear_search.assert_not_called()  # Build course open
+
+        instance.course_window = None
+        instance.advanced_search_window = open_window
+        instance._on_main_escape()
+        instance.clear_search.assert_not_called()  # Advanced Search open
+
+
 if __name__ == "__main__":
     unittest.main()

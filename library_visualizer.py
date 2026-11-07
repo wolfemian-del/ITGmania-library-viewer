@@ -369,7 +369,7 @@ class LibraryApp:
         self.root.bind("<Control-F>", lambda _event: self.focus_search())
         self.root.bind("<Control-Shift-f>", lambda _event: self.open_advanced_search())
         self.root.bind("<Control-Shift-F>", lambda _event: self.open_advanced_search())
-        self.root.bind("<Escape>", lambda _event: self.clear_search())
+        self.root.bind("<Escape>", self._on_main_escape)
 
     @staticmethod
     def _settings_file_path():
@@ -528,6 +528,19 @@ class LibraryApp:
     def clear_search(self):
         self.search_var.set("")
         self.search_entry.focus_set()
+
+    def _dialog_is_open(self):
+        for name in ("advanced_search_window", "course_window"):
+            window = getattr(self, name, None)
+            if window is not None and window.winfo_exists():
+                return True
+        return False
+
+    def _on_main_escape(self, _event=None):
+        # Escape in a dialog is handled by the dialog. This covers focus left in the main window while a
+        # dialog is open, where Escape should not silently wipe the search bar.
+        if not self._dialog_is_open():
+            self.clear_search()
 
     def _refresh_unless_batching(self):
         if not self._batching_filter_changes:
