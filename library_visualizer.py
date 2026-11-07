@@ -49,10 +49,12 @@ from library_data import (
     bpm_sort_key,
     build_dialog_query,
     course_append_bytes,
+    course_song_lines,
     difficulty_sort_key,
     distribution_summary_stats,
     filter_texts_match,
     format_duration,
+    format_new_course,
     get_active_chart_filters,
     grade_sort_key,
     looks_like_song_tree,
@@ -1568,14 +1570,8 @@ class LibraryApp:
                 return False
         return True
 
-    def course_song_lines(self):
-        return [f"#SONG:{row['Course path']}:{row['Difficulty']}:;" for row in self.course_entries]
-
     def export_course(self):
         title = self.course_title_var.get().strip()
-        if not title:
-            messagebox.showerror("Course title required", "Enter a title for this course.", parent=self.course_window)
-            return
         if not self.validate_course_entries(title):
             return
 
@@ -1587,10 +1583,11 @@ class LibraryApp:
         )
         if not path:
             return
-        lines = [f"#COURSE:{title};", *self.course_song_lines()]
+        song_lines = course_song_lines(self.course_entries)
+        body = format_new_course(title, song_lines)
         try:
             with open(path, "w", encoding="utf-8", newline="") as handle:
-                handle.write("\n".join(lines) + "\n")
+                handle.write(body)
         except OSError as exc:
             messagebox.showerror("Could not save course", str(exc), parent=self.course_window)
             return
@@ -1615,7 +1612,7 @@ class LibraryApp:
             messagebox.showerror("Could not read course", str(exc), parent=self.course_window)
             return
         try:
-            addition = course_append_bytes(existing, self.course_song_lines())
+            addition = course_append_bytes(existing, course_song_lines(self.course_entries))
         except UnicodeError as exc:
             messagebox.showerror("Could not read course", f"The course could not be read as UTF-8.\n\n{exc}",
                                  parent=self.course_window)

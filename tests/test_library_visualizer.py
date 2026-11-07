@@ -364,6 +364,80 @@ class CourseBuilderValidationTests(unittest.TestCase):
                 titles.add(mock_mb.showerror.call_args[0][0])
         self.assertEqual(len(titles), 1)
 
+    def test_export_course_writes_formatted_new_course(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out_file = Path(directory) / "test_course.crs"
+            instance = object.__new__(app.LibraryApp)
+            instance.course_window = Mock()
+            instance.course_title_var = Mock(get=Mock(return_value="My Epic Course"))
+            instance.course_entries = [
+                {"Course path": "Pack/SongA", "Difficulty": "Hard", "Type": "dance-single"},
+                {"Course path": "Pack/SongB", "Difficulty": "Challenge", "Type": "dance-single"},
+            ]
+            instance.status = Mock()
+
+            mock_fd = Mock(asksaveasfilename=Mock(return_value=str(out_file)))
+            mock_mb = Mock()
+
+            with patch.object(app, "filedialog", mock_fd), patch.object(app, "messagebox", mock_mb):
+                instance.export_course()
+
+            mock_mb.showerror.assert_not_called()
+            mock_mb.showinfo.assert_called_once()
+            self.assertTrue(out_file.is_file())
+            written_content = out_file.read_text(encoding="utf-8")
+            expected_body = app.format_new_course(
+                "My Epic Course",
+                app.course_song_lines(instance.course_entries)
+            )
+            self.assertEqual(written_content, expected_body)
+            self.assertIn("Saved course with 2 charts", instance.status.set.call_args[0][0])
+
+    def test_export_course_blank_title_shows_validation_error(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.course_window = Mock()
+        instance.course_title_var = Mock(get=Mock(return_value="   "))
+        instance.course_entries = [{"Course path": "Pack/SongA", "Difficulty": "Hard", "Type": "dance-single"}]
+        instance.status = Mock()
+
+        mock_fd = Mock()
+        mock_mb = Mock()
+
+        with patch.object(app, "filedialog", mock_fd), patch.object(app, "messagebox", mock_mb):
+            instance.export_course()
+
+        mock_mb.showerror.assert_called_once_with(
+            "Course problem", "Enter a title for this course.", parent=instance.course_window
+        )
+        mock_fd.asksaveasfilename.assert_not_called()
+
+    def test_append_course_appends_course_song_lines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            crs_file = Path(directory) / "existing.crs"
+            crs_file.write_text("#COURSE:Existing;\n#SONG:Pack/SongA:Hard:;\n", encoding="utf-8")
+
+            instance = object.__new__(app.LibraryApp)
+            instance.course_window = Mock()
+            instance.course_entries = [
+                {"Course path": "Pack/SongB", "Difficulty": "Challenge", "Type": "dance-single"},
+            ]
+            instance.status = Mock()
+
+            mock_fd = Mock(askopenfilename=Mock(return_value=str(crs_file)))
+            mock_mb = Mock()
+
+            with patch.object(app, "filedialog", mock_fd), patch.object(app, "messagebox", mock_mb):
+                instance.append_course()
+
+            mock_mb.showerror.assert_not_called()
+            mock_mb.showinfo.assert_called_once()
+            content = crs_file.read_text(encoding="utf-8")
+            self.assertEqual(
+                content,
+                "#COURSE:Existing;\n#SONG:Pack/SongA:Hard:;\n#SONG:Pack/SongB:Challenge:;\n"
+            )
+            self.assertIn("Appended 1 charts", instance.status.set.call_args[0][0])
+
 
 class RefreshGenerationTests(unittest.TestCase):
     def test_load_worker_ignores_superseded_generation(self):
