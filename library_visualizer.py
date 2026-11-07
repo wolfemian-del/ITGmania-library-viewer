@@ -549,7 +549,7 @@ class LibraryApp:
             "show_distribution": self.show_distribution_panel.get(),
             "distribution_metric": self.distribution_metric.get(),
         }
-        if getattr(self, "_last_saved_settings", None) == settings:
+        if self._last_saved_settings == settings:
             return
         temporary = self.settings_path.with_suffix(".tmp")
         try:

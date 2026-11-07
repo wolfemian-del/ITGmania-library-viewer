@@ -20,6 +20,7 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance.status = Mock()
         instance.refresh_table = Mock()
         instance._loaded = Mock()
+        instance._last_saved_settings = None
         return instance
 
     @staticmethod
