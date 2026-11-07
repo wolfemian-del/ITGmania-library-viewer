@@ -977,6 +977,27 @@ class SearchQueryTests(unittest.TestCase):
         res6 = data.parse_search_query("title:believin'")
         self.assertEqual(res6["directives"], [("title", "believin'")])
 
+    def test_parse_search_query_keeps_apostrophes_at_directive_value_edges(self):
+        # Single quotes are literal text now, so a directive value that begins
+        # and ends with apostrophes keeps them. (Regression: a leftover
+        # compatibility branch stripped one matched pair, turning 'Tis' into Tis.)
+        res = data.parse_search_query("title:'Tis'")
+        self.assertEqual(res["directives"], [("title", "'Tis'")])
+
+        res = data.parse_search_query("title:'n'")
+        self.assertEqual(res["directives"], [("title", "'n'")])
+
+        # A value of nothing but apostrophes is kept as typed.
+        res = data.parse_search_query("title:''")
+        self.assertEqual(res["directives"], [("title", "''")])
+
+        # Double-quoting the value does not change this: the apostrophes are the value.
+        res = data.parse_search_query('title:"\'Tis\'"')
+        self.assertEqual(res["directives"], [("title", "'Tis'")])
+
+        res = data.parse_search_query('artist:"\'Guns N\' Roses\'"')
+        self.assertEqual(res["directives"], [("artist", "'Guns N' Roses'")])
+
     def test_match_chart_query_with_apostrophes(self):
         row = {"Title": "Don't Stop Believin'", "Artist": "Journey", "Pack": "Rock"}
         self.assertTrue(data.match_chart_query(row, "don't stop believin'"))
@@ -1151,6 +1172,20 @@ class AdvancedSearchDialogTests(unittest.TestCase):
             data.build_dialog_query(parts),
             'title:"Don\'t Stop" artist:"Guns N\' Roses" pack:"80\'s Hits"'
         )
+
+    def test_dialog_round_trip_keeps_apostrophes_at_value_edges(self):
+        # A Title box value that begins and ends with apostrophes must come
+        # back exactly. (Regression: the parser stripped the pair, so the
+        # dialog read 'Tis' back as Tis.)
+        built = data.build_dialog_query({"title": "'Tis'"})
+        self.assertEqual(data.split_dialog_query(built)["title"], "'Tis'")
+        self.assertEqual(data.parse_search_query(built)["directives"],
+                         [("title", "'Tis'")])
+
+        parts = data.split_dialog_query(
+            data.build_dialog_query({"title": "'Guns N' Roses'"}))
+        self.assertEqual(parts["title"], "'Guns N' Roses'")
+        self.assertEqual(parts["other"], "")
 
     def test_grade_label_is_matched_without_regard_to_case(self):
         self.assertEqual(data.split_dialog_query("grade:>=s")["grade"], "S")

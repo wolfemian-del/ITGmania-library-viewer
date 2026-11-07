@@ -702,8 +702,6 @@ def parse_search_query(query: str) -> dict:
             if field in SEARCH_FIELD_ALIASES:
                 canonical = SEARCH_FIELD_ALIASES[field]
                 val = val.strip().strip('"')
-                if len(val) >= 2 and val.startswith("'") and val.endswith("'"):
-                    val = val[1:-1]
                 directives.append((canonical, val))
                 continue
         free_terms.append(token.casefold())
