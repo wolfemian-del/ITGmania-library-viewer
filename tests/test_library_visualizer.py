@@ -675,6 +675,8 @@ class DialogKeyBindingTests(unittest.TestCase):
 
         self.assertIn("<Escape>", bindings)
         self.assertIn("<Return>", bindings)
+        # The window takes keyboard focus itself, so Escape and Return reach it without a click first.
+        mock_window.focus_force.assert_called_once()
 
         # Escape closes the dialog without touching the main search text and stops the key event.
         res_esc = bindings["<Escape>"]()
@@ -710,6 +712,8 @@ class DialogKeyBindingTests(unittest.TestCase):
             instance.open_course_builder()
 
         self.assertIn("<Escape>", bindings)
+        # The window takes keyboard focus itself, so Escape reaches it without a click first.
+        mock_window.focus_force.assert_called_once()
         mock_messagebox = Mock()
         with patch.object(app, "messagebox", mock_messagebox):
             # Empty queue: closes at once, no question.
@@ -731,6 +735,21 @@ class DialogKeyBindingTests(unittest.TestCase):
             self.assertEqual(bindings["<Escape>"](), "break")
             mock_window.destroy.assert_called_once()
 
+
+    def test_opening_a_dialog_that_is_already_open_raises_it_and_gives_it_focus(self):
+        for attribute, opener in (("advanced_search_window", "open_advanced_search"),
+                                  ("course_window", "open_course_builder")):
+            with self.subTest(dialog=attribute):
+                instance = object.__new__(app.LibraryApp)
+                existing = Mock()
+                existing.winfo_exists.return_value = True
+                setattr(instance, attribute, existing)
+                mock_tk = Mock()
+                with patch.object(app, "tk", mock_tk):
+                    getattr(instance, opener)()
+                existing.lift.assert_called_once()
+                existing.focus_force.assert_called_once()
+                mock_tk.Toplevel.assert_not_called()  # no second window
 
     def test_main_escape_clears_search_only_when_no_dialog_is_open(self):
         instance = object.__new__(app.LibraryApp)

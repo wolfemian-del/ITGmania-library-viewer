@@ -1392,6 +1392,7 @@ class LibraryApp:
     def open_advanced_search(self):
         if self.advanced_search_window is not None and self.advanced_search_window.winfo_exists():
             self.advanced_search_window.lift()
+            self.advanced_search_window.focus_force()  # raised from behind the main window: give it the keys too
             return
 
         window = tk.Toplevel(self.root)
@@ -1545,10 +1546,14 @@ class LibraryApp:
 
         window.bind("<Escape>", _close)
         window.bind("<Return>", _apply_and_close)
+        # A new window does not always take keyboard focus (seen on Windows); without it Escape and Return
+        # would go to the main window instead of this one.
+        window.focus_force()
 
     def open_course_builder(self):
         if self.course_window is not None and self.course_window.winfo_exists():
             self.course_window.lift()
+            self.course_window.focus_force()
             return
 
         window = tk.Toplevel(self.root)
@@ -1615,6 +1620,7 @@ class LibraryApp:
             return "break"
 
         window.bind("<Escape>", _close)
+        window.focus_force()  # see open_advanced_search: a new window may not take focus by itself
 
         self.add_selected_to_course()
 
