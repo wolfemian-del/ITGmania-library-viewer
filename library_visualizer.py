@@ -279,7 +279,7 @@ class LibraryApp:
     def _build(self):
         top = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=18, pady=14)
         top.pack(fill="x")
-        tk.Label(top, text="ITGmania Library", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
+        tk.Label(top, text="ITGmania Library Visualizer", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
                  font=theme.FONT_APP_TITLE).pack(side="left")
         self.status = tk.StringVar(value="Choose your cache's Songs folder and player Stats.xml to get started.")
         tk.Label(top, textvariable=self.status, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW,
