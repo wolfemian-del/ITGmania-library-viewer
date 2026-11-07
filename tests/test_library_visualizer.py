@@ -1,5 +1,6 @@
 import json
 import queue
+import re
 import tempfile
 import threading
 import unittest
@@ -740,6 +741,7 @@ class DialogKeyBindingTests(unittest.TestCase):
         closed_window.winfo_exists.return_value = False
 
         instance.advanced_search_window = None
+        instance.about_window = None
         instance.course_window = closed_window
         instance._on_main_escape()
         instance.clear_search.assert_called_once()  # no dialog open: Escape clears the search
@@ -753,6 +755,61 @@ class DialogKeyBindingTests(unittest.TestCase):
         instance.advanced_search_window = open_window
         instance._on_main_escape()
         instance.clear_search.assert_not_called()  # Advanced Search open
+
+        instance.advanced_search_window = None
+        instance.about_window = open_window
+        instance._on_main_escape()
+        instance.clear_search.assert_not_called()  # About open
+
+
+class AboutDialogTests(unittest.TestCase):
+    @staticmethod
+    def open_about_with_mocks(about_window=None):
+        instance = object.__new__(app.LibraryApp)
+        instance.root = Mock()
+        instance.about_window = about_window
+        instance._button = Mock(return_value=Mock())
+        mock_window = Mock()
+        bindings = {}
+        mock_window.bind.side_effect = lambda seq, func: bindings.__setitem__(seq, func)
+        mock_tk = Mock()
+        mock_tk.Toplevel.return_value = mock_window
+        with patch.object(app, "tk", mock_tk):
+            instance.open_about()
+        return instance, mock_tk, mock_window, bindings
+
+    def test_about_shows_the_name_and_the_version_from_one_place(self):
+        _instance, mock_tk, _window, _bindings = self.open_about_with_mocks()
+        shown = [call.kwargs.get("text") for call in mock_tk.Label.call_args_list]
+        self.assertIn("ITGmania Library Visualizer", shown)
+        self.assertIn(f"Version {app.__version__}", shown)
+
+    def test_about_closes_on_escape_and_return_and_stops_the_key_event(self):
+        _instance, _tk, window, bindings = self.open_about_with_mocks()
+        for key in ("<Escape>", "<Return>"):
+            window.destroy.reset_mock()
+            self.assertEqual(bindings[key](), "break")
+            window.destroy.assert_called_once()
+
+    def test_about_takes_keyboard_focus_so_escape_reaches_it(self):
+        _instance, _tk, window, _bindings = self.open_about_with_mocks()
+        window.focus_force.assert_called_once()
+
+    def test_about_opened_twice_raises_the_open_window_instead_of_a_second_one(self):
+        existing = Mock()
+        existing.winfo_exists.return_value = True
+        _instance, mock_tk, _window, _bindings = self.open_about_with_mocks(about_window=existing)
+        existing.lift.assert_called_once()
+        existing.focus_force.assert_called_once()  # raised from behind the main window: it gets the keys too
+        mock_tk.Toplevel.assert_not_called()
+
+
+class VersionStringTests(unittest.TestCase):
+    def test_version_matches_the_newest_changelog_heading(self):
+        changelog = (Path(__file__).resolve().parent.parent / "CHANGELOG.md").read_text(encoding="utf-8")
+        match = re.search(r"^## (\d+\.\d+\.\d+)\b", changelog, re.MULTILINE)
+        self.assertIsNotNone(match, "CHANGELOG.md has no '## x.y.z' heading")
+        self.assertEqual(app.__version__, match.group(1))
 
 
 class PerformanceAndExportTests(unittest.TestCase):

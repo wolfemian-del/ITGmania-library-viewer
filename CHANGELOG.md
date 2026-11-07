@@ -23,5 +23,6 @@ First release. Written against ITGmania v1.3.0 stable. Needs Python 3.10 or newe
 - Course builder: queue charts, reorder them, then save a new `.CRS` file or append to an existing one without changing its existing contents. It warns when trailing `#MODS` or `#GAINSECONDS` directives could affect the appended entries.
 
 ### Other
+- Help → About shows the version and license.
 - Every color and font is defined in `theme.py`.
 - Released under the MIT License.

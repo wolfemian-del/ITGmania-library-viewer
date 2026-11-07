@@ -76,4 +76,4 @@ The UI-independent parsing and course helpers live in `library_data.py`; `tests/
 
 ## License
 
-Released under the MIT License; see `LICENSE`.
+Released under the MIT License; see `LICENSE`. **Help → About** shows the version and license. The version number is `__version__` in `library_visualizer.py`, and a test checks that it matches the newest heading in `CHANGELOG.md`, so change both together when releasing.
