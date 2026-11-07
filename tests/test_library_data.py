@@ -1103,7 +1103,7 @@ class SearchQueryTests(unittest.TestCase):
         # Exact equality matching behaves as expected
         self.assertTrue(data.match_chart_query(played_b, "grade:B"))
         self.assertFalse(data.match_chart_query(played_b, "grade:S"))
-        self.assertTrue(data.match_chart_query(unplayed, "grade:''"))
+        self.assertTrue(data.match_chart_query(unplayed, 'grade:""'))
         self.assertFalse(data.match_chart_query(unplayed, "grade:B"))
 
 
