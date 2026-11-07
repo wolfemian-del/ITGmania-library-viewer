@@ -1350,6 +1350,7 @@ class LibraryApp:
     def open_advanced_search(self):
         if self.advanced_search_window is not None and self.advanced_search_window.winfo_exists():
             self.advanced_search_window.lift()
+            self.advanced_search_window.focus_force()  # raised from behind the main window: give it the keys too
             return
 
         window = tk.Toplevel(self.root)
@@ -1510,6 +1511,7 @@ class LibraryApp:
     def open_course_builder(self):
         if self.course_window is not None and self.course_window.winfo_exists():
             self.course_window.lift()
+            self.course_window.focus_force()
             return
 
         window = tk.Toplevel(self.root)

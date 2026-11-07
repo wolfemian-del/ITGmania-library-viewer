@@ -735,6 +735,21 @@ class DialogKeyBindingTests(unittest.TestCase):
             mock_window.destroy.assert_called_once()
 
 
+    def test_opening_a_dialog_that_is_already_open_raises_it_and_gives_it_focus(self):
+        for attribute, opener in (("advanced_search_window", "open_advanced_search"),
+                                  ("course_window", "open_course_builder")):
+            with self.subTest(dialog=attribute):
+                instance = object.__new__(app.LibraryApp)
+                existing = Mock()
+                existing.winfo_exists.return_value = True
+                setattr(instance, attribute, existing)
+                mock_tk = Mock()
+                with patch.object(app, "tk", mock_tk):
+                    getattr(instance, opener)()
+                existing.lift.assert_called_once()
+                existing.focus_force.assert_called_once()
+                mock_tk.Toplevel.assert_not_called()  # no second window
+
     def test_main_escape_clears_search_only_when_no_dialog_is_open(self):
         instance = object.__new__(app.LibraryApp)
         instance.clear_search = Mock()
