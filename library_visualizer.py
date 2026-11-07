@@ -187,6 +187,7 @@ class LibraryApp:
         self._selected_tree_items = set()  # table rows currently carrying the white "selected_row" tag
         self._load_generation = 0  # counts Load / refresh requests; a scan from an older request is dropped
         self._snapshot_lock = threading.Lock()  # one scan at a time may check its generation and write the snapshot
+        self._last_saved_settings = dict(self.saved_settings)
         self._style()
         self._build()
         self.search_var.trace_add("write", lambda *_: self._schedule_search_refresh())
@@ -511,12 +512,15 @@ class LibraryApp:
             "show_distribution": self.show_distribution_panel.get() if hasattr(self, "show_distribution_panel") else False,
             "distribution_metric": self.distribution_metric.get() if hasattr(self, "distribution_metric") else "Meter",
         }
+        if getattr(self, "_last_saved_settings", None) == settings:
+            return
         temporary = self.settings_path.with_suffix(".tmp")
         try:
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
             with temporary.open("w", encoding="utf-8") as handle:
                 json.dump(settings, handle, indent=2)
             os.replace(temporary, self.settings_path)
+            self._last_saved_settings = settings
         except OSError as exc:
             if hasattr(self, "status"):
                 self.status.set(f"Could not save settings: {exc}")
@@ -798,17 +802,18 @@ class LibraryApp:
         if source_paths:
             self.loaded_source_paths = source_paths
         self.last_refreshed_at = refreshed_at
-        for combo, var, label, key in ((self.pack_filter, self.pack_var, "All packs", "Pack"),
-                                       (self.type_filter, self.type_var, "All types", "Type")):
-            values = [label] + sorted({str(r[key]) for r in rows if r[key]}, key=str.casefold)
-            combo.configure(values=values)
-            var.set(label)
-        difficulties = sorted(
-            {str(row["Difficulty"]) for row in rows if row["Difficulty"]},
-            key=difficulty_sort_key,
-        )
-        self.diff_filter.configure(values=["All difficulties"] + difficulties)
-        self.diff_var.set("All difficulties")
+        with self._batched_filter_changes():
+            for combo, var, label, key in ((self.pack_filter, self.pack_var, "All packs", "Pack"),
+                                           (self.type_filter, self.type_var, "All types", "Type")):
+                values = [label] + sorted({str(r[key]) for r in rows if r[key]}, key=str.casefold)
+                combo.configure(values=values)
+                var.set(label)
+            difficulties = sorted(
+                {str(row["Difficulty"]) for row in rows if row["Difficulty"]},
+                key=difficulty_sort_key,
+            )
+            self.diff_filter.configure(values=["All difficulties"] + difficulties)
+            self.diff_var.set("All difficulties")
         if from_cache:
             stamp = self._format_refresh_time(refreshed_at)
             self.status.set(f"Showing saved library snapshot · {len(rows):,} charts · last refreshed {stamp}.")
@@ -827,7 +832,6 @@ class LibraryApp:
             self.status.set(self.status.get() + f" Snapshot refreshed {self._format_refresh_time(refreshed_at)}.")
         if not from_cache and cache_error:
             self.status.set(self.status.get() + f" Local snapshot not saved: {cache_error}")
-        self.refresh_table()
 
     @staticmethod
     def _format_refresh_time(value):
@@ -1260,11 +1264,15 @@ class LibraryApp:
                                             initialfile="itgmania-library.csv")
         if not path:
             return
-        with open(path, "w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(handle, fieldnames=HEADERS, extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(self.rows)
-        self.status.set(f"Exported {len(self.rows):,} charts to {path}")
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as handle:
+                writer = csv.DictWriter(handle, fieldnames=HEADERS, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(self.rows)
+            self.status.set(f"Exported {len(self.rows):,} charts to {path}")
+        except OSError as exc:
+            self.status.set(f"Could not export CSV: {exc}")
+            messagebox.showerror("Export failed", f"Could not write to {path}:\n\n{exc}")
 
     def open_advanced_search(self):
         if getattr(self, "advanced_search_window", None) is not None and self.advanced_search_window.winfo_exists():
