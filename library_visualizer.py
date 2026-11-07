@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import csv
 from datetime import datetime
 import json
@@ -49,10 +50,12 @@ from library_data import (
     bpm_sort_key,
     build_dialog_query,
     course_append_bytes,
+    course_song_lines,
     difficulty_sort_key,
     distribution_summary_stats,
     filter_texts_match,
     format_duration,
+    format_new_course,
     get_active_chart_filters,
     grade_sort_key,
     looks_like_song_tree,
@@ -221,6 +224,7 @@ class LibraryApp:
         self.course_title_var = None
         self.course_tree = None
         self.course_count_var = None
+        self._last_saved_settings = copy.deepcopy(self.saved_settings)
         self._style()
         self._build()
         self.search_var.trace_add("write", lambda *_: self._schedule_search_refresh())
@@ -545,12 +549,18 @@ class LibraryApp:
             "show_distribution": self.show_distribution_panel.get(),
             "distribution_metric": self.distribution_metric.get(),
         }
+        if getattr(self, "_last_saved_settings", None) == settings:
+            return
         temporary = self.settings_path.with_suffix(".tmp")
         try:
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
             with temporary.open("w", encoding="utf-8") as handle:
                 json.dump(settings, handle, indent=2)
             os.replace(temporary, self.settings_path)
+            # Snapshot by value: the settings dict holds the live column_order list, which the
+            # column drag handler mutates in place, so keeping the dict itself would make the
+            # next comparison compare that list against itself and skip a real change.
+            self._last_saved_settings = copy.deepcopy(settings)
         except OSError as exc:
             self.status.set(f"Could not save settings: {exc}")
 
@@ -830,17 +840,18 @@ class LibraryApp:
         if source_paths:
             self.loaded_source_paths = source_paths
         self.last_refreshed_at = refreshed_at
-        for combo, var, label, key in ((self.pack_filter, self.pack_var, "All packs", "Pack"),
-                                       (self.type_filter, self.type_var, "All types", "Type")):
-            values = [label] + sorted({str(r[key]) for r in rows if r[key]}, key=str.casefold)
-            combo.configure(values=values)
-            var.set(label)
-        difficulties = sorted(
-            {str(row["Difficulty"]) for row in rows if row["Difficulty"]},
-            key=difficulty_sort_key,
-        )
-        self.diff_filter.configure(values=["All difficulties"] + difficulties)
-        self.diff_var.set("All difficulties")
+        with self._batched_filter_changes():
+            for combo, var, label, key in ((self.pack_filter, self.pack_var, "All packs", "Pack"),
+                                           (self.type_filter, self.type_var, "All types", "Type")):
+                values = [label] + sorted({str(r[key]) for r in rows if r[key]}, key=str.casefold)
+                combo.configure(values=values)
+                var.set(label)
+            difficulties = sorted(
+                {str(row["Difficulty"]) for row in rows if row["Difficulty"]},
+                key=difficulty_sort_key,
+            )
+            self.diff_filter.configure(values=["All difficulties"] + difficulties)
+            self.diff_var.set("All difficulties")
         if from_cache:
             stamp = self._format_refresh_time(refreshed_at)
             self.status.set(f"Showing saved library snapshot · {len(rows):,} charts · last refreshed {stamp}.")
@@ -859,7 +870,6 @@ class LibraryApp:
             self.status.set(self.status.get() + f" Snapshot refreshed {self._format_refresh_time(refreshed_at)}.")
         if not from_cache and cache_error:
             self.status.set(self.status.get() + f" Local snapshot not saved: {cache_error}")
-        self.refresh_table()
 
     @staticmethod
     def _format_refresh_time(value):
@@ -1290,11 +1300,15 @@ class LibraryApp:
                                             initialfile="itgmania-library.csv")
         if not path:
             return
-        with open(path, "w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(handle, fieldnames=HEADERS, extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(self.rows)
-        self.status.set(f"Exported {len(self.rows):,} charts to {path}")
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as handle:
+                writer = csv.DictWriter(handle, fieldnames=HEADERS, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(self.rows)
+            self.status.set(f"Exported {len(self.rows):,} charts to {path}")
+        except OSError as exc:
+            self.status.set(f"Could not export CSV: {exc}")
+            messagebox.showerror("Export failed", f"Could not write to {path}:\n\n{exc}")
 
     def open_advanced_search(self):
         if self.advanced_search_window is not None and self.advanced_search_window.winfo_exists():
@@ -1596,14 +1610,8 @@ class LibraryApp:
                 return False
         return True
 
-    def course_song_lines(self):
-        return [f"#SONG:{row['Course path']}:{row['Difficulty']}:;" for row in self.course_entries]
-
     def export_course(self):
         title = self.course_title_var.get().strip()
-        if not title:
-            messagebox.showerror("Course title required", "Enter a title for this course.", parent=self.course_window)
-            return
         if not self.validate_course_entries(title):
             return
 
@@ -1615,10 +1623,11 @@ class LibraryApp:
         )
         if not path:
             return
-        lines = [f"#COURSE:{title};", *self.course_song_lines()]
+        song_lines = course_song_lines(self.course_entries)
+        body = format_new_course(title, song_lines)
         try:
             with open(path, "w", encoding="utf-8", newline="") as handle:
-                handle.write("\n".join(lines) + "\n")
+                handle.write(body)
         except OSError as exc:
             messagebox.showerror("Could not save course", str(exc), parent=self.course_window)
             return
@@ -1643,7 +1652,7 @@ class LibraryApp:
             messagebox.showerror("Could not read course", str(exc), parent=self.course_window)
             return
         try:
-            addition = course_append_bytes(existing, self.course_song_lines())
+            addition = course_append_bytes(existing, course_song_lines(self.course_entries))
         except UnicodeError as exc:
             messagebox.showerror("Could not read course", f"The course could not be read as UTF-8.\n\n{exc}",
                                  parent=self.course_window)
