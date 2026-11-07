@@ -56,7 +56,6 @@ __all__ = [
     "format_bpm_display",
     "format_duration",
     "format_new_course",
-    "get_active_chart_filter",
     "get_active_chart_filters",
     "grade_sort_key",
     "looks_like_song_tree",
@@ -227,9 +226,6 @@ def stats_index(stats_file: Path) -> dict[tuple, dict]:
                 taps = best.find("TapNoteScores")
                 if taps is not None:
                     best_data.update({"tap_" + name: taps.findtext(name, "") for name in TAP_FIELDS})
-                radar = best.find("RadarValues")
-                if radar is not None:
-                    best_data.update({"score_" + name: radar.findtext(name, "") for name in RADAR_FIELDS})
             
             # Determine key: 4-tuple for Edit charts with a description, 3-tuple for non-Edit or empty description
             if diff == "edit" and desc:
@@ -963,12 +959,6 @@ def get_active_chart_filters(diff_filter: str, search_query: str) -> list[tuple[
         if values[metric]:
             active.append((metric, " ".join(values[metric])))
     return active
-
-
-def get_active_chart_filter(diff_filter: str, search_query: str) -> tuple[str, str] | None:
-    """Return the first (metric_name, active_value) from get_active_chart_filters, or None."""
-    active = get_active_chart_filters(diff_filter, search_query)
-    return active[0] if active else None
 
 
 def aggregate_meter_distribution(rows: list[dict], active_val: str | None = None) -> list[tuple[str, int, str, bool]]:

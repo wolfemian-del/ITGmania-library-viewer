@@ -39,7 +39,6 @@ CHART_MIN_CLICK_FRACTION = 0.15
 
 import theme
 from library_data import (
-    DIFFICULTY_ORDER,
     GRADE_OPTIONS,
     TAP_FIELDS,
     TECH_FIELDS,
