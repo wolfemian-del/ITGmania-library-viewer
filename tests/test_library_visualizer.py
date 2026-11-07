@@ -98,6 +98,7 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance.diff_var.get.return_value = "Challenge"
         instance.search_var = Mock()
         instance.search_var.get.return_value = 'pack:"In The Groove" diff:Challenge meter:10'
+        instance.search_entry = Mock()
         instance.refresh_table = Mock()
 
         instance.clear_chart_filter()
