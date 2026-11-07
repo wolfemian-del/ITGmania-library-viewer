@@ -1358,6 +1358,7 @@ class LibraryApp:
     def open_about(self):
         if self.about_window is not None and self.about_window.winfo_exists():
             self.about_window.lift()
+            self.about_window.focus_force()  # raised from behind the main window: give it the keys too
             return
 
         window = tk.Toplevel(self.root)

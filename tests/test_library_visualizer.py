@@ -800,6 +800,7 @@ class AboutDialogTests(unittest.TestCase):
         existing.winfo_exists.return_value = True
         _instance, mock_tk, _window, _bindings = self.open_about_with_mocks(about_window=existing)
         existing.lift.assert_called_once()
+        existing.focus_force.assert_called_once()  # raised from behind the main window: it gets the keys too
         mock_tk.Toplevel.assert_not_called()
 
 
