@@ -1503,6 +1503,9 @@ class LibraryApp:
 
         window.bind("<Escape>", _close)
         window.bind("<Return>", _apply_and_close)
+        # A new window does not always take keyboard focus (seen on Windows); without it Escape and Return
+        # would go to the main window instead of this one.
+        window.focus_force()
 
     def open_course_builder(self):
         if self.course_window is not None and self.course_window.winfo_exists():
@@ -1573,6 +1576,7 @@ class LibraryApp:
             return "break"
 
         window.bind("<Escape>", _close)
+        window.focus_force()  # see open_advanced_search: a new window may not take focus by itself
 
         self.add_selected_to_course()
 

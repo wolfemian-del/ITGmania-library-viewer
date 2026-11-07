@@ -674,6 +674,8 @@ class DialogKeyBindingTests(unittest.TestCase):
 
         self.assertIn("<Escape>", bindings)
         self.assertIn("<Return>", bindings)
+        # The window takes keyboard focus itself, so Escape and Return reach it without a click first.
+        mock_window.focus_force.assert_called_once()
 
         # Escape closes the dialog without touching the main search text and stops the key event.
         res_esc = bindings["<Escape>"]()
@@ -709,6 +711,8 @@ class DialogKeyBindingTests(unittest.TestCase):
             instance.open_course_builder()
 
         self.assertIn("<Escape>", bindings)
+        # The window takes keyboard focus itself, so Escape reaches it without a click first.
+        mock_window.focus_force.assert_called_once()
         mock_messagebox = Mock()
         with patch.object(app, "messagebox", mock_messagebox):
             # Empty queue: closes at once, no question.
