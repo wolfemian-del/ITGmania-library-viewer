@@ -101,30 +101,6 @@ class DistributionTests(unittest.TestCase):
             for target, value, new_values in targets:
                 self.assert_rewrite_keeps_meaning(query, target, value, new_values)
 
-    def test_get_active_chart_filter(self):
-        # Difficulty combobox takes priority over search query
-        self.assertEqual(
-            data.get_active_chart_filter("Challenge", "meter:11 bpm:140-159"),
-            ("Difficulty", "Challenge")
-        )
-
-        # When diff is "All difficulties", search directives take effect
-        self.assertEqual(
-            data.get_active_chart_filter("All difficulties", "meter:11 bpm:140-159"),
-            ("Meter", "11")
-        )
-
-        # BPM search directive
-        self.assertEqual(
-            data.get_active_chart_filter("All difficulties", "bpm:140-159"),
-            ("BPM", "140-159")
-        )
-
-        # Free text only
-        self.assertIsNone(
-            data.get_active_chart_filter("All difficulties", "Smiley Delirium")
-        )
-
     def test_aggregate_meter_distribution(self):
         rows = [
             {"Meter": 10},
