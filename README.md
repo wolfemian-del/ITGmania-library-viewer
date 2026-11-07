@@ -73,3 +73,7 @@ python -m unittest discover -s tests
 `theme.py` holds the colors and fonts; `tests/test_theme.py` checks the window code uses it.
 
 The UI-independent parsing and course helpers live in `library_data.py`; `tests/test_library_data.py` exercises them without importing Tkinter. Course formatting, parsing, trailing-modifier detection, and field validation live there so CRS features can grow without pulling in the Tk UI. The snapshot lifecycle tests exercise the app module.
+
+## License
+
+Released under the MIT License; see `LICENSE`.
