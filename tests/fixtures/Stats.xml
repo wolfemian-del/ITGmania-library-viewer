@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic Stats.xml for the end-to-end fixture tests (issue #52).
+     All songs, players and scores are invented. The shape follows what
+     ITGmania writes: play counts and dates as child elements of
+     HighScoreList, one HighScore per recorded play. -->
+<Stats>
+  <SongScores>
+    <Song Dir="Songs/Fixture Pack/Tempo Tangle">
+      <Steps StepsType="dance-single" Difficulty="Hard">
+        <HighScoreList>
+          <NumTimesPlayed>14</NumTimesPlayed>
+          <LastPlayed>2026-10-26</LastPlayed>
+          <HighScore>
+            <Name>FIXT</Name>
+            <Grade>Tier06</Grade>
+            <Score>982340</Score>
+            <PercentDP>0.9823</PercentDP>
+            <MaxCombo>431</MaxCombo>
+            <DateTime>2026-10-26 21:14:00</DateTime>
+            <TapNoteScores>
+              <W1>400</W1>
+              <W2>25</W2>
+              <W3>8</W3>
+              <W4>3</W4>
+              <W5>1</W5>
+              <Miss>1</Miss>
+            </TapNoteScores>
+          </HighScore>
+          <HighScore>
+            <Name>FIXT</Name>
+            <Grade>Tier08</Grade>
+            <Score>910000</Score>
+            <PercentDP>0.9100</PercentDP>
+            <MaxCombo>300</MaxCombo>
+            <DateTime>2026-09-01 20:00:00</DateTime>
+          </HighScore>
+        </HighScoreList>
+      </Steps>
+    </Song>
+    <Song Dir="Songs/Fixture Pack/Hearts ; Arrows">
+      <Steps StepsType="dance-single" Difficulty="Medium">
+        <HighScoreList>
+          <NumTimesPlayed>3</NumTimesPlayed>
+          <LastPlayed>2026-08-15</LastPlayed>
+          <HighScore>
+            <Name>FIXT</Name>
+            <Grade>Tier07</Grade>
+            <Score>965000</Score>
+            <PercentDP>0.9651</PercentDP>
+            <MaxCombo>288</MaxCombo>
+            <DateTime>2026-08-15 19:02:00</DateTime>
+          </HighScore>
+        </HighScoreList>
+      </Steps>
+    </Song>
+    <Song Dir="Songs/Fixture Pack/Double Edit Dilemma">
+      <Steps StepsType="dance-single" Difficulty="Challenge">
+        <HighScoreList>
+          <NumTimesPlayed>21</NumTimesPlayed>
+          <LastPlayed>2026-11-01</LastPlayed>
+          <HighScore>
+            <Name>FIXT</Name>
+            <Grade>Tier04</Grade>
+            <Score>991200</Score>
+            <PercentDP>0.9912</PercentDP>
+            <MaxCombo>512</MaxCombo>
+            <DateTime>2026-11-01 22:40:00</DateTime>
+          </HighScore>
+        </HighScoreList>
+      </Steps>
+      <Steps StepsType="dance-single" Difficulty="Edit" Description="Alpha Edit">
+        <HighScoreList>
+          <NumTimesPlayed>7</NumTimesPlayed>
+          <LastPlayed>2026-10-03</LastPlayed>
+          <HighScore>
+            <Name>FIXT</Name>
+            <Grade>Tier05</Grade>
+            <Score>975500</Score>
+            <PercentDP>0.9755</PercentDP>
+            <MaxCombo>402</MaxCombo>
+            <DateTime>2026-10-03 18:22:00</DateTime>
+          </HighScore>
+        </HighScoreList>
+      </Steps>
+      <Steps StepsType="dance-single" Difficulty="Edit" Description="Beta Edit">
+        <HighScoreList>
+          <NumTimesPlayed>5</NumTimesPlayed>
+          <LastPlayed>2026-10-19</LastPlayed>
+          <HighScore>
+            <Name>FIXT</Name>
+            <Grade>Tier09</Grade>
+            <Score>889000</Score>
+            <PercentDP>0.8890</PercentDP>
+            <MaxCombo>301</MaxCombo>
+            <DateTime>2026-10-19 17:45:00</DateTime>
+          </HighScore>
+        </HighScoreList>
+      </Steps>
+    </Song>
+    <Song Dir="Songs/Fixture Pack/Neon Skyline">
+      <Steps StepsType="dance-routine" Difficulty="Hard">
+        <HighScoreList>
+          <NumTimesPlayed>9</NumTimesPlayed>
+          <LastPlayed>2026-09-27</LastPlayed>
+          <HighScore>
+            <Name>FIXT</Name>
+            <Grade>Tier10</Grade>
+            <Score>870400</Score>
+            <PercentDP>0.8704</PercentDP>
+            <MaxCombo>233</MaxCombo>
+            <DateTime>2026-09-27 16:03:00</DateTime>
+          </HighScore>
+        </HighScoreList>
+      </Steps>
+    </Song>
+    <Song Dir="Songs/Fixture Pack/Don't Look Back">
+      <Steps StepsType="dance-single" Difficulty="Hard">
+        <HighScoreList>
+          <NumTimesPlayed>11</NumTimesPlayed>
+          <LastPlayed>2026-10-30</LastPlayed>
+          <HighScore>
+            <Name>FIXT</Name>
+            <Grade>Tier03</Grade>
+            <Score>994800</Score>
+            <PercentDP>0.9948</PercentDP>
+            <MaxCombo>455</MaxCombo>
+            <DateTime>2026-10-30 20:31:00</DateTime>
+          </HighScore>
+        </HighScoreList>
+      </Steps>
+    </Song>
+  </SongScores>
+</Stats>
