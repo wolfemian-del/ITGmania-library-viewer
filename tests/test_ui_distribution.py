@@ -356,6 +356,7 @@ class SingleRefreshTests(unittest.TestCase):
         instance = object.__new__(app.LibraryApp)
         instance.root = FakeRoot()
         instance.search_var, instance.diff_var = FakeVar(query), FakeVar(diff)
+        instance.search_entry = Mock()
         instance.distribution_metric = FakeVar(metric)
         instance._current_dist_bars = bars or [app.ChartBar(0.0, 1.0, "11", "11")]
         instance.refreshes = 0

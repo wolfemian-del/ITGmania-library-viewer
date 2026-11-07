@@ -190,6 +190,40 @@ class LibraryApp:
         self._selected_tree_items = set()  # table rows currently carrying the white "selected_row" tag
         self._load_generation = 0  # counts Load / refresh requests; a scan from an older request is dropped
         self._snapshot_lock = threading.Lock()  # one scan at a time may check its generation and write the snapshot
+        # Attributes that are filled in after this point. Declaring them here lists everything the window
+        # holds in one place; the comments name where each one is filled in.
+        # Widgets and variables created by _build(); None until then:
+        self.status = None
+        self.search_entry = None
+        self.pack_filter = None
+        self.type_filter = None
+        self.diff_filter = None
+        self.dist_button = None
+        self.content_frame = None
+        self.table_frame = None
+        self.tree = None  # refresh_table and _save_settings do nothing until the table exists
+        self.progress = None
+        self.count_label = None
+        # Created by _build_distribution_panel(); None until then:
+        self.dist_panel = None  # the distribution code does nothing until the panel exists
+        self.dist_summary_var = None
+        self.dist_banner_frame = None
+        self.dist_banner_label = None
+        self.dist_chart_frame = None
+        # Working state that starts empty:
+        self.last_refreshed_at = ""  # when the saved snapshot was written (set by _loaded)
+        self._render_generation = 0  # counts table redraws, so an unfinished older redraw stops (refresh_table)
+        self.tree_item_rows = {}  # table row id -> its chart row (refresh_table)
+        self._dragged_column = None  # heading being dragged, and where the drag began (_column_drag_start)
+        self._drag_start_x = None
+        # Dialogs: a window attribute is None while that dialog is closed. The course fields are set by
+        # open_course_builder, which starts a fresh queue every time it opens.
+        self.advanced_search_window = None
+        self.course_window = None
+        self.course_entries: list[dict] = []
+        self.course_title_var = None
+        self.course_tree = None
+        self.course_count_var = None
         self._last_saved_settings = copy.deepcopy(self.saved_settings)
         self._style()
         self._build()
@@ -481,7 +515,7 @@ class LibraryApp:
             for saved, selected in zip(self.loaded_source_paths, current)
         )
         if paths_match:
-            stamp = self._format_refresh_time(getattr(self, "last_refreshed_at", ""))
+            stamp = self._format_refresh_time(self.last_refreshed_at)
             self.status.set(f"Showing saved library snapshot · {len(self.rows):,} charts · last refreshed {stamp}.")
         else:
             self.status.set("Displayed library uses different data paths. Click Load / refresh to show the selected sources.")
@@ -503,7 +537,7 @@ class LibraryApp:
             return {}
 
     def _save_settings(self, _event=None):
-        if not hasattr(self, "tree"):
+        if self.tree is None:
             return
         settings = {
             "cache_dir": self.cache_var.get(),
@@ -512,10 +546,10 @@ class LibraryApp:
             "column_visibility": {column: variable.get() for column, variable in self.column_visibility.items()},
             "column_widths": {column: self.tree.column(column, "width") for column in HEADERS},
             "sort_keys": [[column, descending] for column, descending in self.sort_keys],
-            "show_distribution": self.show_distribution_panel.get() if hasattr(self, "show_distribution_panel") else False,
-            "distribution_metric": self.distribution_metric.get() if hasattr(self, "distribution_metric") else "Meter",
+            "show_distribution": self.show_distribution_panel.get(),
+            "distribution_metric": self.distribution_metric.get(),
         }
-        if getattr(self, "_last_saved_settings", None) == settings:
+        if self._last_saved_settings == settings:
             return
         temporary = self.settings_path.with_suffix(".tmp")
         try:
@@ -528,8 +562,7 @@ class LibraryApp:
             # next comparison compare that list against itself and skip a real change.
             self._last_saved_settings = copy.deepcopy(settings)
         except OSError as exc:
-            if hasattr(self, "status"):
-                self.status.set(f"Could not save settings: {exc}")
+            self.status.set(f"Could not save settings: {exc}")
 
     def focus_search(self):
         self.search_entry.focus_set()
@@ -540,8 +573,7 @@ class LibraryApp:
         self.search_entry.focus_set()
 
     def _dialog_is_open(self):
-        for name in ("advanced_search_window", "course_window"):
-            window = getattr(self, name, None)
+        for window in (self.advanced_search_window, self.course_window):
             if window is not None and window.winfo_exists():
                 return True
         return False
@@ -639,8 +671,8 @@ class LibraryApp:
             self._drag_start_x = None
 
     def _column_drag_end(self, event):
-        source = getattr(self, "_dragged_column", None)
-        start_x = getattr(self, "_drag_start_x", None)
+        source = self._dragged_column
+        start_x = self._drag_start_x
         self._dragged_column = None
         self._drag_start_x = None
         if source is None or start_x is None or abs(event.x - start_x) < 5:
@@ -878,15 +910,15 @@ class LibraryApp:
         return rows
 
     def refresh_table(self, preserve_selection=False):
-        if not hasattr(self, "tree"):
+        if self.tree is None:
             return
         selected_rows = set()
         if preserve_selection:
             selected_rows = {
                 id(self.tree_item_rows[item]) for item in self.tree.selection()
-                if item in getattr(self, "tree_item_rows", {})
+                if item in self.tree_item_rows
             }
-        self._render_generation = getattr(self, "_render_generation", 0) + 1
+        self._render_generation += 1
         generation = self._render_generation
         self._update_sort_headings()
         visible = self._filter_rows()
@@ -1040,13 +1072,13 @@ class LibraryApp:
 
     def _set_distribution_visible(self, visible: bool):
         """Single source of truth for panel visibility (toolbar + View menu)."""
-        if not hasattr(self, "dist_panel"):
+        if self.dist_panel is None:
             return
         self.show_distribution_panel.set(visible)
         if visible:
             self.dist_panel.pack(side="right", fill="y", padx=(10, 0), before=self.table_frame)
             self.dist_button.configure(text="Distribution ◀")
-            self._update_distribution_panel(getattr(self, "_last_visible_rows", []))
+            self._update_distribution_panel(self._last_visible_rows)
         else:
             self.dist_panel.pack_forget()
             self.dist_button.configure(text="Distribution ▶")
@@ -1063,7 +1095,7 @@ class LibraryApp:
 
     def _on_distribution_metric_changed(self):
         self._save_settings()
-        self._update_distribution_panel(getattr(self, "_last_visible_rows", []))
+        self._update_distribution_panel(self._last_visible_rows)
 
     def clear_chart_filter(self):
         """Remove every filter the distribution charts can set (difficulty, meter and BPM)."""
@@ -1077,8 +1109,7 @@ class LibraryApp:
                     self.diff_var.set("All difficulties")
                 query = replace_search_directive(query, CHART_FILTER_FIELDS[metric], None)
             self.search_var.set(query)
-        if hasattr(self, "search_entry"):
-            self.search_entry.icursor("end")
+        self.search_entry.icursor("end")
 
     def _on_chart_click(self, event):
         # xdata and ydata are None when the click is outside the plot area (for example on a row label).
@@ -1111,8 +1142,7 @@ class LibraryApp:
                     query, CHART_FILTER_FIELDS[metric], None if already_active else target_token)
                 self.search_var.set(new_query)
 
-        if hasattr(self, "search_entry"):
-            self.search_entry.icursor("end")
+        self.search_entry.icursor("end")
 
     def _metric_filter_present(self, metric):
         """Whether the table is currently filtered by this chart's own metric."""
@@ -1130,7 +1160,7 @@ class LibraryApp:
 
     def _update_distribution_panel(self, visible_rows):
         self._last_visible_rows = visible_rows
-        if not hasattr(self, "dist_panel") or not self.show_distribution_panel.get():
+        if self.dist_panel is None or not self.show_distribution_panel.get():
             return
 
         metric = self.distribution_metric.get()
@@ -1281,7 +1311,7 @@ class LibraryApp:
             messagebox.showerror("Export failed", f"Could not write to {path}:\n\n{exc}")
 
     def open_advanced_search(self):
-        if getattr(self, "advanced_search_window", None) is not None and self.advanced_search_window.winfo_exists():
+        if self.advanced_search_window is not None and self.advanced_search_window.winfo_exists():
             self.advanced_search_window.lift()
             return
 
@@ -1438,7 +1468,7 @@ class LibraryApp:
         window.bind("<Return>", _apply_and_close)
 
     def open_course_builder(self):
-        if getattr(self, "course_window", None) is not None and self.course_window.winfo_exists():
+        if self.course_window is not None and self.course_window.winfo_exists():
             self.course_window.lift()
             return
 
@@ -1510,11 +1540,9 @@ class LibraryApp:
         self.add_selected_to_course()
 
     def add_selected_to_course(self):
-        if not getattr(self, "course_entries", None):
-            self.course_entries = []
         added = 0
         for item in self.tree.selection():
-            row = getattr(self, "tree_item_rows", {}).get(item)
+            row = self.tree_item_rows.get(item)
             if row is not None:
                 self.course_entries.append(row)
                 added += 1
