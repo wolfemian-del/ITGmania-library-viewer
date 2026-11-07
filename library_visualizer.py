@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import csv
 from datetime import datetime
 import json
@@ -187,7 +188,7 @@ class LibraryApp:
         self._selected_tree_items = set()  # table rows currently carrying the white "selected_row" tag
         self._load_generation = 0  # counts Load / refresh requests; a scan from an older request is dropped
         self._snapshot_lock = threading.Lock()  # one scan at a time may check its generation and write the snapshot
-        self._last_saved_settings = dict(self.saved_settings)
+        self._last_saved_settings = copy.deepcopy(self.saved_settings)
         self._style()
         self._build()
         self.search_var.trace_add("write", lambda *_: self._schedule_search_refresh())
@@ -520,7 +521,10 @@ class LibraryApp:
             with temporary.open("w", encoding="utf-8") as handle:
                 json.dump(settings, handle, indent=2)
             os.replace(temporary, self.settings_path)
-            self._last_saved_settings = settings
+            # Snapshot by value: the settings dict holds the live column_order list, which the
+            # column drag handler mutates in place, so keeping the dict itself would make the
+            # next comparison compare that list against itself and skip a real change.
+            self._last_saved_settings = copy.deepcopy(settings)
         except OSError as exc:
             if hasattr(self, "status"):
                 self.status.set(f"Could not save settings: {exc}")

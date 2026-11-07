@@ -649,6 +649,37 @@ class PerformanceAndExportTests(unittest.TestCase):
             data = json.loads(settings_path.read_text(encoding="utf-8"))
             self.assertEqual(data["column_widths"]["Pack"], 150)
 
+    def test_save_settings_persists_in_place_column_reorder_after_earlier_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            instance = object.__new__(app.LibraryApp)
+            instance.settings_path = settings_path
+            instance.tree = Mock()
+            instance.cache_var = Mock(get=Mock(return_value="/cache"))
+            instance.stats_var = Mock(get=Mock(return_value="/stats.xml"))
+            instance.column_order = list(app.HEADERS)
+            instance.column_visibility = {col: Mock(get=Mock(return_value=True)) for col in app.HEADERS}
+            instance.tree.column.return_value = 100
+            instance.sort_keys = [("Pack", False)]
+            instance.show_distribution_panel = Mock(get=Mock(return_value=False))
+            instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
+            instance._last_saved_settings = None
+
+            # An earlier save in the session (any routine click) populates the dedup snapshot.
+            instance._save_settings()
+            self.assertTrue(settings_path.is_file())
+            self.assertNotEqual(json.loads(settings_path.read_text(encoding="utf-8"))["column_order"][0], "Meter")
+
+            # The column drag handler mutates column_order in place (remove/insert) and then saves;
+            # the new order must reach disk even though nothing was reassigned.
+            instance.column_order.remove("Meter")
+            instance.column_order.insert(0, "Meter")
+            instance._save_settings()
+
+            data = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["column_order"], instance.column_order)
+            self.assertEqual(data["column_order"][0], "Meter")
+
     def test_export_csv_handles_unwritable_file_error(self):
         instance = object.__new__(app.LibraryApp)
         instance.rows = [{"Title": "Test Song", "Artist": "Artist"}]
