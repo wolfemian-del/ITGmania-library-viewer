@@ -176,9 +176,12 @@ def bpm_sort_key(row: dict):
 def tag_map(text: str) -> dict[str, str]:
     tags = {}
     # ITGmania MSD tags start with #KEY: and end at an unescaped ;.
+    # Values may span lines (e.g. multi-segment #BPMS joined with ',\r\n' or ',\n').
     # A backslash escapes the next character (e.g. \; is a literal semicolon, \\ is a literal backslash).
-    # Exclude both ; and \ from the non-escape class to ensure linear-time parsing without ReDoS.
-    for m in re.finditer(r"(?m)^#([^:;\r\n]+):((?:\\.|[^;\r\n\\])*);", text):
+    # Line breaks are consumed as whole CRLF/LF/CR units as long as they are not
+    # followed by '#' (which begins a new tag line). Matching each unit in only
+    # one way keeps the alternatives disjoint and parsing linear-time.
+    for m in re.finditer(r"(?m)^#([^:;\r\n]+):((?:\\.|[^;\\\r\n]|(?:\r\n(?!#)|\r(?!\n)(?!#)|\n(?!#)))*);", text):
         raw_val = m.group(2).strip()
         decoded_val = re.sub(r"\\(.)", r"\1", raw_val)
         tags[m.group(1).upper()] = decoded_val
@@ -200,17 +203,18 @@ def split_path(value: str) -> str:
     return "/".join(parts).strip("/")
 
 
-def stats_index(stats_file: Path) -> dict[tuple[str, str, str], dict]:
+def stats_index(stats_file: Path) -> dict[tuple, dict]:
     root = ET.parse(stats_file).getroot()
-    result: dict[tuple[str, str, str], dict] = {}
+    result: dict[tuple, dict] = {}
     song_scores = root.find("SongScores")
     if song_scores is None:
         return result
     for song in song_scores.findall("Song"):
         song_path = split_path(song.get("Dir", ""))
         for steps in song.findall("Steps"):
-            key = (song_path.casefold(), steps.get("StepsType", "").casefold(),
-                   steps.get("Difficulty", "").casefold())
+            steps_type = steps.get("StepsType", "").casefold()
+            diff = steps.get("Difficulty", "").casefold()
+            desc = (steps.get("Description") or "").strip().casefold()
             score_list = steps.find("HighScoreList")
             if score_list is None:
                 continue
@@ -226,6 +230,13 @@ def stats_index(stats_file: Path) -> dict[tuple[str, str, str], dict]:
                 radar = best.find("RadarValues")
                 if radar is not None:
                     best_data.update({"score_" + name: radar.findtext(name, "") for name in RADAR_FIELDS})
+            
+            # Determine key: 4-tuple for Edit charts with a description, 3-tuple for non-Edit or empty description
+            if diff == "edit" and desc:
+                key = (song_path.casefold(), steps_type, diff, desc)
+            else:
+                key = (song_path.casefold(), steps_type, diff)
+
             entry = result.setdefault(key, {"plays": "0", "last_played": ""})
             plays = score_list.findtext("NumTimesPlayed", "0")
             if number(plays) > number(entry["plays"]):
@@ -239,6 +250,34 @@ def stats_index(stats_file: Path) -> dict[tuple[str, str, str], dict]:
                               number(best_data.get("PercentDP")) > number(entry.get("PercentDP"))):
                 entry.update(best_data)
     return result
+
+
+def _merged_edit_fallback(scores: dict, base_key: tuple[str, str, str]) -> dict:
+    """Rebuild the shared Edit score used when the cache chart has no description.
+
+    stats_index keeps described Edits apart, but a cache chart without a
+    description cannot be matched to one of them. In that case keep the
+    pre-isolation result: the best score entry, the highest play count and
+    the latest last-played date across the song's Edit entries (including an
+    undescribed entry stored under the plain 3-tuple key).
+    """
+    candidates = [entry for key, entry in scores.items()
+                  if isinstance(key, tuple) and len(key) in (3, 4) and key[:3] == base_key]
+    if not candidates:
+        return {}
+    scored = [entry for entry in candidates if "PercentDP" in entry]
+    merged = dict(max(scored, key=lambda entry: number(entry.get("PercentDP")))
+                  if scored else candidates[0])
+    plays = candidates[0].get("plays", "0")
+    last_played = candidates[0].get("last_played", "")
+    for entry in candidates[1:]:
+        if number(entry.get("plays")) > number(plays):
+            plays = entry.get("plays", "0")
+        if entry.get("last_played", "") > last_played:
+            last_played = entry.get("last_played", "")
+    merged["plays"] = plays
+    merged["last_played"] = last_played
+    return merged
 
 
 def parse_cache_file(path: Path, scores: dict) -> list[dict]:
@@ -264,10 +303,24 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
         radar_values = tags.get("RADARVALUES", "").split(",")
         radar = {name: number(value) for name, value in zip(RADAR_FIELDS, radar_values)}
         tech = [number(v, -1) for v in tags.get("TECHCOUNTS", "").split(",")]
-        key = (song_dir.casefold(), chart_type.casefold(), difficulty.casefold())
-        score = scores.get(key, {})
-        percent = number(score.get("PercentDP")) * 100
         display_name = tags.get("CHARTNAME") or tags.get("DESCRIPTION", "")
+        # Stats.xml keys an Edit by its description. #DESCRIPTION is that field;
+        # #CHARTNAME is only a fallback for caches where the description landed
+        # there instead (older SSC loading), not a replacement for it.
+        score_description = tags.get("DESCRIPTION", "").strip() or tags.get("CHARTNAME", "").strip()
+        base_key = (song_dir.casefold(), chart_type.casefold(), difficulty.casefold())
+        if difficulty.casefold() == "edit" and score_description:
+            score = scores.get((*base_key, score_description.casefold()))
+            if score is None:
+                # The Stats entry itself has no description: use its shared key.
+                score = scores.get(base_key, {})
+        elif difficulty.casefold() == "edit":
+            # The cache chart has no description: fall back to the shared
+            # result across the song's Edit entries, described or not.
+            score = _merged_edit_fallback(scores, base_key)
+        else:
+            score = scores.get(base_key, {})
+        percent = number(score.get("PercentDP")) * 100
         rows.append({
             "Title": song_tags.get("TITLE", path.stem), "Artist": song_tags.get("ARTIST", ""),
             "Pack": pack, "Type": chart_type, "Difficulty": difficulty, "Course path": song_dir,
