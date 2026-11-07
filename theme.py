@@ -1,4 +1,4 @@
-"""Colors and fonts for the library viewer window.
+"""Colors and fonts for the ITGmania Library Visualizer window.
 
 Every color and font the window uses is defined here, named by what it is for. To restyle the app, edit
 the values in this file and restart it. The values are plain strings and tuples so that this file does
