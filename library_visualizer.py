@@ -8,6 +8,7 @@ import csv
 from datetime import datetime
 import json
 import os
+import queue
 import re
 import sys
 import threading
@@ -189,6 +190,7 @@ class LibraryApp:
         self._selected_tree_items = set()  # table rows currently carrying the white "selected_row" tag
         self._load_generation = 0  # counts Load / refresh requests; a scan from an older request is dropped
         self._snapshot_lock = threading.Lock()  # one scan at a time may check its generation and write the snapshot
+        self._load_results = queue.Queue()  # finished scans wait here; only the main thread delivers them (_poll_load_results)
         # Attributes that are filled in after this point. Declaring them here lists everything the window
         # holds in one place; the comments name where each one is filled in.
         # Widgets and variables created by _build(); None until then:
@@ -203,6 +205,7 @@ class LibraryApp:
         self.tree = None  # refresh_table and _save_settings do nothing until the table exists
         self.progress = None
         self.count_label = None
+        self.load_button = None
         # Created by _build_distribution_panel(); None until then:
         self.dist_panel = None  # the distribution code does nothing until the panel exists
         self.dist_summary_var = None
@@ -231,6 +234,7 @@ class LibraryApp:
             var.trace_add("write", lambda *_: self._refresh_unless_batching())
         for var in (self.cache_var, self.stats_var):
             var.trace_add("write", lambda *_: self._source_paths_changed())
+        self.root.after(75, self._poll_load_results)
         self.load_cached_data()
 
     def _style(self):
@@ -299,7 +303,8 @@ class LibraryApp:
         tk.Checkbutton(bar, text="Scored only", variable=self.scored_var, bg=theme.BG_WINDOW, fg=theme.TEXT_LABEL,
                        activebackground=theme.BG_WINDOW, activeforeground=theme.TEXT_ON_ACCENT, selectcolor=theme.BG_INPUT,
                        font=theme.FONT_BODY).pack(side="left", padx=9)
-        self._button(bar, "Load / refresh", self.load_data, primary=True).pack(side="left", padx=4)
+        self.load_button = self._button(bar, "Load / refresh", self.load_data, primary=True)
+        self.load_button.pack(side="left", padx=4)
         self._button(bar, "Export CSV", self.export_csv).pack(side="left", padx=4)
         self._button(bar, "Build course…", self.open_course_builder).pack(side="left", padx=4)
         self.dist_button = self._button(
@@ -764,6 +769,10 @@ class LibraryApp:
         self._save_settings()
         self.progress.start(12)
         self.status.set("Reading chart cache and player scores…")
+        # Disabled until the scan's result is delivered, so a second click cannot
+        # pile up scans; the File menu entry still starts a newer scan, which
+        # supersedes this one by generation and owns re-enabling the button.
+        self.load_button.configure(state="disabled")
         self._load_generation += 1
         generation = self._load_generation
         threading.Thread(target=self._load_worker, args=(cache, stats, generation), daemon=True).start()
@@ -807,25 +816,53 @@ class LibraryApp:
                     refreshed_at = ""
                     cache_error = str(exc)
 
-            self.root.after(0, lambda: self._loaded(
-                rows, len(files), skipped_files, files_without_charts, nested_song_tree,
-                refreshed_at=refreshed_at, cache_error=cache_error,
-                source_paths=(str(cache), str(stats_file)),
-                generation=generation))
+            # Hand the result to the main thread through the queue. Calling Tk
+            # (root.after) from this worker thread is not guaranteed safe.
+            self._load_results.put(("loaded", (rows, len(files)), {
+                "skipped_files": skipped_files,
+                "files_without_charts": files_without_charts,
+                "nested_song_tree": nested_song_tree,
+                "refreshed_at": refreshed_at,
+                "cache_error": cache_error,
+                "source_paths": (str(cache), str(stats_file)),
+                "generation": generation,
+            }))
         except ET.ParseError as exc:
-            self.root.after(0, lambda message=str(exc): self._load_failed(
-                f"Stats.xml is malformed or incomplete and could not be parsed.\n\n{message}",
-                generation=generation))
+            self._load_results.put(("failed",
+                                    f"Stats.xml is malformed or incomplete and could not be parsed.\n\n{exc}",
+                                    generation))
         except OSError as exc:
-            self.root.after(0, lambda message=str(exc): self._load_failed(
-                f"Could not read the selected cache folder or Stats.xml.\n\n{message}",
-                generation=generation))
+            self._load_results.put(("failed",
+                                    f"Could not read the selected cache folder or Stats.xml.\n\n{exc}",
+                                    generation))
         except Exception as exc:
-            self.root.after(0, lambda message=str(exc): self._load_failed(message, generation=generation))
+            self._load_results.put(("failed", str(exc), generation))
+
+    def _poll_load_results(self):
+        # Runs on the main thread for the life of the window: deliver whatever
+        # finished scans queued, then schedule the next poll. _loaded and
+        # _load_failed drop results from superseded generations themselves.
+        try:
+            while True:
+                result = self._load_results.get_nowait()
+                if result[0] == "loaded":
+                    _, args, kwargs = result
+                    self._loaded(*args, **kwargs)
+                else:
+                    _, message, generation = result
+                    self._load_failed(message, generation=generation)
+        except queue.Empty:
+            pass
+        finally:
+            try:
+                self.root.after(75, self._poll_load_results)
+            except tk.TclError:
+                pass  # the window is gone; stop polling
 
     def _load_failed(self, message, generation=None):
         if generation is not None and self._load_is_stale(generation):
             return
+        self.load_button.configure(state="normal")
         self.progress.stop()
         self.status.set("Could not load library.")
         messagebox.showerror("Could not load library", message)
@@ -834,6 +871,7 @@ class LibraryApp:
                 refreshed_at="", cache_error="", from_cache=False, source_paths=None, generation=None):
         if generation is not None and self._load_is_stale(generation):
             return
+        self.load_button.configure(state="normal")
         self.progress.stop()
         self.rows = rows
         if source_paths:

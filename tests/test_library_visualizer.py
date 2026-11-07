@@ -1,4 +1,5 @@
 import json
+import queue
 import tempfile
 import threading
 import unittest
@@ -453,6 +454,7 @@ class RefreshGenerationTests(unittest.TestCase):
 
             instance = object.__new__(app.LibraryApp)
             instance._load_generation = 2
+            instance._load_results = queue.Queue()
             instance._save_library_cache = Mock()
             instance.root = Mock()
 
@@ -461,6 +463,7 @@ class RefreshGenerationTests(unittest.TestCase):
 
             instance._save_library_cache.assert_not_called()
             instance.root.after.assert_not_called()
+            self.assertTrue(instance._load_results.empty())
 
     def test_load_worker_superseded_after_scan_does_not_save(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -474,6 +477,7 @@ class RefreshGenerationTests(unittest.TestCase):
             instance = object.__new__(app.LibraryApp)
             instance._load_generation = 1
             instance._snapshot_lock = threading.Lock()
+            instance._load_results = queue.Queue()
             instance._save_library_cache = Mock()
             instance.root = Mock()
 
@@ -486,6 +490,7 @@ class RefreshGenerationTests(unittest.TestCase):
 
             instance._save_library_cache.assert_not_called()
             instance.root.after.assert_not_called()
+            self.assertTrue(instance._load_results.empty())
 
     def test_older_scan_cannot_overwrite_newer_snapshot(self):
         sample = "#SONGFILENAME:Songs/P/S/a.ogg;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n"
@@ -502,6 +507,7 @@ class RefreshGenerationTests(unittest.TestCase):
             instance.settings_path = root / "settings.json"
             instance._load_generation = 1
             instance._snapshot_lock = threading.Lock()
+            instance._load_results = queue.Queue()
             instance.root = Mock()
 
             real_save = app.LibraryApp._save_library_cache
@@ -529,12 +535,21 @@ class RefreshGenerationTests(unittest.TestCase):
             snapshot = json.loads((root / "library_cache.json").read_text(encoding="utf-8"))
             self.assertEqual(Path(snapshot["cache_dir"]), new_folder)
 
+            # Both scans queued their results for the main thread (the older
+            # one's delivery is dropped by _loaded's generation check).
+            queued = []
+            while not instance._load_results.empty():
+                kind, _, kwargs = instance._load_results.get_nowait()
+                queued.append((kind, kwargs["generation"]))
+            self.assertEqual(queued, [("loaded", 1), ("loaded", 2)])
+
     def test_loaded_and_load_failed_ignore_stale_generation(self):
         instance = object.__new__(app.LibraryApp)
         instance._load_generation = 5
         instance.progress = Mock()
         instance.status = Mock()
         instance.refresh_table = Mock()
+        instance.load_button = Mock()
         mock_mb = Mock()
 
         with patch.object(app, "messagebox", mock_mb):
@@ -543,15 +558,97 @@ class RefreshGenerationTests(unittest.TestCase):
             instance.progress.stop.assert_not_called()
             instance.refresh_table.assert_not_called()
 
-            # Stale _load_failed call
+            # Stale _load_failed call: a superseded scan must not stop the
+            # progress bar or re-enable the Load button the newer scan owns.
             instance._load_failed("Some error", generation=4)
             instance.progress.stop.assert_not_called()
+            instance.load_button.configure.assert_not_called()
             mock_mb.showerror.assert_not_called()
 
             # Current generation works
             instance._load_failed("Real error", generation=5)
             instance.progress.stop.assert_called_once()
+            instance.load_button.configure.assert_called_once_with(state="normal")
             mock_mb.showerror.assert_called_once_with("Could not load library", "Real error")
+
+    def test_load_worker_queues_results_instead_of_calling_tk(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache"
+            cache_dir.mkdir()
+            (cache_dir / "test.cache").write_text("#SONGFILENAME:Songs/P/S/a.ogg;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n", encoding="utf-8")
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>", encoding="utf-8")
+
+            instance = object.__new__(app.LibraryApp)
+            instance._load_generation = 1
+            instance._snapshot_lock = threading.Lock()
+            instance._load_results = queue.Queue()
+            instance._save_library_cache = Mock(return_value="2026-01-01T00:00:00")
+            instance.root = Mock()
+
+            instance._load_worker(cache_dir, stats_file, generation=1)
+
+            # The worker thread hands results over through the queue; it never
+            # calls root.after (Tk) from its own thread.
+            instance.root.after.assert_not_called()
+            kind, args, kwargs = instance._load_results.get_nowait()
+            self.assertEqual(kind, "loaded")
+            self.assertEqual(args[1], 1)  # one cache file scanned
+            self.assertEqual(kwargs["generation"], 1)
+            self.assertTrue(instance._load_results.empty())
+
+            # A malformed Stats.xml queues a failure the same way.
+            stats_file.write_text("<Stats><SongScores>", encoding="utf-8")
+            instance._load_worker(cache_dir, stats_file, generation=1)
+            kind, message, generation = instance._load_results.get_nowait()
+            self.assertEqual((kind, generation), ("failed", 1))
+            self.assertIn("malformed", message)
+
+    def test_poll_load_results_delivers_queued_results_and_reschedules(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_results = queue.Queue()
+        instance._loaded = Mock()
+        instance._load_failed = Mock()
+        instance.root = Mock()
+        instance._load_results.put(("loaded", ([], 3), {"generation": 2}))
+        instance._load_results.put(("failed", "boom", 2))
+
+        instance._poll_load_results()
+
+        instance._loaded.assert_called_once_with([], 3, generation=2)
+        instance._load_failed.assert_called_once_with("boom", generation=2)
+        instance.root.after.assert_called_once()
+        delay, callback = instance.root.after.call_args[0]
+        self.assertEqual(delay, 75)
+        self.assertEqual(callback, instance._poll_load_results)
+
+    def test_load_data_disables_the_load_button_and_starts_the_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache"
+            cache_dir.mkdir()
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>", encoding="utf-8")
+
+            instance = object.__new__(app.LibraryApp)
+            instance.cache_var = Mock()
+            instance.cache_var.get.return_value = str(cache_dir)
+            instance.stats_var = Mock()
+            instance.stats_var.get.return_value = str(stats_file)
+            instance._save_settings = Mock()
+            instance.progress = Mock()
+            instance.status = Mock()
+            instance.load_button = Mock()
+            instance._load_generation = 0
+
+            with patch.object(app.threading, "Thread") as mock_thread:
+                instance.load_data()
+
+            instance.load_button.configure.assert_called_once_with(state="disabled")
+            self.assertEqual(instance._load_generation, 1)
+            mock_thread.assert_called_once()
+            self.assertEqual(mock_thread.call_args.kwargs["args"][2], 1)
 
 
 class DialogKeyBindingTests(unittest.TestCase):
@@ -661,6 +758,7 @@ class DialogKeyBindingTests(unittest.TestCase):
 class PerformanceAndExportTests(unittest.TestCase):
     def test_loaded_batches_filter_changes_and_refreshes_once(self):
         instance = object.__new__(app.LibraryApp)
+        instance.load_button = Mock()
         instance.progress = Mock()
         instance.status = Mock()
         instance.refresh_table = Mock()
@@ -686,6 +784,7 @@ class PerformanceAndExportTests(unittest.TestCase):
 
         instance._loaded(rows, len(rows), from_cache=True, refreshed_at="2026-01-01T00:00:00")
 
+        instance.load_button.configure.assert_called_once_with(state="normal")
         # Must refresh table exactly once despite setting pack_var, type_var, and diff_var
         instance.refresh_table.assert_called_once()
         instance.pack_var.set.assert_called_with("All packs")
