@@ -791,6 +791,10 @@ class AboutDialogTests(unittest.TestCase):
             self.assertEqual(bindings[key](), "break")
             window.destroy.assert_called_once()
 
+    def test_about_takes_keyboard_focus_so_escape_reaches_it(self):
+        _instance, _tk, window, _bindings = self.open_about_with_mocks()
+        window.focus_force.assert_called_once()
+
     def test_about_opened_twice_raises_the_open_window_instead_of_a_second_one(self):
         existing = Mock()
         existing.winfo_exists.return_value = True

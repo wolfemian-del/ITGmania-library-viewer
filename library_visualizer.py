@@ -1384,6 +1384,9 @@ class LibraryApp:
 
         window.bind("<Escape>", _close)
         window.bind("<Return>", _close)
+        # A new window does not always take keyboard focus (seen on Windows); without it Escape and Return
+        # would go to the main window instead of closing this one.
+        window.focus_force()
 
     def open_advanced_search(self):
         if self.advanced_search_window is not None and self.advanced_search_window.winfo_exists():
