@@ -582,5 +582,143 @@ class DialogKeyBindingTests(unittest.TestCase):
         instance.clear_search.assert_not_called()  # Advanced Search open
 
 
+class PerformanceAndExportTests(unittest.TestCase):
+    def test_loaded_batches_filter_changes_and_refreshes_once(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.progress = Mock()
+        instance.status = Mock()
+        instance.refresh_table = Mock()
+        instance.pack_filter = Mock()
+        instance.type_filter = Mock()
+        instance.diff_filter = Mock()
+        instance.pack_var = Mock()
+        instance.type_var = Mock()
+        instance.diff_var = Mock()
+        instance._batched_filter_changes = app.LibraryApp._batched_filter_changes.__get__(instance)
+        instance._batching_filter_changes = False
+
+        # When setting diff_var/pack_var/type_var, Tk would run traces. Simulate that write traces call _refresh_unless_batching:
+        instance._refresh_unless_batching = app.LibraryApp._refresh_unless_batching.__get__(instance)
+        instance.diff_var.set.side_effect = lambda *args: instance._refresh_unless_batching()
+        instance.pack_var.set.side_effect = lambda *args: instance._refresh_unless_batching()
+        instance.type_var.set.side_effect = lambda *args: instance._refresh_unless_batching()
+
+        rows = [
+            {"Pack": "Pack1", "Type": "dance-single", "Difficulty": "Hard", "Title": "Song1"},
+            {"Pack": "Pack2", "Type": "dance-single", "Difficulty": "Challenge", "Title": "Song2"},
+        ]
+
+        instance._loaded(rows, len(rows), from_cache=True, refreshed_at="2026-01-01T00:00:00")
+
+        # Must refresh table exactly once despite setting pack_var, type_var, and diff_var
+        instance.refresh_table.assert_called_once()
+        instance.pack_var.set.assert_called_with("All packs")
+        instance.type_var.set.assert_called_with("All types")
+        instance.diff_var.set.assert_called_with("All difficulties")
+
+    def test_save_settings_skips_disk_write_when_unchanged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            instance = object.__new__(app.LibraryApp)
+            instance.settings_path = settings_path
+            instance.tree = Mock()
+            instance.cache_var = Mock(get=Mock(return_value="/cache"))
+            instance.stats_var = Mock(get=Mock(return_value="/stats.xml"))
+            instance.column_order = list(app.HEADERS)
+            instance.column_visibility = {col: Mock(get=Mock(return_value=True)) for col in app.HEADERS}
+            instance.tree.column.return_value = 100
+            instance.sort_keys = [("Pack", False)]
+            instance.show_distribution_panel = Mock(get=Mock(return_value=False))
+            instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
+            instance._last_saved_settings = None
+
+            # First save writes to disk
+            instance._save_settings()
+            self.assertTrue(settings_path.is_file())
+            first_mtime = settings_path.stat().st_mtime_ns
+
+            # Second save with no changes (e.g. routine table row click) skips write
+            with patch("json.dump") as mock_dump:
+                instance._save_settings()
+                mock_dump.assert_not_called()
+            self.assertEqual(settings_path.stat().st_mtime_ns, first_mtime)
+
+            # Changing a column width causes it to save
+            instance.tree.column.return_value = 150
+            instance._save_settings()
+            data = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["column_widths"]["Pack"], 150)
+
+    def test_save_settings_persists_in_place_column_reorder_after_earlier_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            instance = object.__new__(app.LibraryApp)
+            instance.settings_path = settings_path
+            instance.tree = Mock()
+            instance.cache_var = Mock(get=Mock(return_value="/cache"))
+            instance.stats_var = Mock(get=Mock(return_value="/stats.xml"))
+            instance.column_order = list(app.HEADERS)
+            instance.column_visibility = {col: Mock(get=Mock(return_value=True)) for col in app.HEADERS}
+            instance.tree.column.return_value = 100
+            instance.sort_keys = [("Pack", False)]
+            instance.show_distribution_panel = Mock(get=Mock(return_value=False))
+            instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
+            instance._last_saved_settings = None
+
+            # An earlier save in the session (any routine click) populates the dedup snapshot.
+            instance._save_settings()
+            self.assertTrue(settings_path.is_file())
+            self.assertNotEqual(json.loads(settings_path.read_text(encoding="utf-8"))["column_order"][0], "Meter")
+
+            # The column drag handler mutates column_order in place (remove/insert) and then saves;
+            # the new order must reach disk even though nothing was reassigned.
+            instance.column_order.remove("Meter")
+            instance.column_order.insert(0, "Meter")
+            instance._save_settings()
+
+            data = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["column_order"], instance.column_order)
+            self.assertEqual(data["column_order"][0], "Meter")
+
+    def test_export_csv_handles_unwritable_file_error(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.rows = [{"Title": "Test Song", "Artist": "Artist"}]
+        instance.status = Mock()
+
+        mock_filedialog = Mock(asksaveasfilename=Mock(return_value="/unwritable/path/library.csv"))
+        mock_messagebox = Mock()
+
+        with patch.object(app, "filedialog", mock_filedialog), \
+             patch.object(app, "messagebox", mock_messagebox), \
+             patch("builtins.open", side_effect=PermissionError("Access denied")):
+            instance.export_csv()
+
+        mock_messagebox.showerror.assert_called_once()
+        self.assertEqual(mock_messagebox.showerror.call_args[0][0], "Export failed")
+        self.assertIn("Access denied", mock_messagebox.showerror.call_args[0][1])
+        self.assertIn("Could not export CSV", instance.status.set.call_args[0][0])
+
+    def test_export_csv_successful_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out_file = Path(directory) / "export.csv"
+            instance = object.__new__(app.LibraryApp)
+            instance.rows = [{"Title": "My Song", "Pack": "My Pack"}]
+            instance.status = Mock()
+
+            mock_filedialog = Mock(asksaveasfilename=Mock(return_value=str(out_file)))
+            mock_messagebox = Mock()
+
+            with patch.object(app, "filedialog", mock_filedialog), \
+                 patch.object(app, "messagebox", mock_messagebox):
+                instance.export_csv()
+
+            mock_messagebox.showerror.assert_not_called()
+            self.assertTrue(out_file.is_file())
+            content = out_file.read_text(encoding="utf-8-sig")
+            self.assertIn("My Song", content)
+            self.assertIn("My Pack", content)
+            self.assertIn("Exported 1 charts", instance.status.set.call_args[0][0])
+
+
 if __name__ == "__main__":
     unittest.main()
