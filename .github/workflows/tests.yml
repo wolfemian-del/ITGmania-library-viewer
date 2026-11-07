@@ -10,6 +10,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   # The full suite on Linux across the supported Python versions
   # (the app needs Python 3.10 or newer). These tests are headless:
