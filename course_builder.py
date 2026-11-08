@@ -107,8 +107,10 @@ class CourseBuilder:
         # The Remove button has keyboard equivalents while the queue has focus.
         self.tree.bind("<Delete>", self._remove_on_key)
         self.tree.bind("<BackSpace>", self._remove_on_key)
-        # So does Undo remove.
+        # So does Undo remove. Tk names the key "z" or "Z" depending on Caps Lock (and Shift),
+        # so both are bound; without the second, Ctrl+Z does nothing while Caps Lock is on.
         self.tree.bind("<Control-z>", self._undo_on_key)
+        self.tree.bind("<Control-Z>", self._undo_on_key)
 
         controls = tk.Frame(window, bg=theme.BG_WINDOW, padx=18, pady=12)
         controls.pack(fill="x")

@@ -700,13 +700,16 @@ class CourseUndoRemoveTests(unittest.TestCase):
         self.assertIn("Undo remove", [call.args[1] for call in button_factory.call_args_list])
         bindings = {call.args[0]: call.args[1] for call in mock_tree.bind.call_args_list}
         self.assertIn("<Control-z>", bindings)
+        # Caps Lock makes Tk report the key as "Z", so the capital must be bound too.
+        self.assertIn("<Control-Z>", bindings)
 
-        builder.entries = [queue_row("A"), queue_row("B")]
-        mock_tree.selection.return_value = ("0",)
-        bindings["<Delete>"]()
-        self.assertEqual(self._titles(builder), ["B"])
-        self.assertEqual(bindings["<Control-z>"](), "break")
-        self.assertEqual(self._titles(builder), ["A", "B"])
+        for undo_binding in ("<Control-z>", "<Control-Z>"):
+            builder.entries = [queue_row("A"), queue_row("B")]
+            mock_tree.selection.return_value = ("0",)
+            bindings["<Delete>"]()
+            self.assertEqual(self._titles(builder), ["B"])
+            self.assertEqual(bindings[undo_binding](), "break")
+            self.assertEqual(self._titles(builder), ["A", "B"])
 
 
 if __name__ == "__main__":
