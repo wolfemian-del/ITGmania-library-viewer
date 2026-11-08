@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 import course_builder
 import library_data
+import theme
 from course_builder import CourseBuilder
 
 
@@ -217,6 +218,42 @@ class CourseBuilderDialogTests(unittest.TestCase):
         self.assertEqual(builder.entries, rows)
         self.assertEqual(builder.tree.insert.call_count, 2)
 
+    def test_open_dialog_configures_tints_and_delete_keys(self):
+        builder = CourseBuilder(
+            parent=Mock(),
+            status=Mock(),
+            button_factory=Mock(return_value=Mock()),
+            selected_rows=lambda: [],
+        )
+        mock_window = Mock()
+        mock_tk = Mock()
+        mock_tk.Toplevel.return_value = mock_window
+        mock_ttk = Mock()
+        mock_tree = mock_ttk.Treeview.return_value
+        mock_tree.get_children.return_value = ()
+
+        with patch.object(course_builder, "tk", mock_tk), patch.object(course_builder, "ttk", mock_ttk):
+            builder.open_dialog()
+
+        configured = {call.args[0]: call.kwargs.get("foreground")
+                      for call in mock_tree.tag_configure.call_args_list}
+        for name, color in theme.DIFFICULTY_COLORS.items():
+            self.assertEqual(configured.get(f"diff_{name}"), color)
+        self.assertEqual(configured.get("diff_unknown"), theme.DIFFICULTY_COLOR_UNKNOWN)
+        self.assertEqual(configured.get("selected_row"), theme.TEXT_ON_ACCENT)
+
+        bindings = {call.args[0]: call.args[1] for call in mock_tree.bind.call_args_list}
+        self.assertIn("<Delete>", bindings)
+        self.assertIn("<BackSpace>", bindings)
+        self.assertIn("<<TreeviewSelect>>", bindings)
+
+        # The Delete handler removes the selected entry and keeps a selection (issue #39).
+        builder.entries = [queue_row("A"), queue_row("B")]
+        mock_tree.selection.return_value = ("0",)
+        self.assertEqual(bindings["<Delete>"](), "break")
+        self.assertEqual([row["Title"] for row in builder.entries], ["B"])
+        mock_tree.selection_set.assert_called_once_with("0")
+
     def test_opening_the_course_builder_when_already_open_raises_it_and_gives_it_focus(self):
         builder = CourseBuilder(
             parent=Mock(),
@@ -233,6 +270,118 @@ class CourseBuilderDialogTests(unittest.TestCase):
         existing.lift.assert_called_once()
         existing.focus_force.assert_called_once()
         mock_tk.Toplevel.assert_not_called()  # no second window
+
+    def test_reopening_the_dialog_forgets_which_rows_were_selected_last_time(self):
+        builder = CourseBuilder(
+            parent=Mock(),
+            status=Mock(),
+            button_factory=Mock(return_value=Mock()),
+            selected_rows=lambda: [],
+        )
+        builder._selected_items = {"1", "3"}  # left over from a dialog that was closed with rows selected
+        mock_tk = Mock()
+        mock_ttk = Mock()
+        mock_ttk.Treeview.return_value.get_children.return_value = ()
+
+        with patch.object(course_builder, "tk", mock_tk), patch.object(course_builder, "ttk", mock_ttk):
+            builder.open_dialog()
+
+        self.assertEqual(builder._selected_items, set())
+
+
+def queue_row(title, difficulty="Hard"):
+    return {"Pack": "PackA", "Title": title, "Type": "dance-single", "Difficulty": difficulty,
+            "Meter": "10", "Time": 60, "Course path": f"PackA/{title}"}
+
+
+def make_queue_builder(titles):
+    """A builder holding one entry per title, with a fake queue tree (refresh unpacks
+    the tree's children with *, so get_children returns a real empty tuple)."""
+    builder = make_builder([queue_row(title) for title in titles])
+    builder.tree = Mock()
+    builder.tree.get_children.return_value = ()
+    builder.count_var = Mock()
+    return builder
+
+
+class CourseQueueTests(unittest.TestCase):
+    def test_remove_entries_keeps_selection_at_the_removed_position(self):
+        builder = make_queue_builder(["A", "B", "C", "D", "E"])
+        builder.tree.selection.return_value = ("1",)
+
+        builder.remove_entries()
+
+        self.assertEqual([row["Title"] for row in builder.entries], ["A", "C", "D", "E"])
+        builder.tree.selection_set.assert_called_once_with("1")  # C slid into B's slot
+
+    def test_remove_entries_selects_the_new_last_entry_when_the_tail_is_removed(self):
+        builder = make_queue_builder(["A", "B", "C", "D", "E"])
+        builder.tree.selection.return_value = ("4",)
+
+        builder.remove_entries()
+
+        self.assertEqual([row["Title"] for row in builder.entries], ["A", "B", "C", "D"])
+        builder.tree.selection_set.assert_called_once_with("3")
+
+    def test_remove_entries_with_several_selected_keeps_the_first_gap_selected(self):
+        builder = make_queue_builder(["A", "B", "C", "D", "E"])
+        builder.tree.selection.return_value = ("1", "2")
+
+        builder.remove_entries()
+
+        self.assertEqual([row["Title"] for row in builder.entries], ["A", "D", "E"])
+        builder.tree.selection_set.assert_called_once_with("1")
+
+    def test_remove_entries_emptying_the_queue_selects_nothing(self):
+        builder = make_queue_builder(["A", "B"])
+        builder.tree.selection.return_value = ("0", "1")
+
+        builder.remove_entries()
+
+        self.assertEqual(builder.entries, [])
+        builder.tree.selection_set.assert_not_called()
+
+    def test_refresh_queue_tints_each_row_by_difficulty(self):
+        builder = make_queue_builder([])
+        builder.entries = [queue_row("A", "Hard"), queue_row("B", "Edit"), queue_row("C", "Unlisted")]
+
+        builder.refresh_queue()
+
+        tags = [call.kwargs["tags"] for call in builder.tree.insert.call_args_list]
+        self.assertEqual(tags, [("diff_Hard",), ("diff_Edit",), ("diff_unknown",)])
+
+    def test_refresh_queue_borns_a_kept_selection_with_the_white_tag(self):
+        builder = make_queue_builder(["A", "B", "C"])
+
+        builder.refresh_queue([1])
+
+        tags = [call.kwargs["tags"] for call in builder.tree.insert.call_args_list]
+        self.assertEqual(tags, [("diff_Hard",), ("diff_Hard", "selected_row"), ("diff_Hard",)])
+        self.assertEqual(builder._selected_items, {"1"})
+
+    def test_on_queue_select_moves_the_white_tag_with_the_selection(self):
+        builder = make_queue_builder(["A", "B"])
+        store = {"0": ("diff_Hard",), "1": ("diff_Hard",)}
+
+        def fake_item(item_id, option=None, **kwargs):
+            if "tags" in kwargs:
+                store[item_id] = tuple(kwargs["tags"])
+                return ""
+            return store.get(item_id, ())
+
+        builder.tree.item.side_effect = fake_item
+        builder.tree.exists.return_value = True
+        builder._selected_items = set()
+
+        builder.tree.selection.return_value = ("1",)
+        builder._on_queue_select()
+        self.assertEqual(store["1"], ("diff_Hard", "selected_row"))
+        self.assertEqual(store["0"], ("diff_Hard",))
+
+        builder.tree.selection.return_value = ("0",)
+        builder._on_queue_select()
+        self.assertEqual(store["0"], ("diff_Hard", "selected_row"))
+        self.assertEqual(store["1"], ("diff_Hard",))
 
 
 if __name__ == "__main__":
