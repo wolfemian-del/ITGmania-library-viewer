@@ -149,9 +149,14 @@ class CourseBuilder:
         no longer match what a save would suggest. The owner's choice (issue #82,
         option 1) is to ask here, at reload time; agreeing clears the queue so it
         can be rebuilt from the new library. Called by LibraryApp after a load;
-        does nothing unless the dialog is open with charts queued.
+        does nothing unless the dialog is open. With an empty queue there is
+        nothing to ask about, but a removal remembered for Undo remove still holds
+        rows from the previous library, so it is forgotten here.
         """
-        if self.window is None or not self.window.winfo_exists() or not self.entries:
+        if self.window is None or not self.window.winfo_exists():
+            return
+        if not self.entries:
+            self._last_removal = None  # no prompt, but undo must not bring back previous-library rows
             return
         queued = len(self.entries)
         if messagebox.askyesno(

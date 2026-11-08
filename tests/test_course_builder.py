@@ -653,6 +653,32 @@ class CourseUndoRemoveTests(unittest.TestCase):
         builder.undo_remove()
         self.assertEqual(builder.entries, [])
 
+    def test_a_reload_with_an_emptied_queue_forgets_the_removal(self):
+        builder = self._builder(["A", "B"])
+        builder.tree.selection.return_value = ("0", "1")
+        builder.remove_entries()
+        self.assertEqual(builder.entries, [])
+        mock_mb = Mock()
+        with patch.object(course_builder, "messagebox", mock_mb):
+            builder.on_library_reloaded()
+        mock_mb.askyesno.assert_not_called()  # nothing queued, so nothing to ask
+
+        builder.undo_remove()
+        self.assertEqual(builder.entries, [])
+
+    def test_keeping_the_queue_at_reload_keeps_the_removal_undoable(self):
+        builder = self._builder(["A", "B"])
+        builder.tree.selection.return_value = ("0",)
+        builder.remove_entries()
+        mock_mb = Mock()
+        mock_mb.askyesno.return_value = False
+        with patch.object(course_builder, "messagebox", mock_mb):
+            builder.on_library_reloaded()
+        self.assertEqual(self._titles(builder), ["B"])
+
+        builder.undo_remove()
+        self.assertEqual(self._titles(builder), ["A", "B"])
+
     def test_open_dialog_binds_ctrl_z_and_offers_an_undo_button(self):
         button_factory = Mock(return_value=Mock())
         builder = CourseBuilder(
