@@ -35,6 +35,7 @@ except ImportError:
 # The release number, shown in Help > About. Keep it equal to the newest heading in CHANGELOG.md (a test checks).
 __version__ = "1.0.0"
 
+import row_tints
 import theme
 from course_builder import CourseBuilder
 from library_data import (
@@ -65,7 +66,6 @@ from library_data import (
 
 SEARCH_DEBOUNCE_MS = 200
 LIBRARY_CACHE_SCHEMA_VERSION = 2
-UNKNOWN_DIFFICULTY_TAG = "diff_unknown"  # table tag for a difficulty name that theme.DIFFICULTY_COLORS lacks
 HEADERS = ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart", "Score",
            "Grade", "Best %", "Plays", "Last played", "Peak NPS", "Taps/Holds", "Jumps",
            "Holds", "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4", "W5",
@@ -181,7 +181,7 @@ class LibraryApp:
         self.dist_ax = None
         self._current_dist_bars = []
         self._last_visible_rows = []
-        self._selected_tree_items = set()  # table rows currently carrying the white "selected_row" tag
+        self._tree_tint = None  # the song table's SelectedRowTint, created with the table in _build
         self._load_generation = 0  # counts Load / refresh requests; a scan from an older request is dropped
         self._snapshot_lock = threading.Lock()  # one scan at a time may check its generation and write the snapshot
         self._load_results = queue.Queue()  # finished scans wait here; only the main thread delivers them (_poll_load_results)
@@ -347,8 +347,9 @@ class LibraryApp:
         if visible_columns:
             self.tree.configure(displaycolumns=visible_columns)
         self._update_sort_headings()
-        self._setup_tree_tags()
-        self.tree.bind("<<TreeviewSelect>>", self._on_tree_select, add="+")
+        row_tints.configure_tree_tags(self.tree)
+        self._tree_tint = row_tints.SelectedRowTint(self.tree)
+        self.tree.bind("<<TreeviewSelect>>", self._tree_tint.on_select, add="+")
         self.progress = ttk.Progressbar(self.root, mode="indeterminate", style="Horizontal.TProgressbar")
         self.progress.pack(fill="x", padx=18, pady=(0, 4))
         footer = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=18, pady=7)
@@ -990,7 +991,7 @@ class LibraryApp:
             visible = present + missing
         self.tree.delete(*self.tree.get_children())
         self.tree_item_rows = {}
-        self._selected_tree_items = set()
+        self._tree_tint.reset()
         self._insert_batch(visible, 0, generation, selected_rows)
         self.count_label.set(f"{len(visible):,} charts shown · {len(self.rows):,} total")
         self._update_distribution_panel(visible)
@@ -1006,35 +1007,6 @@ class LibraryApp:
                 heading = column
             self.tree.heading(column, text=heading)
 
-    def _setup_tree_tags(self):
-        for diff, color in theme.DIFFICULTY_COLORS.items():
-            self.tree.tag_configure(f"diff_{diff}", foreground=color)
-        self.tree.tag_configure(UNKNOWN_DIFFICULTY_TAG, foreground=theme.DIFFICULTY_COLOR_UNKNOWN)
-        # Keep this one last: in this order a selected row shows white text instead of its difficulty
-        # color (checked in the window on Windows). A row has both tags while it is selected.
-        self.tree.tag_configure("selected_row", foreground=theme.TEXT_ON_ACCENT)
-
-    @staticmethod
-    def _difficulty_tag(row):
-        name = str(row.get("Difficulty", "")).strip()
-        return f"diff_{name}" if name in theme.DIFFICULTY_COLORS else UNKNOWN_DIFFICULTY_TAG
-
-    def _on_tree_select(self, _event=None):
-        """Give the white "selected_row" tag to the rows that just became selected and take it from the rest."""
-        current = set(self.tree.selection())
-        for item in self._selected_tree_items - current:
-            if self.tree.exists(item):  # a refresh may have removed the row already
-                self._set_selected_tag(item, False)
-        for item in current - self._selected_tree_items:
-            self._set_selected_tag(item, True)
-        self._selected_tree_items = current
-
-    def _set_selected_tag(self, item, selected):
-        tags = [tag for tag in self.tree.item(item, "tags") if tag != "selected_row"]
-        if selected:
-            tags.append("selected_row")
-        self.tree.item(item, tags=tags)
-
     def _insert_batch(self, rows, start, generation, selected_rows=None):
         if generation != self._render_generation:
             return
@@ -1049,15 +1021,12 @@ class LibraryApp:
                 elif isinstance(value, float):
                     value = f"{value:g}"
                 values.append(value)
-            tags = [self._difficulty_tag(row)]
             keep_selected = id(row) in selected_rows
-            if keep_selected:
-                tags.append("selected_row")
-            item = self.tree.insert("", "end", values=values, tags=tuple(tags))
+            item = self.tree.insert("", "end", values=values, tags=row_tints.row_tags(row, keep_selected))
             self.tree_item_rows[item] = row
             if keep_selected:
                 self.tree.selection_add(item)
-                self._selected_tree_items.add(item)
+                self._tree_tint.note_selected(item)
         if stop < len(rows):
             self.root.after(1, lambda: self._insert_batch(rows, stop, generation, selected_rows))
 
