@@ -2,11 +2,37 @@
 
 | | |
 |---|---|
-| **Status** | Draft — for review |
+| **Status** | Accepted — approved by the owner on 2026-11-08, with the review resolutions below |
 | **Author** | Muse (Muse Spark) |
 | **Date** | 2026-11-08 |
 | **Base** | main `55896f6` (after PR #96) |
 | **Related** | The split sequence adopted after proposal 0001 (Course Builder → **Advanced Search** → distribution → settings/snapshot). No dedicated issue; the implementation PR will be the vehicle, as with proposal 0002. |
+
+---
+
+## Review resolutions (2026-11-08)
+
+Reviewed by Claude (Sonnet 5.5), Grok 4.5, and GLM 5.3 (Vibe) — all
+three recommend **Option A1** as revised. The owner accepted the
+following resolutions:
+
+- **Q1 — the query seam is A1:** `search_var` is passed directly. It is
+  assigned exactly once in the codebase and never replaced, so the
+  staleness argument for a callable pair does not apply; the `status`
+  precedent governs.
+- **Q2 — repoint the four entry points directly** at
+  `advanced_search.open_dialog` and delete `LibraryApp.open_advanced_search`
+  (the Revision 1 position; GLM withdrew its draft-stage delegation
+  preference once the construction site was corrected). The
+  implementation will grep for `open_advanced_search` and
+  `advanced_search_window` stragglers before merge.
+- **Q3 — eager construction, in `_build`** beside the course builder,
+  with the `None` declaration in `__init__`.
+- Revision 1's four corrections (construction site, theme-guard lists,
+  locals stay locals, `window` wording) are part of the accepted text.
+- Claude's two side proposals — collapsing the four repeated
+  field-variable lists into one table, and a shared widget-factory
+  module — stay out of this move, as possible follow-ups afterwards.
 
 ---
 
@@ -216,30 +242,25 @@ builder's.
   open the dialog, Apply a filtered query, confirm the table's search
   text changes; reopen and confirm the fields re-seed from it.
 
-## 7. Open Questions for Reviewers
+## 7. Open Questions for Reviewers — Resolved
 
-- **Q1.** The query seam: **A1** (`search_var` passed directly, the
-  `status` precedent) or **A2** (callable pair, the rows precedent)? This
-  proposal recommends A1; it is the one real decision here. *Claude:
-  A1 — `search_var` is assigned exactly once and never replaced, so the
-  staleness argument for callables does not apply.*
-- **Q2.** ~~Keep `LibraryApp.open_advanced_search` as a one-line
-  delegation, or repoint the entry points at the component directly?~~
-  **Revised in Revision 1: repoint directly** and delete the app method,
-  as the Build course button does. The draft's delegation recommendation
-  rested on a smaller app-side diff, but with the construction site
-  corrected (the component exists before the entry points are built),
-  repointing is safe, and one less forwarding method is one less thing
-  for a reader to follow. *Claude: leans repoint, weakly.* Reviewers who
-  disagree should say so now.
-- **Q3.** Construct the component eagerly — now specified as **in
-  `_build`, beside the course builder** (Revision 1) — or lazily on first
-  open? Lazy would also rule out direct repointing (a bound method of a
-  not-yet-existing component cannot be referenced while the button is
-  built). *Claude: eager.*
+All three were answered in review and accepted by the owner on
+2026-11-08 (see "Review resolutions" at the top):
+
+- **Q1.** The query seam: **Resolved: A1** — `search_var` passed
+  directly (unanimous). *Claude: A1 — `search_var` is assigned exactly
+  once and never replaced, so the staleness argument for callables does
+  not apply.*
+- **Q2.** **Resolved: repoint the entry points directly** and delete
+  the app method (the Revision 1 position; Claude leaned repoint, Grok
+  agreed, GLM withdrew its draft-stage delegation preference).
+- **Q3.** **Resolved: eager construction, in `_build`** beside the
+  course builder (unanimous; lazy would also rule out direct
+  repointing).
 
 ---
 
-*Written by Muse (Muse Spark). No code accompanies this proposal; if it
-is accepted, implementation follows in its own PR, which will link back
-here.*
+*Written by Muse (Muse Spark). Reviewed by Claude (Sonnet 5.5), Grok
+4.5, and GLM 5.3 (Vibe); accepted by the owner on 2026-11-08 with the
+resolutions recorded at the top. Implementation follows in its own PR,
+which will link back here.*
