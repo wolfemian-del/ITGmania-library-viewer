@@ -27,6 +27,8 @@ from library_data import (
     validate_course_fields,
 )
 
+UNKNOWN_DIFFICULTY_TAG = "diff_unknown"  # queue tag for a difficulty name that theme.DIFFICULTY_COLORS lacks
+
 
 class CourseBuilder:
     """The course-builder dialog and its chart queue.
@@ -93,6 +95,13 @@ class CourseBuilder:
         queue_scroll.grid(row=0, column=1, sticky="ns")
         queue_frame.grid_rowconfigure(0, weight=1)
         queue_frame.grid_columnconfigure(0, weight=1)
+        # Difficulty tints: the same tags and colors as the main table (theme.DIFFICULTY_COLORS).
+        for diff, color in theme.DIFFICULTY_COLORS.items():
+            self.tree.tag_configure(f"diff_{diff}", foreground=color)
+        self.tree.tag_configure(UNKNOWN_DIFFICULTY_TAG, foreground=theme.DIFFICULTY_COLOR_UNKNOWN)
+        # The Remove button has keyboard equivalents while the queue has focus.
+        self.tree.bind("<Delete>", self._remove_on_key)
+        self.tree.bind("<BackSpace>", self._remove_on_key)
 
         controls = tk.Frame(window, bg=theme.BG_WINDOW, padx=18, pady=12)
         controls.pack(fill="x")
@@ -139,7 +148,7 @@ class CourseBuilder:
                 row.get("Pack", ""), row.get("Title", ""), row.get("Type", ""),
                 row.get("Difficulty", ""), row.get("Meter", ""),
                 format_duration(row.get("Time", 0)) if row.get("Time", "") != "" else "",
-            ))
+            ), tags=(self._difficulty_tag(row),))
         total_seconds = sum(number(row.get("Time")) for row in self.entries)
         self.count_var.set(f"{len(self.entries)} charts · {format_duration(total_seconds)} total")
         selected_indices = selected_indices or []
@@ -149,11 +158,29 @@ class CourseBuilder:
             self.tree.focus(str(valid[0]))
             self.tree.see(str(valid[0]))
 
+    @staticmethod
+    def _difficulty_tag(row):
+        """The queue tag that tints a row by its difficulty (the main table's rule, same tag names)."""
+        name = str(row.get("Difficulty", "")).strip()
+        return f"diff_{name}" if name in theme.DIFFICULTY_COLORS else UNKNOWN_DIFFICULTY_TAG
+
+    def _remove_on_key(self, _event=None):
+        self.remove_entries()
+        return "break"
+
     def remove_entries(self):
         indices = sorted((int(item) for item in self.tree.selection()), reverse=True)
         for index in indices:
             del self.entries[index]
-        self.refresh_queue()
+        if not indices:
+            self.refresh_queue()
+            return
+        # Keep a selection where the removal happened, so repeated removals (the Remove
+        # button or the Delete key) do not need a fresh click each time: the entry that
+        # slid into the first removed slot, or the new last entry when the tail was
+        # removed. An emptied queue selects nothing.
+        keep = min(indices[-1], len(self.entries) - 1)
+        self.refresh_queue([keep] if keep >= 0 else [])
 
     def move_entry(self, direction):
         moving = {int(item) for item in self.tree.selection()}
