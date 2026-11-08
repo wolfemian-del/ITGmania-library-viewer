@@ -9,7 +9,6 @@ from datetime import datetime
 import json
 import os
 import queue
-import re
 import sys
 import threading
 try:
@@ -42,6 +41,7 @@ DIST_PANEL_WIDTH = 320
 CHART_MIN_CLICK_FRACTION = 0.15
 
 import theme
+from course_builder import CourseBuilder
 from library_data import (
     GRADE_OPTIONS,
     TAP_FIELDS,
@@ -52,13 +52,10 @@ from library_data import (
     aggregate_meter_distribution,
     bpm_sort_key,
     build_dialog_query,
-    course_append_bytes,
-    course_song_lines,
     difficulty_sort_key,
     distribution_summary_stats,
     filter_texts_match,
     format_duration,
-    format_new_course,
     get_active_chart_filters,
     grade_sort_key,
     looks_like_song_tree,
@@ -69,7 +66,6 @@ from library_data import (
     replace_search_directive,
     split_dialog_query,
     stats_index,
-    validate_course_fields,
 )
 
 SEARCH_DEBOUNCE_MS = 200
@@ -221,15 +217,12 @@ class LibraryApp:
         self.tree_item_rows = {}  # table row id -> its chart row (refresh_table)
         self._dragged_column = None  # heading being dragged, and where the drag began (_column_drag_start)
         self._drag_start_x = None
-        # Dialogs: a window attribute is None while that dialog is closed. The course fields are set by
-        # open_course_builder, which starts a fresh queue every time it opens.
+        # Dialogs: a window attribute is None while that dialog is closed. The course builder is a
+        # separate component (course_builder.py) that owns its window and queue; it is created in
+        # _build, once the status variable exists.
         self.advanced_search_window = None
-        self.course_window = None
         self.about_window = None
-        self.course_entries: list[dict] = []
-        self.course_title_var = None
-        self.course_tree = None
-        self.course_count_var = None
+        self.course_builder = None
         self._last_saved_settings = copy.deepcopy(self.saved_settings)
         self._style()
         self._build()
@@ -288,6 +281,9 @@ class LibraryApp:
         self.status = tk.StringVar(value="Choose your cache's Songs folder and player Stats.xml to get started.")
         tk.Label(top, textvariable=self.status, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW,
                  font=theme.FONT_BODY).pack(side="right", padx=8)
+        # The course builder component (course_builder.py): created here because it needs the
+        # status variable above; the Build course button below calls its open_dialog directly.
+        self.course_builder = CourseBuilder(self.root, self.status, self._button, self._selected_rows_for_course)
         paths = tk.Frame(self.root, bg=theme.BG_PANEL, padx=12, pady=10)
         paths.pack(fill="x", padx=18)
         self._path_row(paths, "Cache / Songs", self.cache_var, self.choose_cache)
@@ -310,7 +306,7 @@ class LibraryApp:
         self.load_button = self._button(bar, "Load / refresh", self.load_data, primary=True)
         self.load_button.pack(side="left", padx=4)
         self._button(bar, "Export CSV", self.export_csv).pack(side="left", padx=4)
-        self._button(bar, "Build course…", self.open_course_builder).pack(side="left", padx=4)
+        self._button(bar, "Build course…", self.course_builder.open_dialog).pack(side="left", padx=4)
         self.dist_button = self._button(
             bar,
             "Distribution ◀" if self.show_distribution_panel.get() else "Distribution ▶",
@@ -584,8 +580,15 @@ class LibraryApp:
         self.search_var.set("")
         self.search_entry.focus_set()
 
+    def _selected_rows_for_course(self):
+        """The chart rows currently selected in the main table (for the course builder)."""
+        return [row for item in self.tree.selection()
+                if (row := self.tree_item_rows.get(item)) is not None]
+
     def _dialog_is_open(self):
-        for window in (self.advanced_search_window, self.course_window, self.about_window):
+        for window in (self.advanced_search_window,
+                       self.course_builder.window if self.course_builder is not None else None,
+                       self.about_window):
             if window is not None and window.winfo_exists():
                 return True
         return False
@@ -1549,214 +1552,6 @@ class LibraryApp:
         # A new window does not always take keyboard focus (seen on Windows); without it Escape and Return
         # would go to the main window instead of this one.
         window.focus_force()
-
-    def open_course_builder(self):
-        if self.course_window is not None and self.course_window.winfo_exists():
-            self.course_window.lift()
-            self.course_window.focus_force()
-            return
-
-        window = tk.Toplevel(self.root)
-        self.course_window = window
-        window.title("Build a course")
-        window.geometry("900x620")
-        window.minsize(700, 440)
-        window.configure(bg=theme.BG_WINDOW)
-        window.transient(self.root)
-        self.course_entries: list[dict] = []
-
-        tk.Label(window, text="Build a new course", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
-                 font=theme.FONT_COURSE_TITLE).pack(anchor="w", padx=18, pady=(16, 2))
-        tk.Label(window, text="Select charts in the library, then add them here and arrange the course order.",
-                 fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(anchor="w", padx=18, pady=(0, 12))
-
-        title_row = tk.Frame(window, bg=theme.BG_WINDOW, padx=18)
-        title_row.pack(fill="x", pady=(0, 10))
-        tk.Label(title_row, text="Course title", width=13, anchor="w", fg=theme.TEXT_FIELD_LABEL, bg=theme.BG_WINDOW,
-                 font=theme.FONT_BODY).pack(side="left")
-        self.course_title_var = tk.StringVar()
-        tk.Entry(title_row, textvariable=self.course_title_var, bg=theme.BG_INPUT, fg=theme.TEXT_PRIMARY,
-                 insertbackground=theme.CURSOR, relief="flat", font=theme.FONT_ENTRY_LARGE,
-                 highlightthickness=1, highlightbackground=theme.BORDER, highlightcolor=theme.ACCENT).pack(
-                     side="left", fill="x", expand=True)
-
-        queue_frame = tk.Frame(window, bg=theme.BG_WINDOW)
-        queue_frame.pack(fill="both", expand=True, padx=18)
-        columns = ("Pack", "Title", "Type", "Difficulty", "Meter", "Time")
-        self.course_tree = ttk.Treeview(queue_frame, columns=columns, show="headings", selectmode="extended")
-        widths = {"Pack": 180, "Title": 300, "Type": 130, "Difficulty": 120, "Meter": 80, "Time": 80}
-        for column in columns:
-            self.course_tree.heading(column, text=column)
-            self.course_tree.column(column, width=widths[column], minwidth=65, stretch=column == "Title",
-                                    anchor="w" if column in ("Pack", "Title") else "center")
-        queue_scroll = ttk.Scrollbar(queue_frame, orient="vertical", command=self.course_tree.yview)
-        self.course_tree.configure(yscrollcommand=queue_scroll.set)
-        self.course_tree.grid(row=0, column=0, sticky="nsew")
-        queue_scroll.grid(row=0, column=1, sticky="ns")
-        queue_frame.grid_rowconfigure(0, weight=1)
-        queue_frame.grid_columnconfigure(0, weight=1)
-
-        controls = tk.Frame(window, bg=theme.BG_WINDOW, padx=18, pady=12)
-        controls.pack(fill="x")
-        self._button(controls, "Add selected charts", self.add_selected_to_course, primary=True).pack(side="left")
-        self._button(controls, "Remove", self.remove_course_entries).pack(side="left", padx=(8, 0))
-        self._button(controls, "Move up", lambda: self.move_course_entry(-1)).pack(side="left", padx=(8, 0))
-        self._button(controls, "Move down", lambda: self.move_course_entry(1)).pack(side="left", padx=(8, 0))
-        self.course_count_var = tk.StringVar(value="0 charts · 0:00 total")
-        tk.Label(controls, textvariable=self.course_count_var, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW,
-                 font=theme.FONT_BODY).pack(side="left", padx=12)
-        self._button(controls, "Append to .CRS…", self.append_course).pack(side="right", padx=(0, 8))
-        self._button(controls, "Save new .CRS…", self.export_course, primary=True).pack(side="right")
-
-        def _close(_event=None):
-            # Reopening this window starts an empty queue, so closing with charts queued loses them.
-            queued = len(self.course_entries)
-            if queued and not messagebox.askyesno(
-                    "Discard course queue?",
-                    f"Closing this window discards the {queued} queued chart(s). Close anyway?",
-                    parent=window):
-                return "break"
-            window.destroy()
-            return "break"
-
-        window.bind("<Escape>", _close)
-        window.focus_force()  # see open_advanced_search: a new window may not take focus by itself
-
-        self.add_selected_to_course()
-
-    def add_selected_to_course(self):
-        added = 0
-        for item in self.tree.selection():
-            row = self.tree_item_rows.get(item)
-            if row is not None:
-                self.course_entries.append(row)
-                added += 1
-        if added:
-            self.refresh_course_queue()
-
-    def refresh_course_queue(self, selected_indices=None):
-        self.course_tree.delete(*self.course_tree.get_children())
-        for index, row in enumerate(self.course_entries):
-            self.course_tree.insert("", "end", iid=str(index), values=(
-                row.get("Pack", ""), row.get("Title", ""), row.get("Type", ""),
-                row.get("Difficulty", ""), row.get("Meter", ""),
-                format_duration(row.get("Time", 0)) if row.get("Time", "") != "" else "",
-            ))
-        total_seconds = sum(number(row.get("Time")) for row in self.course_entries)
-        self.course_count_var.set(f"{len(self.course_entries)} charts · {format_duration(total_seconds)} total")
-        selected_indices = selected_indices or []
-        valid = [index for index in selected_indices if 0 <= index < len(self.course_entries)]
-        if valid:
-            self.course_tree.selection_set(*(str(index) for index in valid))
-            self.course_tree.focus(str(valid[0]))
-            self.course_tree.see(str(valid[0]))
-
-    def remove_course_entries(self):
-        indices = sorted((int(item) for item in self.course_tree.selection()), reverse=True)
-        for index in indices:
-            del self.course_entries[index]
-        self.refresh_course_queue()
-
-    def move_course_entry(self, direction):
-        moving = {int(item) for item in self.course_tree.selection()}
-        if direction < 0:
-            for index in sorted(moving):
-                if index > 0 and index - 1 not in moving:
-                    self.course_entries[index - 1], self.course_entries[index] = (
-                        self.course_entries[index], self.course_entries[index - 1])
-                    moving.remove(index)
-                    moving.add(index - 1)
-        else:
-            for index in sorted(moving, reverse=True):
-                if index + 1 < len(self.course_entries) and index + 1 not in moving:
-                    self.course_entries[index + 1], self.course_entries[index] = (
-                        self.course_entries[index], self.course_entries[index + 1])
-                    moving.remove(index)
-                    moving.add(index + 1)
-        self.refresh_course_queue(sorted(moving))
-
-    def validate_course_entries(self, title=None):
-        error = validate_course_fields(self.course_entries, title)
-        if error:
-            # One title for every validation error: the message says what is wrong, and this check runs for
-            # both saving a new course and appending to one.
-            messagebox.showerror("Course problem", error, parent=self.course_window)
-            return False
-
-        types = sorted({row.get("Type", "") for row in self.course_entries if row.get("Type")})
-        if len(types) > 1:
-            description = (
-                "This course contains multiple chart types:\n\n" + "\n".join(types) +
-                "\n\nA .CRS entry stores the song and difficulty, not its specific chart type. "
-                "ITGmania may resolve an entry to a different chart type when the course is played.\n\n"
-                "Save the course anyway?"
-            )
-            if not messagebox.askyesno("Mixed chart types", description, parent=self.course_window):
-                return False
-        return True
-
-    def export_course(self):
-        title = self.course_title_var.get().strip()
-        if not self.validate_course_entries(title):
-            return
-
-        safe_name = re.sub(r'[<>:"/\\|?*]+', "_", title).strip(" .") or "Course"
-        path = filedialog.asksaveasfilename(
-            parent=self.course_window, title="Save new course", defaultextension=".crs",
-            filetypes=[("ITGmania course files", "*.crs")], initialfile=safe_name + ".crs",
-            confirmoverwrite=True,
-        )
-        if not path:
-            return
-        song_lines = course_song_lines(self.course_entries)
-        body = format_new_course(title, song_lines)
-        try:
-            with open(path, "w", encoding="utf-8", newline="") as handle:
-                handle.write(body)
-        except OSError as exc:
-            messagebox.showerror("Could not save course", str(exc), parent=self.course_window)
-            return
-        self.status.set(f"Saved course with {len(self.course_entries)} charts to {path}")
-        messagebox.showinfo("Course saved", f"Saved {title} with {len(self.course_entries)} charts.\n\n{path}",
-                            parent=self.course_window)
-
-    def append_course(self):
-        if not self.validate_course_entries():
-            return
-        path = filedialog.askopenfilename(
-            parent=self.course_window, title="Choose course to append to",
-            filetypes=[("ITGmania course files", "*.crs"), ("All files", "*.*")],
-        )
-        if not path:
-            return
-
-        try:
-            with open(path, "rb") as handle:
-                existing = handle.read()
-        except (OSError, UnicodeError) as exc:
-            messagebox.showerror("Could not read course", str(exc), parent=self.course_window)
-            return
-        try:
-            addition = course_append_bytes(existing, course_song_lines(self.course_entries))
-        except UnicodeError as exc:
-            messagebox.showerror("Could not read course", f"The course could not be read as UTF-8.\n\n{exc}",
-                                 parent=self.course_window)
-            return
-        except ValueError as exc:
-            title = "Cannot append safely" if "ends with #" in str(exc) else "Not a readable course"
-            messagebox.showwarning(title, str(exc), parent=self.course_window)
-            return
-
-        try:
-            with open(path, "ab") as handle:
-                handle.write(addition)
-        except OSError as exc:
-            messagebox.showerror("Could not append to course", str(exc), parent=self.course_window)
-            return
-
-        self.status.set(f"Appended {len(self.course_entries)} charts to {path}")
-        messagebox.showinfo("Course updated", f"Appended {len(self.course_entries)} charts.\n\n{path}",
-                            parent=self.course_window)
 
 
 def main():

@@ -60,7 +60,7 @@ The app remembers the selected data paths, column order, visibility, and widths 
 
 ## Changing the look
 
-Every color and font the window uses is defined, with a note on what it is for, in `theme.py`. To restyle the app, edit the values there and restart it; the window code only refers to the names (for example `theme.BG_WINDOW`), and a test fails if a color or font is typed directly into `library_visualizer.py` again. `theme.DIFFICULTY_COLORS` controls both the distribution chart bars and the song table row tints. Row heights and panel widths are fixed numbers in `library_visualizer.py`, so a much larger font may also need those adjusted.
+Every color and font the window uses is defined, with a note on what it is for, in `theme.py`. To restyle the app, edit the values there and restart it; the window code only refers to the names (for example `theme.BG_WINDOW`), and a test fails if a color or font is typed directly into the window code (`library_visualizer.py` or `course_builder.py`) again. `theme.DIFFICULTY_COLORS` controls both the distribution chart bars and the song table row tints. Row heights and panel widths are fixed numbers in `library_visualizer.py`, so a much larger font may also need those adjusted.
 
 ## Development checks
 
@@ -73,6 +73,8 @@ python -m unittest discover -s tests
 `theme.py` holds the colors and fonts; `tests/test_theme.py` checks the window code uses it.
 
 The UI-independent parsing and course helpers live in `library_data.py`; `tests/test_library_data.py` exercises them without importing Tkinter. Course formatting, parsing, trailing-modifier detection, and field validation live there so CRS features can grow without pulling in the Tk UI. The snapshot lifecycle tests exercise the app module.
+
+The Build-a-course dialog is a separate component in `course_builder.py`, constructed by the main window with the few things it needs (its parent window, the status variable, the button factory, and a way to read the table's selected rows); its tests are in `tests/test_course_builder.py`.
 
 ## License
 
