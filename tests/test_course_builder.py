@@ -271,6 +271,23 @@ class CourseBuilderDialogTests(unittest.TestCase):
         existing.focus_force.assert_called_once()
         mock_tk.Toplevel.assert_not_called()  # no second window
 
+    def test_reopening_the_dialog_forgets_which_rows_were_selected_last_time(self):
+        builder = CourseBuilder(
+            parent=Mock(),
+            status=Mock(),
+            button_factory=Mock(return_value=Mock()),
+            selected_rows=lambda: [],
+        )
+        builder._selected_items = {"1", "3"}  # left over from a dialog that was closed with rows selected
+        mock_tk = Mock()
+        mock_ttk = Mock()
+        mock_ttk.Treeview.return_value.get_children.return_value = ()
+
+        with patch.object(course_builder, "tk", mock_tk), patch.object(course_builder, "ttk", mock_ttk):
+            builder.open_dialog()
+
+        self.assertEqual(builder._selected_items, set())
+
 
 def queue_row(title, difficulty="Hard"):
     return {"Pack": "PackA", "Title": title, "Type": "dance-single", "Difficulty": difficulty,

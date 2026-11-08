@@ -65,6 +65,7 @@ class CourseBuilder:
         window.configure(bg=theme.BG_WINDOW)
         window.transient(self.parent)
         self.entries: list[dict] = []
+        self._selected_items = set()  # a new queue tree has no selected rows, whatever the last dialog left behind
 
         tk.Label(window, text="Build a new course", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
                  font=theme.FONT_COURSE_TITLE).pack(anchor="w", padx=18, pady=(16, 2))
