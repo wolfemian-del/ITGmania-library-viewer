@@ -1268,6 +1268,9 @@ class CourseGeometryParsingTests(unittest.TestCase):
 
     def test_invalid_values_are_rejected(self):
         for value in (None, 42, "", "garbage", "1000x620", "0x0+0+0", "1000x620+10",
-                      "1000x620+10+10+10", "1000x620++10+10", " 1000x620+10+10"):
+                      "1000x620+10+10+10", "1000x620++10+10", " 1000x620+10+10",
+                      # Thousands of digits trip Python's int-conversion limit;
+                      # a corrupt value must be rejected, not raise.
+                      "9" * 5000 + "x620+0+0", "1000x620+" + "9" * 5000 + "+0"):
             with self.subTest(value=value):
                 self.assertIsNone(data.parse_course_geometry(value))

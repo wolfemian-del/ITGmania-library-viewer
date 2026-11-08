@@ -369,10 +369,15 @@ def parse_course_geometry(value) -> tuple[int, int, int, int] | None:
     match = re.fullmatch(r"([1-9]\d*)x([1-9]\d*)([+-]-?\d+)([+-]-?\d+)", value)
     if match is None:
         return None
-    width, height = int(match.group(1)), int(match.group(2))
-    # "+-8" is the negative-offset spelling; int() alone rejects it.
-    x = int(match.group(3).replace("+-", "-"))
-    y = int(match.group(4).replace("+-", "-"))
+    try:
+        width, height = int(match.group(1)), int(match.group(2))
+        # "+-8" is the negative-offset spelling; int() alone rejects it.
+        x = int(match.group(3).replace("+-", "-"))
+        y = int(match.group(4).replace("+-", "-"))
+    except ValueError:
+        # A component with thousands of digits trips Python's int-conversion
+        # limit; that is a corrupt value, not a reason to fail.
+        return None
     return width, height, x, y
 
 

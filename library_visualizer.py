@@ -577,7 +577,11 @@ class LibraryApp:
         min_width, min_height = theme.COURSE_BUILDER_MIN_SIZE
         if width < min_width or height < min_height:
             return None
-        return f"{width}x{height}{x:+d}{y:+d}"
+        # Rebuilt exactly as Tk writes a position: "+100", and "+-8" for a
+        # negative coordinate. The shorter "-8" form is a different dialect —
+        # Tk reads it as "8 pixels from the right edge" — so emitting it here
+        # would move the window to the far side of the screen on restore.
+        return f"{width}x{height}+{x}+{y}"
 
     def _read_settings(self):
         try:

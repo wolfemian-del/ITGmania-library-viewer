@@ -65,12 +65,14 @@ class CourseBuilder:
     def _geometry_for_open(self):
         """The geometry string to open the dialog with (issue #25).
 
-        The remembered geometry when there is one; if its position falls
-        outside the virtual desktop (which spans every monitor — the
-        remembered monitor may have been unplugged), only its size is used
-        and the window manager places the window, so the dialog can never
-        open lost and re-save the same lost position on close. Without a
-        remembered geometry, the theme default.
+        The remembered geometry when a meaningful part of the window would
+        be visible on the virtual desktop (which spans every monitor): at
+        least a grabbable strip of it, so a window left hanging a little off
+        an edge comes back as it was, while one left on a since-unplugged
+        monitor, or pushed almost entirely off an edge, does not open lost.
+        In those cases only the size is used and the window manager places
+        the window, so a lost position can never be re-saved on close.
+        Without a remembered geometry, the theme default.
         """
         if not self._saved_geometry:
             return theme.COURSE_BUILDER_GEOMETRY
@@ -80,8 +82,11 @@ class CourseBuilder:
         width, height, x, y = parsed
         left = self.parent.winfo_vrootx()
         top = self.parent.winfo_vrooty()
-        if (left <= x < left + self.parent.winfo_vrootwidth()
-                and top <= y < top + self.parent.winfo_vrootheight()):
+        right = left + self.parent.winfo_vrootwidth()
+        bottom = top + self.parent.winfo_vrootheight()
+        visible_width = min(x + width, right) - max(x, left)
+        visible_height = min(y + height, bottom) - max(y, top)
+        if visible_width >= 100 and visible_height >= 32:
             return self._saved_geometry
         return f"{width}x{height}"
 

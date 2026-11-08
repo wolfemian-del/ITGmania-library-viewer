@@ -750,9 +750,21 @@ class CourseGeometryTests(unittest.TestCase):
         mock_window.geometry.assert_called_once_with(theme.COURSE_BUILDER_GEOMETRY)
 
     def test_open_falls_back_to_size_only_when_the_saved_position_is_off_screen(self):
-        # The remembered monitor is gone: the top-left falls outside the virtual desktop.
+        # The remembered monitor is gone: the position falls outside the virtual desktop.
         _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+5000+40")
         mock_window.geometry.assert_called_once_with("900x620")
+
+    def test_open_falls_back_to_size_only_when_only_a_sliver_would_show(self):
+        # Top-left technically on the desktop, but almost the whole window beyond the edge.
+        _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+1919+40")
+        mock_window.geometry.assert_called_once_with("900x620")
+        _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+40+1070")
+        mock_window.geometry.assert_called_once_with("900x620")
+
+    def test_open_restores_a_window_hanging_slightly_off_an_edge(self):
+        # Mostly visible, just overhanging: it comes back exactly as it was left.
+        _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+-30+40")
+        mock_window.geometry.assert_called_once_with("900x620+-30+40")
 
     def test_open_restores_a_negative_position_on_a_monitor_left_of_the_primary(self):
         # Virtual desktop starts at x=-1920; Tk's "+-" spelling must survive the round trip.
@@ -775,6 +787,17 @@ class CourseGeometryTests(unittest.TestCase):
         self.assertLess(names.index("report"), names.index("window.destroy"))
         report.assert_called_once_with("1000x620+10+10")
         self.assertEqual(builder._saved_geometry, "1000x620+10+10")
+
+    def test_cancelled_discard_saves_no_geometry(self):
+        report = Mock()
+        builder, mock_window, bindings = self.open_builder(report_geometry=report)
+        builder.entries = [{"Title": "A"}]
+        mock_messagebox = Mock()
+        mock_messagebox.askyesno.return_value = False
+        with patch.object(course_builder, "messagebox", mock_messagebox):
+            self.assertEqual(bindings["<Escape>"](), "break")
+        report.assert_not_called()
+        mock_window.destroy.assert_not_called()
 
     def test_save_window_geometry_reports_and_updates_the_saved_value(self):
         builder = make_builder()

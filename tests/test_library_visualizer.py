@@ -16,8 +16,11 @@ class CourseGeometryAppTests(unittest.TestCase):
 
     def test_valid_course_geometry_accepts_and_canonicalizes(self):
         self.assertEqual(app.LibraryApp._valid_course_geometry("1000x620+10+10"), "1000x620+10+10")
-        # Tk's "+-" spelling for a negative offset comes back in canonical form.
-        self.assertEqual(app.LibraryApp._valid_course_geometry("1000x620+-8+100"), "1000x620-8+100")
+        # A negative coordinate is rebuilt in Tk's own spelling ("+-8"): the
+        # shorter "-8" form means "8px from the right edge" to Tk and would
+        # restore the window to the wrong side of the screen.
+        self.assertEqual(app.LibraryApp._valid_course_geometry("1000x620+-8+100"), "1000x620+-8+100")
+        self.assertEqual(app.LibraryApp._valid_course_geometry("1000x620-8+100"), "1000x620+-8+100")
 
     def test_valid_course_geometry_rejects_unusable_values(self):
         for value in (None, 42, "garbage", "1000x620", "1x1+0+0",
