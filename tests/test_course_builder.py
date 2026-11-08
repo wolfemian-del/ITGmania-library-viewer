@@ -16,6 +16,7 @@ def make_builder(entries=(), library_rows=()):
     builder = object.__new__(CourseBuilder)
     builder.window = Mock()
     builder.entries = list(entries)
+    builder._last_removal = None
     builder.title_var = None
     builder._status = Mock()
     builder._library_rows = lambda: list(library_rows)
@@ -560,6 +561,126 @@ class CourseAppExitTests(unittest.TestCase):
         with patch.object(course_builder, "messagebox", mock_mb):
             self.assertTrue(builder.confirm_discard_for_app_exit())
         mock_mb.askyesno.assert_called_once()
+
+
+class CourseUndoRemoveTests(unittest.TestCase):
+    """Issue #85, option A: single-step undo for queue removals."""
+
+    def _builder(self, titles):
+        builder = make_queue_builder(titles)
+        builder.window = Mock()
+        builder.window.winfo_exists.return_value = True
+        return builder
+
+    @staticmethod
+    def _titles(builder):
+        return [row["Title"] for row in builder.entries]
+
+    def test_undo_restores_a_single_removal_at_its_position(self):
+        builder = self._builder(["A", "B", "C"])
+        builder.tree.selection.return_value = ("1",)
+        builder.remove_entries()
+        self.assertEqual(self._titles(builder), ["A", "C"])
+        builder.tree.selection_set.reset_mock()
+
+        builder.undo_remove()
+
+        self.assertEqual(self._titles(builder), ["A", "B", "C"])
+        builder.tree.selection_set.assert_called_once_with("1")
+
+    def test_undo_restores_a_nonadjacent_multiselection(self):
+        builder = self._builder(["A", "B", "C", "D"])
+        builder.tree.selection.return_value = ("0", "2")
+        builder.remove_entries()
+        self.assertEqual(self._titles(builder), ["B", "D"])
+        builder.tree.selection_set.reset_mock()
+
+        builder.undo_remove()
+
+        self.assertEqual(self._titles(builder), ["A", "B", "C", "D"])
+        builder.tree.selection_set.assert_called_once_with("0", "2")
+
+    def test_a_second_removal_replaces_the_remembered_one(self):
+        builder = self._builder(["A", "B", "C"])
+        builder.tree.selection.return_value = ("1",)
+        builder.remove_entries()
+        builder.tree.selection.return_value = ("1",)
+        builder.remove_entries()
+        self.assertEqual(self._titles(builder), ["A"])
+
+        builder.undo_remove()
+        self.assertEqual(self._titles(builder), ["A", "C"])
+        builder.undo_remove()
+        self.assertEqual(self._titles(builder), ["A", "C"])
+
+    def test_undo_with_nothing_remembered_is_a_noop(self):
+        builder = self._builder(["A", "B"])
+        builder.undo_remove()
+        self.assertEqual(self._titles(builder), ["A", "B"])
+
+    def test_adding_entries_forgets_the_removal(self):
+        builder = self._builder(["A", "B"])
+        builder._selected_rows = lambda: [queue_row("D")]
+        builder.tree.selection.return_value = ("0",)
+        builder.remove_entries()
+        builder.add_selected()
+        self.assertEqual(self._titles(builder), ["B", "D"])
+
+        builder.undo_remove()
+        self.assertEqual(self._titles(builder), ["B", "D"])
+
+    def test_moving_an_entry_forgets_the_removal(self):
+        builder = self._builder(["A", "B", "C"])
+        builder.tree.selection.return_value = ("0",)
+        builder.remove_entries()
+        builder.tree.selection.return_value = ("0",)
+        builder.move_entry(1)
+        self.assertEqual(self._titles(builder), ["C", "B"])
+
+        builder.undo_remove()
+        self.assertEqual(self._titles(builder), ["C", "B"])
+
+    def test_a_reload_clear_forgets_the_removal(self):
+        builder = self._builder(["A", "B"])
+        builder.tree.selection.return_value = ("0",)
+        builder.remove_entries()
+        mock_mb = Mock()
+        mock_mb.askyesno.return_value = True
+        with patch.object(course_builder, "messagebox", mock_mb):
+            builder.on_library_reloaded()
+        self.assertEqual(builder.entries, [])
+
+        builder.undo_remove()
+        self.assertEqual(builder.entries, [])
+
+    def test_open_dialog_binds_ctrl_z_and_offers_an_undo_button(self):
+        button_factory = Mock(return_value=Mock())
+        builder = CourseBuilder(
+            parent=Mock(),
+            status=Mock(),
+            button_factory=button_factory,
+            selected_rows=lambda: [],
+            library_rows=lambda: [],
+        )
+        mock_tk = Mock()
+        mock_tk.Toplevel.return_value = Mock()
+        mock_ttk = Mock()
+        mock_tree = mock_ttk.Treeview.return_value
+        mock_tree.get_children.return_value = ()
+
+        with patch.object(course_builder, "tk", mock_tk), patch.object(course_builder, "ttk", mock_ttk):
+            builder.open_dialog()
+
+        self.assertIn("Undo remove", [call.args[1] for call in button_factory.call_args_list])
+        bindings = {call.args[0]: call.args[1] for call in mock_tree.bind.call_args_list}
+        self.assertIn("<Control-z>", bindings)
+
+        builder.entries = [queue_row("A"), queue_row("B")]
+        mock_tree.selection.return_value = ("0",)
+        bindings["<Delete>"]()
+        self.assertEqual(self._titles(builder), ["B"])
+        self.assertEqual(bindings["<Control-z>"](), "break")
+        self.assertEqual(self._titles(builder), ["A", "B"])
 
 
 if __name__ == "__main__":
