@@ -158,6 +158,23 @@ class CourseBuilder:
             self.entries = []
             self.refresh_queue()
 
+    def confirm_discard_for_app_exit(self):
+        """Ask whether quitting the app may discard the queue (issue #87).
+
+        The main window calls this on its single exit path: destroying the
+        root would tear this dialog down without running its own close
+        prompt, so the discard decision has to be asked for here, where the
+        queue lives. Returns True when quitting may proceed — the dialog is
+        closed, the queue is empty, or the user agrees to discard it.
+        """
+        if self.window is None or not self.window.winfo_exists() or not self.entries:
+            return True
+        queued = len(self.entries)
+        return messagebox.askyesno(
+            "Discard course queue?",
+            f"Quitting the app discards the {queued} queued chart(s). Quit anyway?",
+            parent=self.window)
+
     def add_selected(self):
         added = 0
         for row in self._selected_rows():

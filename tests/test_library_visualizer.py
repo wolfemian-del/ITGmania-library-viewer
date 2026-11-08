@@ -789,5 +789,37 @@ class PerformanceAndExportTests(unittest.TestCase):
             self.assertIn("Exported 1 charts", instance.status.set.call_args[0][0])
 
 
+class LibraryAppExitTests(unittest.TestCase):
+    """Issue #87: File → Exit and the main window's X share one exit path that
+    asks the course builder before destroying the root."""
+
+    @staticmethod
+    def make_app(builder_answer=None):
+        instance = object.__new__(app.LibraryApp)
+        instance.root = Mock()
+        if builder_answer is None:
+            instance.course_builder = None
+        else:
+            instance.course_builder = Mock()
+            instance.course_builder.confirm_discard_for_app_exit.return_value = builder_answer
+        return instance
+
+    def test_exit_destroys_the_root_when_there_is_no_course_builder(self):
+        instance = self.make_app()
+        instance._close_app()
+        instance.root.destroy.assert_called_once_with()
+
+    def test_exit_destroys_the_root_when_the_builder_agrees(self):
+        instance = self.make_app(builder_answer=True)
+        instance._close_app()
+        instance.course_builder.confirm_discard_for_app_exit.assert_called_once_with()
+        instance.root.destroy.assert_called_once_with()
+
+    def test_exit_is_cancelled_when_the_builder_says_no(self):
+        instance = self.make_app(builder_answer=False)
+        instance._close_app()
+        instance.root.destroy.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -280,6 +280,8 @@ class LibraryApp:
         # status variable above; the Build course button below calls its open_dialog directly.
         self.course_builder = CourseBuilder(self.root, self.status, self._button, self._selected_rows_for_course,
                                             self._library_rows_for_course)
+        # The main window's X button goes through the same exit path as File → Exit (issue #87).
+        self.root.protocol("WM_DELETE_WINDOW", self._close_app)
         paths = tk.Frame(self.root, bg=theme.BG_PANEL, padx=12, pady=10)
         paths.pack(fill="x", padx=18)
         self._path_row(paths, "Cache / Songs", self.cache_var, self.choose_cache)
@@ -361,6 +363,16 @@ class LibraryApp:
                  fg=theme.TEXT_FOOTER, bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(side="right")
         self._build_menubar()
 
+    def _close_app(self):
+        """The app's single exit path (issue #87): File → Exit and the main
+        window's X button both land here. Destroying the root would tear
+        down the course dialog without running its discard prompt, so ask
+        the course builder first; if it says no, nothing is destroyed and
+        the app stays exactly as it was."""
+        if self.course_builder is not None and not self.course_builder.confirm_discard_for_app_exit():
+            return
+        self.root.destroy()
+
     def _build_menubar(self):
         menubar = tk.Menu(self.root, tearoff=False)
 
@@ -368,7 +380,7 @@ class LibraryApp:
         file_menu.add_command(label="Load / refresh library", command=self.load_data)
         file_menu.add_command(label="Export CSV…", command=self.export_csv)
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.root.destroy)
+        file_menu.add_command(label="Exit", command=self._close_app)
         menubar.add_cascade(label="File", menu=file_menu)
 
         edit_menu = tk.Menu(menubar, tearoff=False)
