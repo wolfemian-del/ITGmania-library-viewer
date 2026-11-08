@@ -118,7 +118,9 @@ class CourseBuilder:
             return "break"
 
         window.bind("<Escape>", _close)
-        window.focus_force()  # see open_advanced_search: a new window may not take focus by itself
+        # A new window does not always take keyboard focus by itself (seen on Windows);
+        # without this, Escape would go to the main window instead of closing this one.
+        window.focus_force()
 
         self.add_selected()
 
