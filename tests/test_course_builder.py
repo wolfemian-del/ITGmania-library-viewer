@@ -515,5 +515,52 @@ class CourseReloadTests(unittest.TestCase):
         builder.count_var.set.assert_called_once_with("0 charts · 0:00 total")
 
 
+class CourseAppExitTests(unittest.TestCase):
+    def _builder(self, titles, window_exists=True):
+        builder = make_queue_builder(titles)
+        builder.window = Mock()
+        builder.window.winfo_exists.return_value = window_exists
+        return builder
+
+    def test_exit_without_an_open_dialog_needs_no_prompt(self):
+        builder = self._builder(["A"])
+        builder.window = None
+        mock_mb = Mock()
+        with patch.object(course_builder, "messagebox", mock_mb):
+            self.assertTrue(builder.confirm_discard_for_app_exit())
+        mock_mb.askyesno.assert_not_called()
+        self.assertEqual(len(builder.entries), 1)
+
+    def test_exit_with_a_closed_window_or_empty_queue_needs_no_prompt(self):
+        mock_mb = Mock()
+        with patch.object(course_builder, "messagebox", mock_mb):
+            closed = self._builder(["A"], window_exists=False)
+            self.assertTrue(closed.confirm_discard_for_app_exit())
+            empty = self._builder([])
+            self.assertTrue(empty.confirm_discard_for_app_exit())
+        mock_mb.askyesno.assert_not_called()
+
+    def test_exit_is_cancelled_when_the_user_says_no(self):
+        builder = self._builder(["A", "B"])
+        mock_mb = Mock()
+        mock_mb.askyesno.return_value = False
+        with patch.object(course_builder, "messagebox", mock_mb):
+            self.assertFalse(builder.confirm_discard_for_app_exit())
+        mock_mb.askyesno.assert_called_once()
+        title, description = mock_mb.askyesno.call_args[0][:2]
+        self.assertEqual(title, "Discard course queue?")
+        self.assertIn("2 queued chart(s)", description)
+        self.assertIs(mock_mb.askyesno.call_args.kwargs["parent"], builder.window)
+        self.assertEqual([row["Title"] for row in builder.entries], ["A", "B"])
+
+    def test_exit_proceeds_when_the_user_says_yes(self):
+        builder = self._builder(["A"])
+        mock_mb = Mock()
+        mock_mb.askyesno.return_value = True
+        with patch.object(course_builder, "messagebox", mock_mb):
+            self.assertTrue(builder.confirm_discard_for_app_exit())
+        mock_mb.askyesno.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
