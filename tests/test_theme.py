@@ -90,7 +90,9 @@ class ThemeValuesTests(unittest.TestCase):
         self.assertGreater(theme.BUTTON_PADY, 0)
         self.assertGreater(theme.DIST_PANEL_WIDTH, 0)
         self.assertGreater(theme.CHART_MIN_CLICK_FRACTION, 0)
+        self.assertLess(theme.CHART_MIN_CLICK_FRACTION, 1)
         self.assertGreater(theme.CHART_BAR_HEIGHT, 0)
+        self.assertLess(theme.CHART_BAR_HEIGHT, 1)
         for name in ("WINDOW_DEFAULT_GEOMETRY", "ADVANCED_SEARCH_GEOMETRY", "COURSE_BUILDER_GEOMETRY"):
             geom = getattr(theme, name)
             self.assertRegex(geom, r"^\d+x\d+$", name)

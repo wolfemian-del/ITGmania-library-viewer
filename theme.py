@@ -1,6 +1,7 @@
 """Colors and fonts for the ITGmania Library Visualizer window.
 
-Every color and font the window uses is defined here, named by what it is for. To restyle the app, edit
+Every color and font the window uses is defined here, named by what it is for. Layout and geometry
+constants (window sizes, row height, paddings) are also defined here. To restyle the app, edit
 the values in this file and restart it. The values are plain strings and tuples so that this file does
 not need Tkinter.
 
@@ -85,5 +86,7 @@ BUTTON_PADX = 11
 BUTTON_PADY = 7
 
 DIST_PANEL_WIDTH = 320
+# A bar can be clicked across at least this fraction of the chart's width, so a very short bar (one chart
+# among hundreds) is still easy to hit, while a click far to the right of it does nothing.
 CHART_MIN_CLICK_FRACTION = 0.15
 CHART_BAR_HEIGHT = 0.68
