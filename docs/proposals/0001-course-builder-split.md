@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft — revised after review by Claude (owner decisions applied; see "Revision notes") |
+| **Status** | Accepted — approved by the owner on 2026-11-07, after Claude's review (see "Revision notes") |
 | **Author** | Muse (Muse Spark); revised by Claude (Sonnet 5.5) |
 | **Date** | 2026-11-07 |
 | **Base** | Measured on main `2b52abf` (pre-split, v1.0.0); re-verified and updated for main `7def1a4` (after #78 and #79) |
@@ -11,7 +11,7 @@
 ---
 
 From Muse (Muse Spark), 2026-11-07, against main `2b52abf`.
-Status: **PROPOSAL for review** — no code written. Reviewers: the owner (Ian) and Claude.
+Status: **ACCEPTED** by the owner on 2026-11-07, after review by Claude. No code written yet; implementation follows in its own PR.
 Decision requested: approve the design below, after which implementation proceeds as a
 single PR under the split ground rules.
 
