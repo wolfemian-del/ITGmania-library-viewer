@@ -17,6 +17,8 @@ def make_builder(entries=(), library_rows=()):
     builder.window = Mock()
     builder.entries = list(entries)
     builder._last_removal = None
+    builder._saved_geometry = None
+    builder._report_geometry = None
     builder.title_var = None
     builder._status = Mock()
     builder._library_rows = lambda: list(library_rows)
@@ -710,6 +712,124 @@ class CourseUndoRemoveTests(unittest.TestCase):
             self.assertEqual(self._titles(builder), ["B"])
             self.assertEqual(bindings[undo_binding](), "break")
             self.assertEqual(self._titles(builder), ["A", "B"])
+
+
+class CourseGeometryTests(unittest.TestCase):
+    """Window geometry memory (issue #25, proposal 0003): restore on open, report on close."""
+
+    def open_builder(self, saved_geometry=None, report_geometry=None, vroot=(0, 0, 1920, 1080)):
+        parent = Mock()
+        parent.winfo_vrootx.return_value = vroot[0]
+        parent.winfo_vrooty.return_value = vroot[1]
+        parent.winfo_vrootwidth.return_value = vroot[2]
+        parent.winfo_vrootheight.return_value = vroot[3]
+        builder = CourseBuilder(
+            parent=parent,
+            status=Mock(),
+            button_factory=Mock(return_value=Mock()),
+            selected_rows=lambda: [],
+            library_rows=lambda: [],
+            saved_geometry=saved_geometry,
+            report_geometry=report_geometry,
+        )
+        mock_window = Mock()
+        bindings = {}
+        mock_window.bind.side_effect = lambda seq, func: bindings.__setitem__(seq, func)
+        mock_tk = Mock()
+        mock_tk.Toplevel.return_value = mock_window
+        with patch.object(course_builder, "tk", mock_tk), patch.object(course_builder, "ttk", Mock()):
+            builder.open_dialog()
+        return builder, mock_window, bindings
+
+    def test_open_restores_the_saved_geometry_when_its_position_is_visible(self):
+        _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+30+40")
+        mock_window.geometry.assert_called_once_with("900x620+30+40")
+
+    def test_open_uses_the_theme_default_without_a_saved_geometry(self):
+        _builder, mock_window, _bindings = self.open_builder()
+        mock_window.geometry.assert_called_once_with(theme.COURSE_BUILDER_GEOMETRY)
+
+    def test_open_falls_back_to_size_only_when_the_saved_position_is_off_screen(self):
+        # The remembered monitor is gone: the position falls outside the virtual desktop.
+        _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+5000+40")
+        mock_window.geometry.assert_called_once_with("900x620")
+
+    def test_open_falls_back_to_size_only_when_only_a_sliver_would_show(self):
+        # Top-left technically on the desktop, but almost the whole window beyond the edge.
+        _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+1919+40")
+        mock_window.geometry.assert_called_once_with("900x620")
+        _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+40+1070")
+        mock_window.geometry.assert_called_once_with("900x620")
+
+    def test_open_restores_a_window_hanging_slightly_off_an_edge(self):
+        # Mostly visible, just overhanging: it comes back exactly as it was left.
+        _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+-30+40")
+        mock_window.geometry.assert_called_once_with("900x620+-30+40")
+
+    def test_open_falls_back_when_the_title_bar_would_be_above_the_screen(self):
+        # Plenty of the body would show, but with the title bar above every
+        # monitor there is nothing to grab, so the position is not restored.
+        _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+100+-500")
+        mock_window.geometry.assert_called_once_with("900x620")
+        # A top edge within a few pixels of the desktop's top still counts as grabbable.
+        _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+100+-16")
+        mock_window.geometry.assert_called_once_with("900x620+100+-16")
+
+    def test_open_restores_a_negative_position_on_a_monitor_left_of_the_primary(self):
+        # Virtual desktop starts at x=-1920; Tk's "+-" spelling must survive the round trip.
+        _builder, mock_window, _bindings = self.open_builder(
+            saved_geometry="900x620+-1500+40", vroot=(-1920, 0, 3840, 1080))
+        mock_window.geometry.assert_called_once_with("900x620+-1500+40")
+
+    def test_close_reports_the_geometry_before_destroying_the_window(self):
+        report = Mock()
+        builder, mock_window, bindings = self.open_builder(report_geometry=report)
+        mock_window.state.return_value = "normal"
+        mock_window.geometry.return_value = "1000x620+10+10"
+        manager = Mock()
+        manager.attach_mock(report, "report")
+        manager.attach_mock(mock_window, "window")
+        with patch.object(course_builder, "messagebox", Mock()):
+            self.assertEqual(bindings["<Escape>"](), "break")
+        names = [call[0] for call in manager.mock_calls]
+        self.assertIn("report", names)
+        self.assertLess(names.index("report"), names.index("window.destroy"))
+        report.assert_called_once_with("1000x620+10+10")
+        self.assertEqual(builder._saved_geometry, "1000x620+10+10")
+
+    def test_cancelled_discard_saves_no_geometry(self):
+        report = Mock()
+        builder, mock_window, bindings = self.open_builder(report_geometry=report)
+        builder.entries = [{"Title": "A"}]
+        mock_messagebox = Mock()
+        mock_messagebox.askyesno.return_value = False
+        with patch.object(course_builder, "messagebox", mock_messagebox):
+            self.assertEqual(bindings["<Escape>"](), "break")
+        report.assert_not_called()
+        mock_window.destroy.assert_not_called()
+
+    def test_save_window_geometry_reports_and_updates_the_saved_value(self):
+        builder = make_builder()
+        builder.window.state.return_value = "normal"
+        builder.window.geometry.return_value = "900x620+5+5"
+        builder._report_geometry = Mock()
+        builder.save_window_geometry()
+        builder._report_geometry.assert_called_once_with("900x620+5+5")
+        self.assertEqual(builder._saved_geometry, "900x620+5+5")
+
+    def test_save_window_geometry_noops_without_a_normal_open_window(self):
+        report = Mock()
+        builder = make_builder()
+        builder._report_geometry = report
+        # Minimized: the reported geometry would be the parked position, not the user's place.
+        builder.window.state.return_value = "iconic"
+        builder.save_window_geometry()
+        report.assert_not_called()
+        self.assertIsNone(builder._saved_geometry)
+        # No dialog at all.
+        builder.window = None
+        builder.save_window_geometry()
+        report.assert_not_called()
 
 
 if __name__ == "__main__":

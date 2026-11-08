@@ -26,6 +26,7 @@ from library_data import (
     format_duration,
     format_new_course,
     number,
+    parse_course_geometry,
     validate_course_fields,
 )
 
@@ -40,12 +41,19 @@ class CourseBuilder:
                     (the save-time ambiguity check compares the queue against it)
     """
 
-    def __init__(self, parent, status, button_factory, selected_rows, library_rows):
+    def __init__(self, parent, status, button_factory, selected_rows, library_rows,
+                 saved_geometry=None, report_geometry=None):
         self.parent = parent
         self._status = status
         self._button = button_factory
         self._selected_rows = selected_rows
         self._library_rows = library_rows
+        # Window geometry memory (issue #25, proposal 0003): the geometry to restore
+        # on open, and the callback that receives the final geometry on close. Both
+        # are optional; without them the window opens at the theme default and
+        # reports nothing.
+        self._saved_geometry = saved_geometry
+        self._report_geometry = report_geometry
         self.window = None
         self.entries: list[dict] = []
         self._last_removal = None  # [(index, row), ...] of the latest removal, for Undo remove (issue #85)
@@ -53,6 +61,38 @@ class CourseBuilder:
         self.tree = None
         self.count_var = None
         self._tint = None  # the queue tree's SelectedRowTint, created with the tree in open_dialog
+
+    def _geometry_for_open(self):
+        """The geometry string to open the dialog with (issue #25).
+
+        The remembered geometry when a meaningful part of the window would
+        be visible on the virtual desktop (which spans every monitor): at
+        least a grabbable strip of it, so a window left hanging a little off
+        an edge comes back as it was, while one left on a since-unplugged
+        monitor, or pushed almost entirely off an edge, does not open lost.
+        The top edge gets its own rule on top of that: a window can show
+        plenty of its body while its title bar sits above every monitor
+        (a stacked monitor unplugged since, say), leaving nothing to grab,
+        so the top edge must sit within a few pixels of the desktop's top.
+        In the fallback cases only the size is used and the window manager
+        places the window, so a lost position can never be re-saved on
+        close. Without a remembered geometry, the theme default.
+        """
+        if not self._saved_geometry:
+            return theme.COURSE_BUILDER_GEOMETRY
+        parsed = parse_course_geometry(self._saved_geometry)
+        if parsed is None:
+            return theme.COURSE_BUILDER_GEOMETRY
+        width, height, x, y = parsed
+        left = self.parent.winfo_vrootx()
+        top = self.parent.winfo_vrooty()
+        right = left + self.parent.winfo_vrootwidth()
+        bottom = top + self.parent.winfo_vrootheight()
+        visible_width = min(x + width, right) - max(x, left)
+        visible_height = min(y + height, bottom) - max(y, top)
+        if visible_width >= 100 and visible_height >= 32 and y >= top - 16:
+            return self._saved_geometry
+        return f"{width}x{height}"
 
     def open_dialog(self):
         if self.window is not None and self.window.winfo_exists():
@@ -63,7 +103,7 @@ class CourseBuilder:
         window = tk.Toplevel(self.parent)
         self.window = window
         window.title("Build a course")
-        window.geometry(theme.COURSE_BUILDER_GEOMETRY)
+        window.geometry(self._geometry_for_open())
         window.minsize(*theme.COURSE_BUILDER_MIN_SIZE)
         window.configure(bg=theme.BG_WINDOW)
         window.transient(self.parent)
@@ -133,6 +173,7 @@ class CourseBuilder:
                     f"Closing this window discards the {queued} queued chart(s). Close anyway?",
                     parent=window):
                 return "break"
+            self.save_window_geometry()
             window.destroy()
             return "break"
 
@@ -187,6 +228,22 @@ class CourseBuilder:
             "Discard course queue?",
             f"Quitting the app discards the {queued} queued chart(s). Quit anyway?",
             parent=self.window)
+
+    def save_window_geometry(self):
+        """Report the dialog's current geometry so the next open restores it (issue #25).
+
+        Called when the dialog closes and when the app exits with the dialog
+        open. Does nothing when the dialog is closed, and nothing while the
+        window is minimized or maximized: those states report a parked or
+        full-screen geometry the user did not choose as the window's place.
+        """
+        if self.window is None or not self.window.winfo_exists():
+            return
+        if self.window.state() != "normal":
+            return
+        self._saved_geometry = self.window.geometry()
+        if self._report_geometry is not None:
+            self._report_geometry(self._saved_geometry)
 
     def add_selected(self):
         added = 0
