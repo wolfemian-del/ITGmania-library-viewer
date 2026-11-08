@@ -356,6 +356,26 @@ def looks_like_song_tree(cache: Path) -> bool:
     return False
 
 
+def parse_course_geometry(value) -> tuple[int, int, int, int] | None:
+    """Parse a Tk window geometry string into (width, height, x, y), or None.
+
+    Validates the course window geometry remembered in settings (issue #25).
+    Only the full form with a position is accepted. Tk writes a negative
+    offset two ways — "-8" and, after the leading sign, "+-8" — and both are
+    understood, so a value the app itself saved always parses.
+    """
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"([1-9]\d*)x([1-9]\d*)([+-]-?\d+)([+-]-?\d+)", value)
+    if match is None:
+        return None
+    width, height = int(match.group(1)), int(match.group(2))
+    # "+-8" is the negative-offset spelling; int() alone rejects it.
+    x = int(match.group(3).replace("+-", "-"))
+    y = int(match.group(4).replace("+-", "-"))
+    return width, height, x, y
+
+
 def course_song_line(course_path: str, difficulty: str) -> str:
     """Format one #SONG entry for a CRS file."""
     return f"#SONG:{course_path}:{difficulty}:;"

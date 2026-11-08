@@ -11,6 +11,108 @@ import library_visualizer as app
 import row_tints
 
 
+class CourseGeometryAppTests(unittest.TestCase):
+    """Issue #25: validating, storing, and wiring the course window's geometry."""
+
+    def test_valid_course_geometry_accepts_and_canonicalizes(self):
+        self.assertEqual(app.LibraryApp._valid_course_geometry("1000x620+10+10"), "1000x620+10+10")
+        # Tk's "+-" spelling for a negative offset comes back in canonical form.
+        self.assertEqual(app.LibraryApp._valid_course_geometry("1000x620+-8+100"), "1000x620-8+100")
+
+    def test_valid_course_geometry_rejects_unusable_values(self):
+        for value in (None, 42, "garbage", "1000x620", "1x1+0+0",
+                      "699x620+0+0", "1000x439+0+0"):
+            with self.subTest(value=value):
+                self.assertIsNone(app.LibraryApp._valid_course_geometry(value))
+
+    def make_saving_app(self, directory, course_geometry):
+        instance = object.__new__(app.LibraryApp)
+        instance.settings_path = Path(directory) / "settings.json"
+        instance.tree = Mock()
+        instance.cache_var = Mock(get=Mock(return_value="/cache"))
+        instance.stats_var = Mock(get=Mock(return_value="/stats.xml"))
+        instance.column_order = list(app.HEADERS)
+        instance.column_visibility = {col: Mock(get=Mock(return_value=True)) for col in app.HEADERS}
+        instance.tree.column.return_value = 100
+        instance.sort_keys = [("Pack", False)]
+        instance.show_distribution_panel = Mock(get=Mock(return_value=False))
+        instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
+        instance.course_geometry = course_geometry
+        instance._last_saved_settings = None
+        return instance
+
+    def test_save_settings_includes_the_key_only_when_a_geometry_is_set(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.make_saving_app(directory, "1000x620+10+10")
+            instance._save_settings()
+            data = json.loads(instance.settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["course_geometry"], "1000x620+10+10")
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.make_saving_app(directory, None)
+            instance._save_settings()
+            data = json.loads(instance.settings_path.read_text(encoding="utf-8"))
+            self.assertNotIn("course_geometry", data)
+
+    def test_stored_geometry_survives_a_save_triggered_by_an_unrelated_change(self):
+        # __init__ seeds course_geometry from the file, so a routine save in a
+        # session that never opens the dialog must carry the key through.
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.make_saving_app(directory, "1000x620+10+10")
+            instance._save_settings()
+            instance.tree.column.return_value = 150  # an unrelated change forces a rewrite
+            instance._save_settings()
+            data = json.loads(instance.settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["course_geometry"], "1000x620+10+10")
+
+    def test_geometry_callback_stores_the_value_and_saves(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.course_geometry = None
+        instance._save_settings = Mock()
+        instance._course_geometry_changed("900x620+5+5")
+        self.assertEqual(instance.course_geometry, "900x620+5+5")
+        instance._save_settings.assert_called_once_with()
+
+    def test_approved_exit_saves_the_geometry_before_destroying_the_root(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.root = Mock()
+        builder = Mock()
+        builder.confirm_discard_for_app_exit.return_value = True
+        instance.course_builder = builder
+        manager = Mock()
+        manager.attach_mock(builder, "builder")
+        manager.attach_mock(instance.root, "root")
+        instance._close_app()
+        names = [call[0] for call in manager.mock_calls]
+        self.assertLess(names.index("builder.confirm_discard_for_app_exit"),
+                        names.index("builder.save_window_geometry"))
+        self.assertLess(names.index("builder.save_window_geometry"), names.index("root.destroy"))
+
+    def test_live_app_passes_the_saved_geometry_to_the_builder(self):
+        """Wiring guard (live Tk; skipped headless): a construction that forgot to
+        pass the geometry inputs would silently disable the whole feature."""
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(settings_dir.cleanup)
+        settings_path = Path(settings_dir.name) / "settings.json"
+        settings_path.write_text(json.dumps({"course_geometry": "900x620+30+40"}), encoding="utf-8")
+        patcher = patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        try:
+            application = app.LibraryApp(root)
+            self.assertEqual(application.course_geometry, "900x620+30+40")
+            self.assertEqual(application.course_builder._saved_geometry, "900x620+30+40")
+            self.assertEqual(application.course_builder._report_geometry,
+                             application._course_geometry_changed)
+        finally:
+            root.destroy()
+
+
 class LibrarySnapshotTests(unittest.TestCase):
     @staticmethod
     def make_app(settings_path, cache_dir, stats_file):
@@ -23,6 +125,7 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance.status = Mock()
         instance.refresh_table = Mock()
         instance._loaded = Mock()
+        instance.course_geometry = None
         instance._last_saved_settings = None
         return instance
 
@@ -699,6 +802,7 @@ class PerformanceAndExportTests(unittest.TestCase):
             instance.sort_keys = [("Pack", False)]
             instance.show_distribution_panel = Mock(get=Mock(return_value=False))
             instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
+            instance.course_geometry = None
             instance._last_saved_settings = None
 
             # First save writes to disk
@@ -732,6 +836,7 @@ class PerformanceAndExportTests(unittest.TestCase):
             instance.sort_keys = [("Pack", False)]
             instance.show_distribution_panel = Mock(get=Mock(return_value=False))
             instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
+            instance.course_geometry = None
             instance._last_saved_settings = None
 
             # An earlier save in the session (any routine click) populates the dedup snapshot.

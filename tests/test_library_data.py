@@ -1254,3 +1254,20 @@ class AdvancedSearchDialogTests(unittest.TestCase):
             with self.subTest(query=query):
                 once = self.round_trip(query)
                 self.assertEqual(self.round_trip(once), once)
+
+
+class CourseGeometryParsingTests(unittest.TestCase):
+    def test_full_geometry_parses(self):
+        self.assertEqual(data.parse_course_geometry("1000x620+10+10"), (1000, 620, 10, 10))
+
+    def test_both_negative_offset_spellings_parse(self):
+        # Tk writes a negative offset as "-8" or, after the sign, as "+-8".
+        self.assertEqual(data.parse_course_geometry("1000x620-8+100"), (1000, 620, -8, 100))
+        self.assertEqual(data.parse_course_geometry("1000x620+-8+100"), (1000, 620, -8, 100))
+        self.assertEqual(data.parse_course_geometry("1000x620+-8+-30"), (1000, 620, -8, -30))
+
+    def test_invalid_values_are_rejected(self):
+        for value in (None, 42, "", "garbage", "1000x620", "0x0+0+0", "1000x620+10",
+                      "1000x620+10+10+10", "1000x620++10+10", " 1000x620+10+10"):
+            with self.subTest(value=value):
+                self.assertIsNone(data.parse_course_geometry(value))
