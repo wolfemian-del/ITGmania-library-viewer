@@ -48,6 +48,7 @@ class CourseBuilder:
         self._library_rows = library_rows
         self.window = None
         self.entries: list[dict] = []
+        self._last_removal = None  # [(index, row), ...] of the latest removal, for Undo remove (issue #85)
         self.title_var = None
         self.tree = None
         self.count_var = None
@@ -67,6 +68,7 @@ class CourseBuilder:
         window.configure(bg=theme.BG_WINDOW)
         window.transient(self.parent)
         self.entries: list[dict] = []
+        self._last_removal = None  # a reopened window starts a fresh queue, with nothing to undo
 
         tk.Label(window, text="Build a new course", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
                  font=theme.FONT_COURSE_TITLE).pack(anchor="w", padx=18, pady=(16, 2))
@@ -105,11 +107,16 @@ class CourseBuilder:
         # The Remove button has keyboard equivalents while the queue has focus.
         self.tree.bind("<Delete>", self._remove_on_key)
         self.tree.bind("<BackSpace>", self._remove_on_key)
+        # So does Undo remove. Tk names the key "z" or "Z" depending on Caps Lock (and Shift),
+        # so both are bound; without the second, Ctrl+Z does nothing while Caps Lock is on.
+        self.tree.bind("<Control-z>", self._undo_on_key)
+        self.tree.bind("<Control-Z>", self._undo_on_key)
 
         controls = tk.Frame(window, bg=theme.BG_WINDOW, padx=18, pady=12)
         controls.pack(fill="x")
         self._button(controls, "Add selected charts", self.add_selected, primary=True).pack(side="left")
         self._button(controls, "Remove", self.remove_entries).pack(side="left", padx=(8, 0))
+        self._button(controls, "Undo remove", self.undo_remove).pack(side="left", padx=(8, 0))
         self._button(controls, "Move up", lambda: self.move_entry(-1)).pack(side="left", padx=(8, 0))
         self._button(controls, "Move down", lambda: self.move_entry(1)).pack(side="left", padx=(8, 0))
         self.count_var = tk.StringVar(value="0 charts · 0:00 total")
@@ -144,9 +151,14 @@ class CourseBuilder:
         no longer match what a save would suggest. The owner's choice (issue #82,
         option 1) is to ask here, at reload time; agreeing clears the queue so it
         can be rebuilt from the new library. Called by LibraryApp after a load;
-        does nothing unless the dialog is open with charts queued.
+        does nothing unless the dialog is open. With an empty queue there is
+        nothing to ask about, but a removal remembered for Undo remove still holds
+        rows from the previous library, so it is forgotten here.
         """
-        if self.window is None or not self.window.winfo_exists() or not self.entries:
+        if self.window is None or not self.window.winfo_exists():
+            return
+        if not self.entries:
+            self._last_removal = None  # no prompt, but undo must not bring back previous-library rows
             return
         queued = len(self.entries)
         if messagebox.askyesno(
@@ -156,6 +168,7 @@ class CourseBuilder:
                 "Clear the queue so it can be rebuilt from the reloaded library?",
                 parent=self.window):
             self.entries = []
+            self._last_removal = None  # the remembered removal belonged to the cleared queue
             self.refresh_queue()
 
     def confirm_discard_for_app_exit(self):
@@ -181,6 +194,7 @@ class CourseBuilder:
             self.entries.append(row)
             added += 1
         if added:
+            self._last_removal = None  # the queue changed, so the remembered positions no longer apply
             self.refresh_queue()
 
     def refresh_queue(self, selected_indices=None):
@@ -207,6 +221,10 @@ class CourseBuilder:
 
     def remove_entries(self):
         indices = sorted((int(item) for item in self.tree.selection()), reverse=True)
+        if indices:
+            # Remember the removal (ascending, with positions) so Undo remove can put the
+            # entries back where they were; a new removal replaces the remembered one.
+            self._last_removal = [(index, self.entries[index]) for index in reversed(indices)]
         for index in indices:
             del self.entries[index]
         if not indices:
@@ -219,8 +237,31 @@ class CourseBuilder:
         keep = min(indices[-1], len(self.entries) - 1)
         self.refresh_queue([keep] if keep >= 0 else [])
 
+    def _undo_on_key(self, _event=None):
+        self.undo_remove()
+        return "break"
+
+    def undo_remove(self):
+        """Put back the entries the last removal took out (issue #85, option A).
+
+        Only the most recent removal is remembered, with its positions, and
+        anything else that changes the queue — adding entries, moving them, a
+        library reload clearing the queue, reopening the window — forgets it,
+        because the stored positions would no longer mean the same thing. The
+        restored entries come back selected, so the user sees what returned.
+        """
+        if not self._last_removal:
+            return
+        restored = []
+        for index, row in self._last_removal:
+            self.entries.insert(index, row)
+            restored.append(index)
+        self._last_removal = None
+        self.refresh_queue(restored)
+
     def move_entry(self, direction):
         moving = {int(item) for item in self.tree.selection()}
+        selected_before = sorted(moving)
         if direction < 0:
             for index in sorted(moving):
                 if index > 0 and index - 1 not in moving:
@@ -235,6 +276,8 @@ class CourseBuilder:
                         self.entries[index], self.entries[index + 1])
                     moving.remove(index)
                     moving.add(index + 1)
+        if sorted(moving) != selected_before:
+            self._last_removal = None  # entries moved, so the remembered positions no longer apply
         self.refresh_queue(sorted(moving))
 
     def validate(self, title=None):
