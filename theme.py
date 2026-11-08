@@ -1,6 +1,7 @@
 """Colors and fonts for the ITGmania Library Visualizer window.
 
-Every color and font the window uses is defined here, named by what it is for. To restyle the app, edit
+Every color and font the window uses is defined here, named by what it is for. Layout and geometry
+constants (window sizes, row height, paddings) are also defined here. To restyle the app, edit
 the values in this file and restart it. The values are plain strings and tuples so that this file does
 not need Tkinter.
 
@@ -69,3 +70,23 @@ FONT_MONO_BOLD = ("Consolas", 9, "bold")      # query text in Advanced Search
 CHART_TEXT_SIZE_MESSAGE = 9   # "no data" message in the chart area
 CHART_TEXT_SIZE_COUNT = 7.5   # count printed beside each bar
 CHART_TEXT_SIZE_LABEL = 8     # bar labels on the left and the axis tick numbers
+
+# --- Layout & Geometry ---
+WINDOW_DEFAULT_GEOMETRY = "1500x850"
+WINDOW_MIN_SIZE = (900, 550)
+
+ADVANCED_SEARCH_GEOMETRY = "560x620"
+ADVANCED_SEARCH_MIN_SIZE = (480, 520)
+
+COURSE_BUILDER_GEOMETRY = "900x620"
+COURSE_BUILDER_MIN_SIZE = (700, 440)
+
+TABLE_ROW_HEIGHT = 27
+BUTTON_PADX = 11
+BUTTON_PADY = 7
+
+DIST_PANEL_WIDTH = 320
+# A bar can be clicked across at least this fraction of the chart's width, so a very short bar (one chart
+# among hundreds) is still easy to hit, while a click far to the right of it does nothing.
+CHART_MIN_CLICK_FRACTION = 0.15
+CHART_BAR_HEIGHT = 0.68

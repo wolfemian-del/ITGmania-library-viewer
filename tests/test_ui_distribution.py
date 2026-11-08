@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 import library_data as data
 import library_visualizer as app
+import theme
 
 
 class DistributionUITests(unittest.TestCase):
@@ -284,7 +285,7 @@ class FullDistributionTests(unittest.TestCase):
         with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
             instance._update_distribution_panel(instance._filter_rows())
         widths = {bar.label: bar.click_width for bar in instance._current_dist_bars}
-        minimum = 22 * 1.25 * app.CHART_MIN_CLICK_FRACTION  # the chart is 22 * 1.25 units wide
+        minimum = 22 * 1.25 * theme.CHART_MIN_CLICK_FRACTION  # the chart is 22 * 1.25 units wide
         self.assertEqual(set(widths), {"12", "11", "10"})
         self.assertAlmostEqual(widths["12"], minimum)   # one chart: widened to the minimum
         self.assertAlmostEqual(widths["11"], minimum)

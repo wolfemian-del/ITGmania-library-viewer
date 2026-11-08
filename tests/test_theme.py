@@ -47,6 +47,15 @@ class WindowUsesThemeTests(unittest.TestCase):
         found = re.findall(r"\b(?:fontsize|labelsize)\s*=\s*[0-9.]+", WINDOW_SOURCE)
         self.assertEqual(found, [], "chart text sizes belong in theme.py")
 
+    def test_no_layout_literals_in_window_code(self):
+        found_rowheight = re.findall(r"\browheight\s*=\s*[0-9]+", WINDOW_SOURCE)
+        self.assertEqual(found_rowheight, [], "Treeview rowheight belongs in theme.py")
+
+        found_dist = re.findall(r"^DIST_PANEL_WIDTH\s*=", WINDOW_SOURCE, re.MULTILINE)
+        self.assertEqual(found_dist, [], "DIST_PANEL_WIDTH belongs in theme.py")
+        found_click = re.findall(r"^CHART_MIN_CLICK_FRACTION\s*=", WINDOW_SOURCE, re.MULTILINE)
+        self.assertEqual(found_click, [], "CHART_MIN_CLICK_FRACTION belongs in theme.py")
+
     def test_every_theme_name_the_window_uses_exists(self):
         missing = sorted(name for name in theme_names_used_by_window() if not hasattr(theme, name))
         self.assertEqual(missing, [], "a typo here would only crash when that dialog opens")
@@ -60,7 +69,7 @@ class ThemeValuesTests(unittest.TestCase):
     def test_colors_are_six_digit_hex_or_plain_names(self):
         for name in dir(theme):
             value = getattr(theme, name)
-            if name.isupper() and isinstance(value, str):
+            if name.isupper() and isinstance(value, str) and not name.endswith("_GEOMETRY"):
                 self.assertTrue(HEX_COLOR.fullmatch(value) or value.isalpha(), f"{name} = {value!r}")
 
     def test_difficulty_colors_cover_every_difficulty(self):
@@ -74,6 +83,24 @@ class ThemeValuesTests(unittest.TestCase):
                 family, size, *style = getattr(theme, name)
                 self.assertIsInstance(family, str, name)
                 self.assertIsInstance(size, int, name)
+
+    def test_layout_constants_are_positive_numbers_or_valid_geometries(self):
+        self.assertGreater(theme.TABLE_ROW_HEIGHT, 0)
+        self.assertGreater(theme.BUTTON_PADX, 0)
+        self.assertGreater(theme.BUTTON_PADY, 0)
+        self.assertGreater(theme.DIST_PANEL_WIDTH, 0)
+        self.assertGreater(theme.CHART_MIN_CLICK_FRACTION, 0)
+        self.assertLess(theme.CHART_MIN_CLICK_FRACTION, 1)
+        self.assertGreater(theme.CHART_BAR_HEIGHT, 0)
+        self.assertLess(theme.CHART_BAR_HEIGHT, 1)
+        for name in ("WINDOW_DEFAULT_GEOMETRY", "ADVANCED_SEARCH_GEOMETRY", "COURSE_BUILDER_GEOMETRY"):
+            geom = getattr(theme, name)
+            self.assertRegex(geom, r"^\d+x\d+$", name)
+        for name in ("WINDOW_MIN_SIZE", "ADVANCED_SEARCH_MIN_SIZE", "COURSE_BUILDER_MIN_SIZE"):
+            min_size = getattr(theme, name)
+            self.assertIsInstance(min_size, tuple, name)
+            self.assertEqual(len(min_size), 2, name)
+            self.assertTrue(all(isinstance(v, int) and v > 0 for v in min_size), name)
 
     def test_theme_does_not_need_tkinter(self):
         self.assertNotIn("tkinter", (ROOT / "theme.py").read_text(encoding="utf-8"))

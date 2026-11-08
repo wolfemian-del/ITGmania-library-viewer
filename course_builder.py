@@ -62,8 +62,8 @@ class CourseBuilder:
         window = tk.Toplevel(self.parent)
         self.window = window
         window.title("Build a course")
-        window.geometry("900x620")
-        window.minsize(700, 440)
+        window.geometry(theme.COURSE_BUILDER_GEOMETRY)
+        window.minsize(*theme.COURSE_BUILDER_MIN_SIZE)
         window.configure(bg=theme.BG_WINDOW)
         window.transient(self.parent)
         self.entries: list[dict] = []
