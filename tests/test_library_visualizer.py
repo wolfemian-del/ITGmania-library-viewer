@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 import library_visualizer as app
+import row_tints
 
 
 class LibrarySnapshotTests(unittest.TestCase):
@@ -220,27 +221,14 @@ class ColumnGroupTests(unittest.TestCase):
 
 
 class RowTintTests(unittest.TestCase):
-    def test_setup_tree_tags_configures_all_difficulties_and_selection(self):
-        instance = object.__new__(app.LibraryApp)
-        instance.tree = Mock()
-
-        instance._setup_tree_tags()
-        # One tag per difficulty, one for unknown difficulties, and the selection tag.
-        self.assertEqual(instance.tree.tag_configure.call_count, len(app.theme.DIFFICULTY_COLORS) + 2)
-        for diff, color in app.theme.DIFFICULTY_COLORS.items():
-            instance.tree.tag_configure.assert_any_call(f"diff_{diff}", foreground=color)
-        instance.tree.tag_configure.assert_any_call(
-            app.UNKNOWN_DIFFICULTY_TAG, foreground=app.theme.DIFFICULTY_COLOR_UNKNOWN)
-        # The selection tag must be configured last, or selected rows would not turn white.
-        self.assertEqual(instance.tree.tag_configure.call_args_list[-1].args[0], "selected_row")
-        instance.tree.tag_configure.assert_any_call("selected_row", foreground=app.theme.TEXT_ON_ACCENT)
-
+    # The tag rule, the tag setup, and the selection bookkeeping themselves are
+    # tested in test_row_tints.py; this class keeps the table-side wiring honest.
     def test_insert_batch_tags_rows_by_difficulty_and_selection(self):
         instance = object.__new__(app.LibraryApp)
         instance.tree = Mock()
         instance._render_generation = 1
         instance.tree_item_rows = {}
-        instance._selected_tree_items = set()
+        instance._tree_tint = row_tints.SelectedRowTint(instance.tree)
         instance.root = Mock()
         instance.tree.insert.side_effect = ["item0", "item1", "item2"]
 
@@ -261,43 +249,10 @@ class RowTintTests(unittest.TestCase):
         self.assertEqual(kwargs1.get("tags"), ("diff_Hard", "selected_row"))
         # Song C: a difficulty name that is not in the theme gets the gray unknown tag
         args2, kwargs2 = instance.tree.insert.call_args_list[2]
-        self.assertEqual(kwargs2.get("tags"), (app.UNKNOWN_DIFFICULTY_TAG,))
+        self.assertEqual(kwargs2.get("tags"), (row_tints.UNKNOWN_DIFFICULTY_TAG,))
         # Only the pre-selected row is remembered as selected
-        self.assertEqual(instance._selected_tree_items, {"item1"})
+        self.assertEqual(instance._tree_tint.items, {"item1"})
         instance.tree.selection_add.assert_called_once_with("item1")
-
-    def test_on_tree_select_toggles_selected_row_tag(self):
-        instance = object.__new__(app.LibraryApp)
-        instance.tree = Mock()
-        instance.tree.exists.return_value = True
-        instance._selected_tree_items = {"item1"}
-
-        # Initial tags
-        instance.tree.item.side_effect = lambda item_id, option=None, **kwargs: (
-            ["diff_Challenge", "selected_row"] if item_id == "item1" else ["diff_Hard"]
-        )
-
-        # Selection changes: item1 deselected, item2 selected
-        instance.tree.selection.return_value = ["item2"]
-        instance._on_tree_select()
-
-        # item1 should have selected_row removed
-        instance.tree.item.assert_any_call("item1", tags=["diff_Challenge"])
-        # item2 should have selected_row added
-        instance.tree.item.assert_any_call("item2", tags=["diff_Hard", "selected_row"])
-        self.assertEqual(instance._selected_tree_items, {"item2"})
-
-    def test_on_tree_select_skips_rows_a_refresh_already_removed(self):
-        instance = object.__new__(app.LibraryApp)
-        instance.tree = Mock()
-        instance.tree.exists.return_value = False
-        instance._selected_tree_items = {"gone"}
-        instance.tree.selection.return_value = []
-
-        instance._on_tree_select()
-
-        instance.tree.item.assert_not_called()
-        self.assertEqual(instance._selected_tree_items, set())
 
 
 class SelectedRowsForCourseTests(unittest.TestCase):

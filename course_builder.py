@@ -17,6 +17,7 @@ except ImportError:
     messagebox = None
     ttk = None
 
+import row_tints
 import theme
 from library_data import (
     course_append_bytes,
@@ -27,9 +28,6 @@ from library_data import (
     number,
     validate_course_fields,
 )
-
-UNKNOWN_DIFFICULTY_TAG = "diff_unknown"  # queue tag for a difficulty name that theme.DIFFICULTY_COLORS lacks
-
 
 class CourseBuilder:
     """The course-builder dialog and its chart queue.
@@ -53,7 +51,7 @@ class CourseBuilder:
         self.title_var = None
         self.tree = None
         self.count_var = None
-        self._selected_items = set()  # queue rows currently carrying the white "selected_row" tag
+        self._tint = None  # the queue tree's SelectedRowTint, created with the tree in open_dialog
 
     def open_dialog(self):
         if self.window is not None and self.window.winfo_exists():
@@ -69,7 +67,6 @@ class CourseBuilder:
         window.configure(bg=theme.BG_WINDOW)
         window.transient(self.parent)
         self.entries: list[dict] = []
-        self._selected_items = set()  # a new queue tree has no selected rows, whatever the last dialog left behind
 
         tk.Label(window, text="Build a new course", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
                  font=theme.FONT_COURSE_TITLE).pack(anchor="w", padx=18, pady=(16, 2))
@@ -101,14 +98,10 @@ class CourseBuilder:
         queue_scroll.grid(row=0, column=1, sticky="ns")
         queue_frame.grid_rowconfigure(0, weight=1)
         queue_frame.grid_columnconfigure(0, weight=1)
-        # Difficulty tints: the same tags and colors as the main table (theme.DIFFICULTY_COLORS).
-        for diff, color in theme.DIFFICULTY_COLORS.items():
-            self.tree.tag_configure(f"diff_{diff}", foreground=color)
-        self.tree.tag_configure(UNKNOWN_DIFFICULTY_TAG, foreground=theme.DIFFICULTY_COLOR_UNKNOWN)
-        # Keep this one last: in this order a selected row shows white text instead of its
-        # difficulty color (checked in the window on Windows). A row has both tags while selected.
-        self.tree.tag_configure("selected_row", foreground=theme.TEXT_ON_ACCENT)
-        self.tree.bind("<<TreeviewSelect>>", self._on_queue_select)
+        # Difficulty tints and the white selected-row tag, shared with the song table (row_tints).
+        row_tints.configure_tree_tags(self.tree)
+        self._tint = row_tints.SelectedRowTint(self.tree)  # a new tree starts with no rows selected
+        self.tree.bind("<<TreeviewSelect>>", self._tint.on_select)
         # The Remove button has keyboard equivalents while the queue has focus.
         self.tree.bind("<Delete>", self._remove_on_key)
         self.tree.bind("<BackSpace>", self._remove_on_key)
@@ -178,43 +171,18 @@ class CourseBuilder:
         valid = [index for index in selected_indices if 0 <= index < len(self.entries)]
         self.tree.delete(*self.tree.get_children())
         for index, row in enumerate(self.entries):
-            tags = [self._difficulty_tag(row)]
-            if index in valid:
-                tags.append("selected_row")  # a kept selection is born with the white tag (see _on_queue_select)
             self.tree.insert("", "end", iid=str(index), values=(
                 row.get("Pack", ""), row.get("Title", ""), row.get("Type", ""),
                 row.get("Difficulty", ""), row.get("Meter", ""),
                 format_duration(row.get("Time", 0)) if row.get("Time", "") != "" else "",
-            ), tags=tuple(tags))
+            ), tags=row_tints.row_tags(row, index in valid))  # a kept selection is born with the white tag
         total_seconds = sum(number(row.get("Time")) for row in self.entries)
         self.count_var.set(f"{len(self.entries)} charts · {format_duration(total_seconds)} total")
         if valid:
             self.tree.selection_set(*(str(index) for index in valid))
             self.tree.focus(str(valid[0]))
             self.tree.see(str(valid[0]))
-        self._selected_items = {str(index) for index in valid}
-
-    def _on_queue_select(self, _event=None):
-        """Give the white "selected_row" tag to the rows that just became selected and take it from the rest."""
-        current = set(self.tree.selection())
-        for item in self._selected_items - current:
-            if self.tree.exists(item):  # a refresh may have removed the row already
-                self._set_selected_tag(item, False)
-        for item in current - self._selected_items:
-            self._set_selected_tag(item, True)
-        self._selected_items = current
-
-    def _set_selected_tag(self, item, selected):
-        tags = [tag for tag in self.tree.item(item, "tags") if tag != "selected_row"]
-        if selected:
-            tags.append("selected_row")
-        self.tree.item(item, tags=tags)
-
-    @staticmethod
-    def _difficulty_tag(row):
-        """The queue tag that tints a row by its difficulty (the main table's rule, same tag names)."""
-        name = str(row.get("Difficulty", "")).strip()
-        return f"diff_{name}" if name in theme.DIFFICULTY_COLORS else UNKNOWN_DIFFICULTY_TAG
+        self._tint.reset(str(index) for index in valid)
 
     def _remove_on_key(self, _event=None):
         self.remove_entries()

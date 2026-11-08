@@ -61,7 +61,7 @@ The app remembers the selected data paths, column order, visibility, and widths 
 
 ## Changing the look
 
-Every color and font the window uses is defined, with a note on what it is for, in `theme.py`. To restyle the app, edit the values there and restart it; the window code only refers to the names (for example `theme.BG_WINDOW`), and a test fails if a color or font is typed directly into the window code (`library_visualizer.py` or `course_builder.py`) again. `theme.DIFFICULTY_COLORS` controls both the distribution chart bars and the song table row tints. Row heights and panel widths are fixed numbers in `library_visualizer.py`, so a much larger font may also need those adjusted.
+Every color and font the window uses is defined, with a note on what it is for, in `theme.py`. To restyle the app, edit the values there and restart it; the window code only refers to the names (for example `theme.BG_WINDOW`), and a test fails if a color or font is typed directly into the window code (`library_visualizer.py`, `course_builder.py`, or `row_tints.py`) again. `theme.DIFFICULTY_COLORS` controls both the distribution chart bars and the song table row tints. Row heights and panel widths are fixed numbers in `library_visualizer.py`, so a much larger font may also need those adjusted.
 
 ## Development checks
 
