@@ -421,5 +421,49 @@ class CourseQueueTests(unittest.TestCase):
         self.assertEqual(store["1"], ("diff_Hard",))
 
 
+class CourseReloadTests(unittest.TestCase):
+    def _builder(self, titles, window_exists=True):
+        builder = make_queue_builder(titles)
+        builder.window = Mock()
+        builder.window.winfo_exists.return_value = window_exists
+        return builder
+
+    def test_reload_without_an_open_dialog_does_nothing(self):
+        builder = self._builder(["A"])
+        builder.window = None
+        mock_mb = Mock()
+        with patch.object(course_builder, "messagebox", mock_mb):
+            builder.on_library_reloaded()
+        mock_mb.askyesno.assert_not_called()
+        self.assertEqual(len(builder.entries), 1)
+
+    def test_reload_with_a_closed_window_or_empty_queue_does_nothing(self):
+        mock_mb = Mock()
+        with patch.object(course_builder, "messagebox", mock_mb):
+            closed = self._builder(["A"], window_exists=False)
+            closed.on_library_reloaded()
+            empty = self._builder([])
+            empty.on_library_reloaded()
+        mock_mb.askyesno.assert_not_called()
+
+    def test_reload_keeps_the_queue_when_the_user_says_no(self):
+        builder = self._builder(["A", "B"])
+        mock_mb = Mock()
+        mock_mb.askyesno.return_value = False
+        with patch.object(course_builder, "messagebox", mock_mb):
+            builder.on_library_reloaded()
+        mock_mb.askyesno.assert_called_once()
+        self.assertEqual([row["Title"] for row in builder.entries], ["A", "B"])
+
+    def test_reload_clears_the_queue_when_the_user_says_yes(self):
+        builder = self._builder(["A", "B"])
+        mock_mb = Mock()
+        mock_mb.askyesno.return_value = True
+        with patch.object(course_builder, "messagebox", mock_mb):
+            builder.on_library_reloaded()
+        self.assertEqual(builder.entries, [])
+        builder.count_var.set.assert_called_once_with("0 charts · 0:00 total")
+
+
 if __name__ == "__main__":
     unittest.main()
