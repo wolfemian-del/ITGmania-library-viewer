@@ -191,6 +191,32 @@ class CourseBuilderDialogTests(unittest.TestCase):
             self.assertEqual(bindings["<Escape>"](), "break")
             mock_window.destroy.assert_called_once()
 
+    def test_open_dialog_prepopulates_the_queue_from_selected_rows(self):
+        rows = [
+            {"Pack": "PackA", "Title": "Song A", "Type": "dance-single", "Difficulty": "Hard",
+             "Meter": "10", "Time": 120, "Course path": "PackA/Song A"},
+            {"Pack": "PackA", "Title": "Song B", "Type": "dance-single", "Difficulty": "Expert",
+             "Meter": "12", "Time": 150, "Course path": "PackA/Song B"},
+        ]
+        builder = CourseBuilder(
+            parent=Mock(),
+            status=Mock(),
+            button_factory=Mock(return_value=Mock()),
+            selected_rows=lambda: rows,
+        )
+        mock_window = Mock()
+        mock_tk = Mock()
+        mock_tk.Toplevel.return_value = mock_window
+        mock_ttk = Mock()
+        # refresh_queue unpacks the tree's children with *, so a bare Mock is not enough.
+        mock_ttk.Treeview.return_value.get_children.return_value = ()
+
+        with patch.object(course_builder, "tk", mock_tk), patch.object(course_builder, "ttk", mock_ttk):
+            builder.open_dialog()
+
+        self.assertEqual(builder.entries, rows)
+        self.assertEqual(builder.tree.insert.call_count, 2)
+
     def test_opening_the_course_builder_when_already_open_raises_it_and_gives_it_focus(self):
         builder = CourseBuilder(
             parent=Mock(),

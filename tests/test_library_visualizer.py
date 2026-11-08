@@ -300,6 +300,19 @@ class RowTintTests(unittest.TestCase):
         self.assertEqual(instance._selected_tree_items, set())
 
 
+class SelectedRowsForCourseTests(unittest.TestCase):
+    def test_selected_rows_for_course_returns_rows_in_selection_order_and_skips_unknown_ids(self):
+        # The one seam between the table and the course builder: the dialog's queue is
+        # fed from here, so a break here would open the dialog empty.
+        instance = object.__new__(app.LibraryApp)
+        rows = {"item1": {"Title": "A"}, "item2": {"Title": "B"}}
+        instance.tree = Mock()
+        instance.tree.selection.return_value = ["item2", "gone", "item1"]
+        instance.tree_item_rows = rows
+
+        self.assertEqual(instance._selected_rows_for_course(), [rows["item2"], rows["item1"]])
+
+
 class RefreshGenerationTests(unittest.TestCase):
     def test_load_worker_ignores_superseded_generation(self):
         with tempfile.TemporaryDirectory() as directory:
