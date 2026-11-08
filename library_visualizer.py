@@ -283,7 +283,8 @@ class LibraryApp:
                  font=theme.FONT_BODY).pack(side="right", padx=8)
         # The course builder component (course_builder.py): created here because it needs the
         # status variable above; the Build course button below calls its open_dialog directly.
-        self.course_builder = CourseBuilder(self.root, self.status, self._button, self._selected_rows_for_course)
+        self.course_builder = CourseBuilder(self.root, self.status, self._button, self._selected_rows_for_course,
+                                            self._library_rows_for_course)
         paths = tk.Frame(self.root, bg=theme.BG_PANEL, padx=12, pady=10)
         paths.pack(fill="x", padx=18)
         self._path_row(paths, "Cache / Songs", self.cache_var, self.choose_cache)
@@ -584,6 +585,10 @@ class LibraryApp:
         """The chart rows currently selected in the main table (for the course builder)."""
         return [row for item in self.tree.selection()
                 if (row := self.tree_item_rows.get(item)) is not None]
+
+    def _library_rows_for_course(self):
+        """Every chart row in the loaded library (for the course builder's ambiguity check)."""
+        return self.rows
 
     def _dialog_is_open(self):
         for window in (self.advanced_search_window,

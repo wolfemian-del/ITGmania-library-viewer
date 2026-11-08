@@ -21,6 +21,7 @@ import theme
 from library_data import (
     course_append_bytes,
     course_song_lines,
+    find_ambiguous_course_entries,
     format_duration,
     format_new_course,
     number,
@@ -37,13 +38,16 @@ class CourseBuilder:
     status:         the main window's status variable (set on save/append)
     button_factory: makes a themed button (LibraryApp._button)
     selected_rows:  callable returning the main table's selected chart rows
+    library_rows:   callable returning every chart row in the loaded library
+                    (the save-time ambiguity check compares the queue against it)
     """
 
-    def __init__(self, parent, status, button_factory, selected_rows):
+    def __init__(self, parent, status, button_factory, selected_rows, library_rows):
         self.parent = parent
         self._status = status
         self._button = button_factory
         self._selected_rows = selected_rows
+        self._library_rows = library_rows
         self.window = None
         self.entries: list[dict] = []
         self.title_var = None
@@ -265,6 +269,19 @@ class CourseBuilder:
                 "Save the course anyway?"
             )
             if not messagebox.askyesno("Mixed chart types", description, parent=self.window):
+                return False
+
+        ambiguous = find_ambiguous_course_entries(self.entries, self._library_rows())
+        if ambiguous:
+            listing = "\n".join(
+                f"{row.get('Title', '')} — {row.get('Difficulty', '')}" for row in ambiguous)
+            description = (
+                "A .CRS entry stores the song and difficulty, not the chart type or which "
+                "Edit chart. More than one chart in the library matches each of these "
+                "entries, so the entry does not say which chart was picked:\n\n" + listing +
+                "\n\nSave the course anyway?"
+            )
+            if not messagebox.askyesno("Ambiguous chart entries", description, parent=self.window):
                 return False
         return True
 

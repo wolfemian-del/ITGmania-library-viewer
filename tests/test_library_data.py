@@ -849,6 +849,42 @@ class CourseModelTests(unittest.TestCase):
             )
         )
 
+    def test_find_ambiguous_course_entries_unique_charts_are_not_flagged(self):
+        library = [
+            {"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"},
+            {"Course path": "Pack/Song", "Difficulty": "Challenge", "Type": "dance-single"},
+            {"Course path": "Pack/Other", "Difficulty": "Hard", "Type": "dance-double"},
+        ]
+        self.assertEqual(data.find_ambiguous_course_entries([library[0]], library), [])
+
+    def test_find_ambiguous_course_entries_flags_same_difficulty_in_another_type(self):
+        single = {"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"}
+        double = {"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-double"}
+        easier_double = {"Course path": "Pack/Song", "Difficulty": "Easy", "Type": "dance-double"}
+        self.assertEqual(data.find_ambiguous_course_entries([single], [single, double]), [single])
+        # A different difficulty in the other type is a different .CRS line, not an ambiguity.
+        self.assertEqual(data.find_ambiguous_course_entries([single], [single, easier_double]), [])
+
+    def test_find_ambiguous_course_entries_flags_a_song_with_two_edits_of_one_type(self):
+        edit_one = {"Course path": "Pack/Song", "Difficulty": "Edit", "Type": "dance-single"}
+        edit_two = {"Course path": "Pack/Song", "Difficulty": "Edit", "Type": "dance-single"}
+        chart = {"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"}
+        self.assertEqual(
+            data.find_ambiguous_course_entries([edit_one], [edit_one, edit_two, chart]), [edit_one])
+        # A single Edit chart is the only chart its line can mean.
+        self.assertEqual(data.find_ambiguous_course_entries([edit_one], [edit_one, chart]), [])
+        # An Edit in another type is the cross-type case, flagged the same way.
+        double_edit = {"Course path": "Pack/Song", "Difficulty": "Edit", "Type": "dance-double"}
+        self.assertEqual(
+            data.find_ambiguous_course_entries([edit_one], [edit_one, double_edit]), [edit_one])
+
+    def test_find_ambiguous_course_entries_dedupes_and_ignores_songs_not_in_the_library(self):
+        single = {"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"}
+        double = {"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-double"}
+        stale = {"Course path": "Pack/Gone", "Difficulty": "Hard", "Type": "dance-single"}
+        flagged = data.find_ambiguous_course_entries([single, single, stale], [single, double])
+        self.assertEqual(flagged, [single])
+
 
 class CourseAppendTests(unittest.TestCase):
     def test_appends_to_crlf_file_without_rewriting_existing_bytes(self):
