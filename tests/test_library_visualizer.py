@@ -219,7 +219,6 @@ class ColumnGroupTests(unittest.TestCase):
         self.assertTrue(instance.group_visibility["Song & chart"].get())
 
 
-
 class RowTintTests(unittest.TestCase):
     def test_setup_tree_tags_configures_all_difficulties_and_selection(self):
         instance = object.__new__(app.LibraryApp)
@@ -299,148 +298,6 @@ class RowTintTests(unittest.TestCase):
 
         instance.tree.item.assert_not_called()
         self.assertEqual(instance._selected_tree_items, set())
-
-
-class CourseBuilderValidationTests(unittest.TestCase):
-    def test_validate_course_entries_delegates_and_rejects_unsafe_comments(self):
-        instance = object.__new__(app.LibraryApp)
-        instance.course_window = Mock()
-        instance.course_entries = [{"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"}]
-
-        mock_mb = Mock()
-        with patch.object(app, "messagebox", mock_mb):
-            valid = instance.validate_course_entries("Bad // Title")
-            self.assertFalse(valid)
-            mock_mb.showerror.assert_called_once()
-            self.assertIn("//", mock_mb.showerror.call_args[0][1])
-
-    def test_validate_course_entries_accepts_clean_entries(self):
-        instance = object.__new__(app.LibraryApp)
-        instance.course_window = Mock()
-        instance.course_entries = [{"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"}]
-
-        mock_mb = Mock()
-        with patch.object(app, "messagebox", mock_mb):
-            valid = instance.validate_course_entries("Clean Title")
-            self.assertTrue(valid)
-            mock_mb.showerror.assert_not_called()
-
-    def _validate(self, entries, *title_argument):
-        """Run validate_course_entries with a fake message box; return (result, mock message box)."""
-        instance = object.__new__(app.LibraryApp)
-        instance.course_window = Mock()
-        instance.course_entries = entries
-        mock_mb = Mock()
-        with patch.object(app, "messagebox", mock_mb):
-            return instance.validate_course_entries(*title_argument), mock_mb
-
-    def test_append_flow_validates_without_a_title(self):
-        # Appending to an existing course calls validate_course_entries() with no title, so a missing title
-        # must not be reported as an error.
-        entry = {"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"}
-        valid, mock_mb = self._validate([entry])
-        self.assertTrue(valid)
-        mock_mb.showerror.assert_not_called()
-
-        valid, mock_mb = self._validate([])
-        self.assertFalse(valid)
-        self.assertEqual(mock_mb.showerror.call_args[0][1], "Add at least one chart to the course.")
-
-        valid, mock_mb = self._validate([{**entry, "Course path": "Pack//Song"}])
-        self.assertFalse(valid)
-        self.assertIn("//", mock_mb.showerror.call_args[0][1])
-
-    def test_every_validation_error_uses_the_same_dialog_title(self):
-        entry = {"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"}
-        cases = (
-            ([entry], "Bad // Title"),
-            ([entry], "Bad: Title"),
-            ([], "Title"),
-            ([{**entry, "Difficulty": ""}], "Title"),
-            ([{**entry, "Course path": "Pack;Song"}], "Title"),
-        )
-        titles = set()
-        for entries, title in cases:
-            with self.subTest(title=title, entries=entries):
-                valid, mock_mb = self._validate(entries, title)
-                self.assertFalse(valid)
-                mock_mb.showerror.assert_called_once()
-                titles.add(mock_mb.showerror.call_args[0][0])
-        self.assertEqual(len(titles), 1)
-
-    def test_export_course_writes_formatted_new_course(self):
-        with tempfile.TemporaryDirectory() as directory:
-            out_file = Path(directory) / "test_course.crs"
-            instance = object.__new__(app.LibraryApp)
-            instance.course_window = Mock()
-            instance.course_title_var = Mock(get=Mock(return_value="My Epic Course"))
-            instance.course_entries = [
-                {"Course path": "Pack/SongA", "Difficulty": "Hard", "Type": "dance-single"},
-                {"Course path": "Pack/SongB", "Difficulty": "Challenge", "Type": "dance-single"},
-            ]
-            instance.status = Mock()
-
-            mock_fd = Mock(asksaveasfilename=Mock(return_value=str(out_file)))
-            mock_mb = Mock()
-
-            with patch.object(app, "filedialog", mock_fd), patch.object(app, "messagebox", mock_mb):
-                instance.export_course()
-
-            mock_mb.showerror.assert_not_called()
-            mock_mb.showinfo.assert_called_once()
-            self.assertTrue(out_file.is_file())
-            written_content = out_file.read_text(encoding="utf-8")
-            expected_body = app.format_new_course(
-                "My Epic Course",
-                app.course_song_lines(instance.course_entries)
-            )
-            self.assertEqual(written_content, expected_body)
-            self.assertIn("Saved course with 2 charts", instance.status.set.call_args[0][0])
-
-    def test_export_course_blank_title_shows_validation_error(self):
-        instance = object.__new__(app.LibraryApp)
-        instance.course_window = Mock()
-        instance.course_title_var = Mock(get=Mock(return_value="   "))
-        instance.course_entries = [{"Course path": "Pack/SongA", "Difficulty": "Hard", "Type": "dance-single"}]
-        instance.status = Mock()
-
-        mock_fd = Mock()
-        mock_mb = Mock()
-
-        with patch.object(app, "filedialog", mock_fd), patch.object(app, "messagebox", mock_mb):
-            instance.export_course()
-
-        mock_mb.showerror.assert_called_once_with(
-            "Course problem", "Enter a title for this course.", parent=instance.course_window
-        )
-        mock_fd.asksaveasfilename.assert_not_called()
-
-    def test_append_course_appends_course_song_lines(self):
-        with tempfile.TemporaryDirectory() as directory:
-            crs_file = Path(directory) / "existing.crs"
-            crs_file.write_text("#COURSE:Existing;\n#SONG:Pack/SongA:Hard:;\n", encoding="utf-8")
-
-            instance = object.__new__(app.LibraryApp)
-            instance.course_window = Mock()
-            instance.course_entries = [
-                {"Course path": "Pack/SongB", "Difficulty": "Challenge", "Type": "dance-single"},
-            ]
-            instance.status = Mock()
-
-            mock_fd = Mock(askopenfilename=Mock(return_value=str(crs_file)))
-            mock_mb = Mock()
-
-            with patch.object(app, "filedialog", mock_fd), patch.object(app, "messagebox", mock_mb):
-                instance.append_course()
-
-            mock_mb.showerror.assert_not_called()
-            mock_mb.showinfo.assert_called_once()
-            content = crs_file.read_text(encoding="utf-8")
-            self.assertEqual(
-                content,
-                "#COURSE:Existing;\n#SONG:Pack/SongA:Hard:;\n#SONG:Pack/SongB:Challenge:;\n"
-            )
-            self.assertIn("Appended 1 charts", instance.status.set.call_args[0][0])
 
 
 class RefreshGenerationTests(unittest.TestCase):
@@ -691,65 +548,20 @@ class DialogKeyBindingTests(unittest.TestCase):
         instance.search_var.set.assert_called_once()
         mock_window.destroy.assert_called_once()
 
-    def test_open_course_builder_binds_escape(self):
-        instance = object.__new__(app.LibraryApp)
-        instance.root = Mock()
-        instance.course_window = None
-        instance.tree = Mock()
-        instance.tree.selection.return_value = []
-
-        mock_window = Mock()
-        bindings = {}
-        def mock_bind(seq, func):
-            bindings[seq] = func
-        mock_window.bind.side_effect = mock_bind
-        mock_tk = Mock()
-        mock_tk.Toplevel.return_value = mock_window
-        mock_ttk = Mock()
-
-        with patch.object(app, "tk", mock_tk), patch.object(app, "ttk", mock_ttk):
-            instance._button = Mock(return_value=Mock())
-            instance.open_course_builder()
-
-        self.assertIn("<Escape>", bindings)
-        # The window takes keyboard focus itself, so Escape reaches it without a click first.
-        mock_window.focus_force.assert_called_once()
-        mock_messagebox = Mock()
-        with patch.object(app, "messagebox", mock_messagebox):
-            # Empty queue: closes at once, no question.
-            res_esc = bindings["<Escape>"]()
-            self.assertEqual(res_esc, "break")
-            mock_window.destroy.assert_called_once()
-            mock_messagebox.askyesno.assert_not_called()
-
-            # Queued charts, user answers No: the window stays open.
-            mock_window.destroy.reset_mock()
-            instance.course_entries = [{"Title": "A"}, {"Title": "B"}]
-            mock_messagebox.askyesno.return_value = False
-            self.assertEqual(bindings["<Escape>"](), "break")
-            mock_messagebox.askyesno.assert_called_once()
-            mock_window.destroy.assert_not_called()
-
-            # Queued charts, user answers Yes: the window closes.
-            mock_messagebox.askyesno.return_value = True
-            self.assertEqual(bindings["<Escape>"](), "break")
-            mock_window.destroy.assert_called_once()
-
 
     def test_opening_a_dialog_that_is_already_open_raises_it_and_gives_it_focus(self):
-        for attribute, opener in (("advanced_search_window", "open_advanced_search"),
-                                  ("course_window", "open_course_builder")):
-            with self.subTest(dialog=attribute):
-                instance = object.__new__(app.LibraryApp)
-                existing = Mock()
-                existing.winfo_exists.return_value = True
-                setattr(instance, attribute, existing)
-                mock_tk = Mock()
-                with patch.object(app, "tk", mock_tk):
-                    getattr(instance, opener)()
-                existing.lift.assert_called_once()
-                existing.focus_force.assert_called_once()
-                mock_tk.Toplevel.assert_not_called()  # no second window
+        # The Build course half of this test lives in tests/test_course_builder.py,
+        # with the component it now tests.
+        instance = object.__new__(app.LibraryApp)
+        existing = Mock()
+        existing.winfo_exists.return_value = True
+        instance.advanced_search_window = existing
+        mock_tk = Mock()
+        with patch.object(app, "tk", mock_tk):
+            instance.open_advanced_search()
+        existing.lift.assert_called_once()
+        existing.focus_force.assert_called_once()
+        mock_tk.Toplevel.assert_not_called()  # no second window
 
     def test_main_escape_clears_search_only_when_no_dialog_is_open(self):
         instance = object.__new__(app.LibraryApp)
@@ -761,16 +573,17 @@ class DialogKeyBindingTests(unittest.TestCase):
 
         instance.advanced_search_window = None
         instance.about_window = None
-        instance.course_window = closed_window
+        instance.course_builder = Mock()
+        instance.course_builder.window = closed_window
         instance._on_main_escape()
         instance.clear_search.assert_called_once()  # no dialog open: Escape clears the search
 
         instance.clear_search.reset_mock()
-        instance.course_window = open_window
+        instance.course_builder.window = open_window
         instance._on_main_escape()
         instance.clear_search.assert_not_called()  # Build course open
 
-        instance.course_window = None
+        instance.course_builder.window = None
         instance.advanced_search_window = open_window
         instance._on_main_escape()
         instance.clear_search.assert_not_called()  # Advanced Search open

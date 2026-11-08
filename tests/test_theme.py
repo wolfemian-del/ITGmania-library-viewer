@@ -7,7 +7,13 @@ from pathlib import Path
 import theme
 
 ROOT = Path(__file__).resolve().parent.parent
-WINDOW_SOURCE = (ROOT / "library_visualizer.py").read_text(encoding="utf-8")
+# The window code lives in these modules; a split move adds its module here so the
+# guards below keep covering all of it.
+WINDOW_SOURCES = tuple(
+    (ROOT / name).read_text(encoding="utf-8")
+    for name in ("library_visualizer.py", "course_builder.py")
+)
+WINDOW_SOURCE = "\n".join(WINDOW_SOURCES)
 HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}\b")
 
 
