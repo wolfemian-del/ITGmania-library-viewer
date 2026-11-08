@@ -133,6 +133,7 @@ class CourseBuilder:
             return "break"
 
         window.bind("<Escape>", _close)
+        window.protocol("WM_DELETE_WINDOW", _close)  # the X button gets the same discard prompt as Escape
         # A new window does not always take keyboard focus by itself (seen on Windows);
         # without this, Escape would go to the main window instead of closing this one.
         window.focus_force()

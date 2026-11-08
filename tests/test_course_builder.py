@@ -254,6 +254,43 @@ class CourseBuilderDialogTests(unittest.TestCase):
         self.assertEqual([row["Title"] for row in builder.entries], ["B"])
         mock_tree.selection_set.assert_called_once_with("0")
 
+    def test_open_dialog_wires_the_x_button_to_the_same_close_prompt(self):
+        builder = CourseBuilder(
+            parent=Mock(),
+            status=Mock(),
+            button_factory=Mock(return_value=Mock()),
+            selected_rows=lambda: [],
+        )
+        mock_window = Mock()
+        bindings = {}
+        mock_window.bind.side_effect = lambda seq, func: bindings.__setitem__(seq, func)
+        protocols = {}
+        mock_window.protocol.side_effect = lambda name, func: protocols.__setitem__(name, func)
+        mock_tk = Mock()
+        mock_tk.Toplevel.return_value = mock_window
+        mock_ttk = Mock()
+        mock_ttk.Treeview.return_value.get_children.return_value = ()
+
+        with patch.object(course_builder, "tk", mock_tk), patch.object(course_builder, "ttk", mock_ttk):
+            builder.open_dialog()
+
+        self.assertIn("WM_DELETE_WINDOW", protocols)
+        self.assertIs(protocols["WM_DELETE_WINDOW"], bindings["<Escape>"])
+        mock_messagebox = Mock()
+        with patch.object(course_builder, "messagebox", mock_messagebox):
+            # Empty queue: the X closes at once, no question, exactly like Escape.
+            self.assertEqual(protocols["WM_DELETE_WINDOW"](), "break")
+            mock_window.destroy.assert_called_once()
+            mock_messagebox.askyesno.assert_not_called()
+
+            # Queued charts, user answers No: the window stays open.
+            mock_window.destroy.reset_mock()
+            builder.entries = [{"Title": "A"}]
+            mock_messagebox.askyesno.return_value = False
+            protocols["WM_DELETE_WINDOW"]()
+            mock_messagebox.askyesno.assert_called_once()
+            mock_window.destroy.assert_not_called()
+
     def test_opening_the_course_builder_when_already_open_raises_it_and_gives_it_focus(self):
         builder = CourseBuilder(
             parent=Mock(),
