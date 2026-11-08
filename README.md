@@ -57,7 +57,7 @@ The **Time** column shows cached song music length as `minutes:seconds`; CSV exp
 
 The cache folder is commonly `%APPDATA%\ITGmania\Cache\Songs`. `Stats.xml` lives inside a player profile's save folder. The app does not edit either source.
 
-The app remembers the selected data paths, column order, visibility, and widths in `%APPDATA%\ITGmania Library Visualizer\settings.json` on Windows. The parsed library snapshot is stored beside it as `library_cache.json`. On other platforms these files use the standard per-user configuration directory.
+The app remembers the selected data paths, column order, visibility, and widths, and the course window's size and position, in `%APPDATA%\ITGmania Library Visualizer\settings.json` on Windows. The parsed library snapshot is stored beside it as `library_cache.json`. On other platforms these files use the standard per-user configuration directory.
 
 ## Changing the look
 

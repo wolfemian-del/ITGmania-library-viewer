@@ -70,9 +70,13 @@ class CourseBuilder:
         least a grabbable strip of it, so a window left hanging a little off
         an edge comes back as it was, while one left on a since-unplugged
         monitor, or pushed almost entirely off an edge, does not open lost.
-        In those cases only the size is used and the window manager places
-        the window, so a lost position can never be re-saved on close.
-        Without a remembered geometry, the theme default.
+        The top edge gets its own rule on top of that: a window can show
+        plenty of its body while its title bar sits above every monitor
+        (a stacked monitor unplugged since, say), leaving nothing to grab,
+        so the top edge must sit within a few pixels of the desktop's top.
+        In the fallback cases only the size is used and the window manager
+        places the window, so a lost position can never be re-saved on
+        close. Without a remembered geometry, the theme default.
         """
         if not self._saved_geometry:
             return theme.COURSE_BUILDER_GEOMETRY
@@ -86,7 +90,7 @@ class CourseBuilder:
         bottom = top + self.parent.winfo_vrootheight()
         visible_width = min(x + width, right) - max(x, left)
         visible_height = min(y + height, bottom) - max(y, top)
-        if visible_width >= 100 and visible_height >= 32:
+        if visible_width >= 100 and visible_height >= 32 and y >= top - 16:
             return self._saved_geometry
         return f"{width}x{height}"
 

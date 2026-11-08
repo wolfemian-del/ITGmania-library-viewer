@@ -766,6 +766,15 @@ class CourseGeometryTests(unittest.TestCase):
         _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+-30+40")
         mock_window.geometry.assert_called_once_with("900x620+-30+40")
 
+    def test_open_falls_back_when_the_title_bar_would_be_above_the_screen(self):
+        # Plenty of the body would show, but with the title bar above every
+        # monitor there is nothing to grab, so the position is not restored.
+        _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+100+-500")
+        mock_window.geometry.assert_called_once_with("900x620")
+        # A top edge within a few pixels of the desktop's top still counts as grabbable.
+        _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+100+-16")
+        mock_window.geometry.assert_called_once_with("900x620+100+-16")
+
     def test_open_restores_a_negative_position_on_a_monitor_left_of_the_primary(self):
         # Virtual desktop starts at x=-1920; Tk's "+-" spelling must survive the round trip.
         _builder, mock_window, _bindings = self.open_builder(
