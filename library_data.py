@@ -402,6 +402,49 @@ def validate_course_fields(rows: list[dict], title: str | None = None) -> str | 
     return None
 
 
+def find_ambiguous_course_entries(entries: list[dict], library_rows: list[dict]) -> list[dict]:
+    """Return the queued entries a .CRS line cannot pin to one specific chart.
+
+    A #SONG line records only the song (its course path) and a difficulty word —
+    not the chart type, and not which Edit chart. An entry is ambiguous when the
+    library holds another chart the same line could equally mean:
+
+    - a chart for the same song at the same difficulty in a different chart
+      type, or
+    - for an Edit entry, a second Edit chart for the same song and chart type
+      (the line cannot say which Edit was picked).
+
+    Entries come back in queue order, each distinct (path, difficulty, type)
+    once, however many times it was queued. Difficulty and type comparisons
+    ignore case, matching how the table's filters compare them.
+    """
+    by_song: dict[str, list[dict]] = {}
+    for row in library_rows:
+        by_song.setdefault(row.get("Course path", ""), []).append(row)
+
+    def key_of(row):
+        return (str(row.get("Difficulty", "")).strip().casefold(),
+                str(row.get("Type", "")).strip().casefold())
+
+    flagged = []
+    seen = set()
+    for entry in entries:
+        identity = (entry.get("Course path", ""), *key_of(entry))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        difficulty, chart_type = key_of(entry)
+        sibling_keys = [key_of(sibling)
+                        for sibling in by_song.get(entry.get("Course path", ""), [])]
+        cross_type = any(diff == difficulty and other_type != chart_type
+                         for diff, other_type in sibling_keys)
+        same_type_edits = sum(1 for diff, other_type in sibling_keys
+                              if diff == "edit" and other_type == chart_type)
+        if cross_type or (difficulty == "edit" and same_type_edits > 1):
+            flagged.append(entry)
+    return flagged
+
+
 def _strip_course_comments(text: str) -> str:
     """Return a copy of CRS text with ``//`` comments removed, for scanning only.
 
