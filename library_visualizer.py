@@ -35,11 +35,6 @@ except ImportError:
 # The release number, shown in Help > About. Keep it equal to the newest heading in CHANGELOG.md (a test checks).
 __version__ = "1.0.0"
 
-DIST_PANEL_WIDTH = 320
-# A bar can be clicked across at least this fraction of the chart's width, so a very short bar (one chart
-# among hundreds) is still easy to hit, while a click far to the right of it does nothing.
-CHART_MIN_CLICK_FRACTION = 0.15
-
 import theme
 from course_builder import CourseBuilder
 from library_data import (
@@ -109,8 +104,8 @@ class LibraryApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("ITGmania Library Visualizer")
-        self.root.geometry("1500x850")
-        self.root.minsize(900, 550)
+        self.root.geometry(theme.WINDOW_DEFAULT_GEOMETRY)
+        self.root.minsize(*theme.WINDOW_MIN_SIZE)
         self.root.configure(bg=theme.BG_WINDOW)
         self.rows: list[dict] = []
         self.loaded_source_paths = None
@@ -238,7 +233,7 @@ class LibraryApp:
         style = ttk.Style()
         style.theme_use("clam")
         style.configure("Treeview", background=theme.BG_TABLE, foreground=theme.TEXT_TABLE, fieldbackground=theme.BG_TABLE,
-                        rowheight=27, borderwidth=0, font=theme.FONT_BODY)
+                        rowheight=theme.TABLE_ROW_HEIGHT, borderwidth=0, font=theme.FONT_BODY)
         style.configure("Treeview.Heading", background=theme.BG_TABLE_HEADING, foreground=theme.TEXT_HEADING, relief="flat",
                         font=theme.FONT_BODY_BOLD)
         style.map("Treeview", background=[("selected", theme.SELECTION_BG)], foreground=[("selected", theme.TEXT_ON_ACCENT)])
@@ -757,7 +752,7 @@ class LibraryApp:
     def _button(parent, text, command, primary=False):
         return tk.Button(parent, text=text, command=command, bg=theme.ACCENT_BG if primary else theme.BG_BUTTON,
                          fg=theme.TEXT_ON_ACCENT, activebackground=theme.ACCENT_BG_HOVER if primary else theme.BG_BUTTON_HOVER,
-                         activeforeground=theme.TEXT_ON_ACCENT, relief="flat", padx=11, pady=7,
+                         activeforeground=theme.TEXT_ON_ACCENT, relief="flat", padx=theme.BUTTON_PADX, pady=theme.BUTTON_PADY,
                          font=theme.FONT_BODY_BOLD, cursor="hand2")
 
     def choose_cache(self):
@@ -1067,7 +1062,7 @@ class LibraryApp:
             self.root.after(1, lambda: self._insert_batch(rows, stop, generation, selected_rows))
 
     def _build_distribution_panel(self):
-        self.dist_panel = tk.Frame(self.content_frame, bg=theme.BG_PANEL, width=DIST_PANEL_WIDTH, padx=10, pady=10)
+        self.dist_panel = tk.Frame(self.content_frame, bg=theme.BG_PANEL, width=theme.DIST_PANEL_WIDTH, padx=10, pady=10)
         self.dist_panel.pack_propagate(False)
 
         # Header: Title + Close button
@@ -1092,13 +1087,13 @@ class LibraryApp:
         # Summary line
         self.dist_summary_var = tk.StringVar(value="")
         tk.Label(self.dist_panel, textvariable=self.dist_summary_var, fg=theme.TEXT_MUTED, bg=theme.BG_PANEL,
-                 font=theme.FONT_SMALL, wraplength=DIST_PANEL_WIDTH - 24, justify="left").pack(fill="x", pady=(0, 6))
+                 font=theme.FONT_SMALL, wraplength=theme.DIST_PANEL_WIDTH - 24, justify="left").pack(fill="x", pady=(0, 6))
 
         # Active filter banner: shown just above the chart, only while a chart filter is active.
         # It is built here but not packed; _update_distribution_panel packs it before the chart container.
         self.dist_banner_frame = tk.Frame(self.dist_panel, bg=theme.BG_INPUT, padx=8, pady=5)
         self.dist_banner_label = tk.Label(self.dist_banner_frame, text="", fg=theme.ACCENT, bg=theme.BG_INPUT,
-                                          font=theme.FONT_BODY, wraplength=DIST_PANEL_WIDTH - 90,
+                                          font=theme.FONT_BODY, wraplength=theme.DIST_PANEL_WIDTH - 90,
                                           justify="left", anchor="w")
         self.dist_banner_label.pack(side="left", fill="x", expand=True)
         self._button(self.dist_banner_frame, "Clear", self.clear_chart_filter).pack(side="right")
@@ -1288,12 +1283,12 @@ class LibraryApp:
 
         bars = self.dist_ax.barh(
             y_positions, counts, align="center",
-            color=bar_colors, edgecolor=edge_colors, linewidth=linewidths, height=0.68,
+            color=bar_colors, edgecolor=edge_colors, linewidth=linewidths, height=theme.CHART_BAR_HEIGHT,
         )
 
         max_count = max(counts) if counts else 1
         axis_max = max_count * 1.25
-        min_click_width = axis_max * CHART_MIN_CLICK_FRACTION
+        min_click_width = axis_max * theme.CHART_MIN_CLICK_FRACTION
         for i, (bar, count) in enumerate(zip(bars, counts)):
             y = bar.get_y()
             h = bar.get_height()
@@ -1410,8 +1405,8 @@ class LibraryApp:
         window = tk.Toplevel(self.root)
         self.advanced_search_window = window
         window.title("Advanced Search")
-        window.geometry("560x620")
-        window.minsize(480, 520)
+        window.geometry(theme.ADVANCED_SEARCH_GEOMETRY)
+        window.minsize(*theme.ADVANCED_SEARCH_MIN_SIZE)
         window.configure(bg=theme.BG_WINDOW)
         window.transient(self.root)
 
