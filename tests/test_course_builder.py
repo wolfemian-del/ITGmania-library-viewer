@@ -254,6 +254,43 @@ class CourseBuilderDialogTests(unittest.TestCase):
         self.assertEqual([row["Title"] for row in builder.entries], ["B"])
         mock_tree.selection_set.assert_called_once_with("0")
 
+    def test_open_dialog_wires_the_x_button_to_the_same_close_prompt(self):
+        builder = CourseBuilder(
+            parent=Mock(),
+            status=Mock(),
+            button_factory=Mock(return_value=Mock()),
+            selected_rows=lambda: [],
+        )
+        mock_window = Mock()
+        bindings = {}
+        mock_window.bind.side_effect = lambda seq, func: bindings.__setitem__(seq, func)
+        protocols = {}
+        mock_window.protocol.side_effect = lambda name, func: protocols.__setitem__(name, func)
+        mock_tk = Mock()
+        mock_tk.Toplevel.return_value = mock_window
+        mock_ttk = Mock()
+        mock_ttk.Treeview.return_value.get_children.return_value = ()
+
+        with patch.object(course_builder, "tk", mock_tk), patch.object(course_builder, "ttk", mock_ttk):
+            builder.open_dialog()
+
+        self.assertIn("WM_DELETE_WINDOW", protocols)
+        self.assertIs(protocols["WM_DELETE_WINDOW"], bindings["<Escape>"])
+        mock_messagebox = Mock()
+        with patch.object(course_builder, "messagebox", mock_messagebox):
+            # Empty queue: the X closes at once, no question, exactly like Escape.
+            self.assertEqual(protocols["WM_DELETE_WINDOW"](), "break")
+            mock_window.destroy.assert_called_once()
+            mock_messagebox.askyesno.assert_not_called()
+
+            # Queued charts, user answers No: the window stays open.
+            mock_window.destroy.reset_mock()
+            builder.entries = [{"Title": "A"}]
+            mock_messagebox.askyesno.return_value = False
+            protocols["WM_DELETE_WINDOW"]()
+            mock_messagebox.askyesno.assert_called_once()
+            mock_window.destroy.assert_not_called()
+
     def test_opening_the_course_builder_when_already_open_raises_it_and_gives_it_focus(self):
         builder = CourseBuilder(
             parent=Mock(),
@@ -382,6 +419,50 @@ class CourseQueueTests(unittest.TestCase):
         builder._on_queue_select()
         self.assertEqual(store["0"], ("diff_Hard", "selected_row"))
         self.assertEqual(store["1"], ("diff_Hard",))
+
+
+class CourseReloadTests(unittest.TestCase):
+    def _builder(self, titles, window_exists=True):
+        builder = make_queue_builder(titles)
+        builder.window = Mock()
+        builder.window.winfo_exists.return_value = window_exists
+        return builder
+
+    def test_reload_without_an_open_dialog_does_nothing(self):
+        builder = self._builder(["A"])
+        builder.window = None
+        mock_mb = Mock()
+        with patch.object(course_builder, "messagebox", mock_mb):
+            builder.on_library_reloaded()
+        mock_mb.askyesno.assert_not_called()
+        self.assertEqual(len(builder.entries), 1)
+
+    def test_reload_with_a_closed_window_or_empty_queue_does_nothing(self):
+        mock_mb = Mock()
+        with patch.object(course_builder, "messagebox", mock_mb):
+            closed = self._builder(["A"], window_exists=False)
+            closed.on_library_reloaded()
+            empty = self._builder([])
+            empty.on_library_reloaded()
+        mock_mb.askyesno.assert_not_called()
+
+    def test_reload_keeps_the_queue_when_the_user_says_no(self):
+        builder = self._builder(["A", "B"])
+        mock_mb = Mock()
+        mock_mb.askyesno.return_value = False
+        with patch.object(course_builder, "messagebox", mock_mb):
+            builder.on_library_reloaded()
+        mock_mb.askyesno.assert_called_once()
+        self.assertEqual([row["Title"] for row in builder.entries], ["A", "B"])
+
+    def test_reload_clears_the_queue_when_the_user_says_yes(self):
+        builder = self._builder(["A", "B"])
+        mock_mb = Mock()
+        mock_mb.askyesno.return_value = True
+        with patch.object(course_builder, "messagebox", mock_mb):
+            builder.on_library_reloaded()
+        self.assertEqual(builder.entries, [])
+        builder.count_var.set.assert_called_once_with("0 charts · 0:00 total")
 
 
 if __name__ == "__main__":

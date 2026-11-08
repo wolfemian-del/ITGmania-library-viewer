@@ -133,11 +133,33 @@ class CourseBuilder:
             return "break"
 
         window.bind("<Escape>", _close)
+        window.protocol("WM_DELETE_WINDOW", _close)  # the X button gets the same discard prompt as Escape
         # A new window does not always take keyboard focus by itself (seen on Windows);
         # without this, Escape would go to the main window instead of closing this one.
         window.focus_force()
 
         self.add_selected()
+
+    def on_library_reloaded(self):
+        """Ask what to do with the queue after the main window loads a fresh library.
+
+        The queued rows came from the previous library, so if it changed they may
+        no longer match what a save would suggest. The owner's choice (issue #82,
+        option 1) is to ask here, at reload time; agreeing clears the queue so it
+        can be rebuilt from the new library. Called by LibraryApp after a load;
+        does nothing unless the dialog is open with charts queued.
+        """
+        if self.window is None or not self.window.winfo_exists() or not self.entries:
+            return
+        queued = len(self.entries)
+        if messagebox.askyesno(
+                "Library reloaded",
+                f"The library was reloaded while a course is being built. The {queued} queued "
+                "chart(s) came from the previous library and may no longer match it.\n\n"
+                "Clear the queue so it can be rebuilt from the reloaded library?",
+                parent=self.window):
+            self.entries = []
+            self.refresh_queue()
 
     def add_selected(self):
         added = 0

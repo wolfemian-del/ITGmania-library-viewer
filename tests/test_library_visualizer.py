@@ -5,7 +5,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import library_visualizer as app
 
@@ -311,6 +311,32 @@ class SelectedRowsForCourseTests(unittest.TestCase):
         instance.tree_item_rows = rows
 
         self.assertEqual(instance._selected_rows_for_course(), [rows["item2"], rows["item1"]])
+
+
+class CourseReloadNotificationTests(unittest.TestCase):
+    def _run_loaded(self, course_builder):
+        """Run the real _loaded for an empty library on a fake window."""
+        instance = object.__new__(app.LibraryApp)
+        instance.load_button = Mock()
+        instance.progress = Mock()
+        instance._batched_filter_changes = MagicMock()
+        instance.pack_filter = Mock()
+        instance.type_filter = Mock()
+        instance.diff_filter = Mock()
+        instance.pack_var = Mock()
+        instance.type_var = Mock()
+        instance.diff_var = Mock()
+        instance.status = Mock()
+        instance.course_builder = course_builder
+        instance._loaded([], 0)
+
+    def test_loaded_tells_the_course_builder_the_library_reloaded(self):
+        builder = Mock()
+        self._run_loaded(builder)
+        builder.on_library_reloaded.assert_called_once_with()
+
+    def test_loaded_without_a_course_builder_still_completes(self):
+        self._run_loaded(None)  # the pre-_build state: no builder yet, no error
 
 
 class RefreshGenerationTests(unittest.TestCase):
@@ -672,6 +698,7 @@ class PerformanceAndExportTests(unittest.TestCase):
         instance.diff_var = Mock()
         instance._batched_filter_changes = app.LibraryApp._batched_filter_changes.__get__(instance)
         instance._batching_filter_changes = False
+        instance.course_builder = None  # declared in __init__ since the split; this fake predates it
 
         # When setting diff_var/pack_var/type_var, Tk would run traces. Simulate that write traces call _refresh_unless_batching:
         instance._refresh_unless_batching = app.LibraryApp._refresh_unless_batching.__get__(instance)

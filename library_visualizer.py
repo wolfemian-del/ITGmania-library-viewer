@@ -918,6 +918,10 @@ class LibraryApp:
             self.status.set(self.status.get() + f" Snapshot refreshed {self._format_refresh_time(refreshed_at)}.")
         if not from_cache and cache_error:
             self.status.set(self.status.get() + f" Local snapshot not saved: {cache_error}")
+        if self.course_builder is not None:
+            # A fresh library may no longer match a course queue built from the old
+            # one; the builder asks the user what to do with it (issue #82).
+            self.course_builder.on_library_reloaded()
 
     @staticmethod
     def _format_refresh_time(value):
