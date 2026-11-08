@@ -313,6 +313,16 @@ class SelectedRowsForCourseTests(unittest.TestCase):
         self.assertEqual(instance._selected_rows_for_course(), [rows["item2"], rows["item1"]])
 
 
+class LibraryRowsForCourseTests(unittest.TestCase):
+    def test_library_rows_for_course_returns_the_loaded_rows(self):
+        # The course builder's save-time ambiguity check compares its queue against
+        # this list, so it must be the app's current rows, not a snapshot copy.
+        instance = object.__new__(app.LibraryApp)
+        instance.rows = [{"Title": "A"}, {"Title": "B"}]
+
+        self.assertIs(instance._library_rows_for_course(), instance.rows)
+
+
 class CourseReloadNotificationTests(unittest.TestCase):
     def _run_loaded(self, course_builder):
         """Run the real _loaded for an empty library on a fake window."""

@@ -10,13 +10,14 @@ import theme
 from course_builder import CourseBuilder
 
 
-def make_builder(entries=()):
+def make_builder(entries=(), library_rows=()):
     """A CourseBuilder with fake state and no real window (the object.__new__ idiom)."""
     builder = object.__new__(CourseBuilder)
     builder.window = Mock()
     builder.entries = list(entries)
     builder.title_var = None
     builder._status = Mock()
+    builder._library_rows = lambda: list(library_rows)
     return builder
 
 
@@ -62,6 +63,69 @@ class CourseBuilderValidationTests(unittest.TestCase):
         valid, mock_mb = self._validate([{**entry, "Course path": "Pack//Song"}])
         self.assertFalse(valid)
         self.assertIn("//", mock_mb.showerror.call_args[0][1])
+
+    def _validate_with_library(self, entries, library_rows, answer=True):
+        """Run validate against a library; return (result, mock message box)."""
+        builder = make_builder(entries, library_rows)
+        mock_mb = Mock()
+        mock_mb.askyesno.return_value = answer
+        with patch.object(course_builder, "messagebox", mock_mb):
+            return builder.validate("Title"), mock_mb
+
+    def test_validate_warns_about_an_entry_matched_by_another_chart_type(self):
+        entry = {"Course path": "Pack/Song", "Title": "Song", "Difficulty": "Hard", "Type": "dance-single"}
+        library = [entry, {"Course path": "Pack/Song", "Title": "Song",
+                           "Difficulty": "Hard", "Type": "dance-double"}]
+
+        valid, mock_mb = self._validate_with_library([entry], library, answer=False)
+        self.assertFalse(valid)  # the user said no: nothing is saved
+        mock_mb.askyesno.assert_called_once()
+        title, description = mock_mb.askyesno.call_args[0][:2]
+        self.assertEqual(title, "Ambiguous chart entries")
+        self.assertIn("Song — Hard", description)
+
+        valid, _ = self._validate_with_library([entry], library, answer=True)
+        self.assertTrue(valid)
+
+    def test_validate_warns_about_an_edit_matched_by_a_second_edit(self):
+        entry = {"Course path": "Pack/Song", "Title": "Song", "Difficulty": "Edit", "Type": "dance-single"}
+        library = [entry, {"Course path": "Pack/Song", "Title": "Song",
+                           "Difficulty": "Edit", "Type": "dance-single"}]
+        valid, mock_mb = self._validate_with_library([entry], library, answer=False)
+        self.assertFalse(valid)
+        self.assertEqual(mock_mb.askyesno.call_args[0][0], "Ambiguous chart entries")
+        self.assertIn("Song — Edit", mock_mb.askyesno.call_args[0][1])
+
+    def test_validate_offers_no_ambiguity_notice_for_unique_charts(self):
+        entry = {"Course path": "Pack/Song", "Title": "Song", "Difficulty": "Hard", "Type": "dance-single"}
+        library = [entry, {"Course path": "Pack/Song", "Title": "Song",
+                           "Difficulty": "Challenge", "Type": "dance-single"}]
+        valid, mock_mb = self._validate_with_library([entry], library)
+        self.assertTrue(valid)
+        mock_mb.askyesno.assert_not_called()
+
+    def test_validate_mixed_type_confirmation_still_fires_without_ambiguity(self):
+        entries = [
+            {"Course path": "Pack/One", "Title": "One", "Difficulty": "Hard", "Type": "dance-single"},
+            {"Course path": "Pack/Two", "Title": "Two", "Difficulty": "Hard", "Type": "dance-double"},
+        ]
+        valid, mock_mb = self._validate_with_library(entries, entries, answer=False)
+        self.assertFalse(valid)
+        mock_mb.askyesno.assert_called_once()
+        self.assertEqual(mock_mb.askyesno.call_args[0][0], "Mixed chart types")
+
+    def test_save_new_stops_before_the_file_dialog_when_the_warning_is_declined(self):
+        entry = {"Course path": "Pack/Song", "Title": "Song", "Difficulty": "Hard", "Type": "dance-single"}
+        library = [entry, {"Course path": "Pack/Song", "Title": "Song",
+                           "Difficulty": "Hard", "Type": "dance-double"}]
+        builder = make_builder([entry], library)
+        builder.title_var = Mock(get=Mock(return_value="My Course"))
+        mock_fd = Mock()
+        mock_mb = Mock()
+        mock_mb.askyesno.return_value = False
+        with patch.object(course_builder, "filedialog", mock_fd), patch.object(course_builder, "messagebox", mock_mb):
+            builder.save_new()
+        mock_fd.asksaveasfilename.assert_not_called()
 
     def test_every_validation_error_uses_the_same_dialog_title(self):
         entry = {"Course path": "Pack/Song", "Difficulty": "Hard", "Type": "dance-single"}
@@ -154,6 +218,7 @@ class CourseBuilderDialogTests(unittest.TestCase):
             status=Mock(),
             button_factory=Mock(return_value=Mock()),
             selected_rows=lambda: [],
+            library_rows=lambda: [],
         )
 
         mock_window = Mock()
@@ -204,6 +269,7 @@ class CourseBuilderDialogTests(unittest.TestCase):
             status=Mock(),
             button_factory=Mock(return_value=Mock()),
             selected_rows=lambda: rows,
+            library_rows=lambda: [],
         )
         mock_window = Mock()
         mock_tk = Mock()
@@ -224,6 +290,7 @@ class CourseBuilderDialogTests(unittest.TestCase):
             status=Mock(),
             button_factory=Mock(return_value=Mock()),
             selected_rows=lambda: [],
+            library_rows=lambda: [],
         )
         mock_window = Mock()
         mock_tk = Mock()
@@ -260,6 +327,7 @@ class CourseBuilderDialogTests(unittest.TestCase):
             status=Mock(),
             button_factory=Mock(return_value=Mock()),
             selected_rows=lambda: [],
+            library_rows=lambda: [],
         )
         mock_window = Mock()
         bindings = {}
@@ -297,6 +365,7 @@ class CourseBuilderDialogTests(unittest.TestCase):
             status=Mock(),
             button_factory=Mock(return_value=Mock()),
             selected_rows=lambda: [],
+            library_rows=lambda: [],
         )
         existing = Mock()
         existing.winfo_exists.return_value = True
@@ -314,6 +383,7 @@ class CourseBuilderDialogTests(unittest.TestCase):
             status=Mock(),
             button_factory=Mock(return_value=Mock()),
             selected_rows=lambda: [],
+            library_rows=lambda: [],
         )
         builder._selected_items = {"1", "3"}  # left over from a dialog that was closed with rows selected
         mock_tk = Mock()
