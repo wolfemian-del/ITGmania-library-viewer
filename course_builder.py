@@ -49,6 +49,7 @@ class CourseBuilder:
         self.title_var = None
         self.tree = None
         self.count_var = None
+        self._selected_items = set()  # queue rows currently carrying the white "selected_row" tag
 
     def open_dialog(self):
         if self.window is not None and self.window.winfo_exists():
@@ -99,6 +100,10 @@ class CourseBuilder:
         for diff, color in theme.DIFFICULTY_COLORS.items():
             self.tree.tag_configure(f"diff_{diff}", foreground=color)
         self.tree.tag_configure(UNKNOWN_DIFFICULTY_TAG, foreground=theme.DIFFICULTY_COLOR_UNKNOWN)
+        # Keep this one last: in this order a selected row shows white text instead of its
+        # difficulty color (checked in the window on Windows). A row has both tags while selected.
+        self.tree.tag_configure("selected_row", foreground=theme.TEXT_ON_ACCENT)
+        self.tree.bind("<<TreeviewSelect>>", self._on_queue_select)
         # The Remove button has keyboard equivalents while the queue has focus.
         self.tree.bind("<Delete>", self._remove_on_key)
         self.tree.bind("<BackSpace>", self._remove_on_key)
@@ -142,21 +147,41 @@ class CourseBuilder:
             self.refresh_queue()
 
     def refresh_queue(self, selected_indices=None):
+        selected_indices = selected_indices or []
+        valid = [index for index in selected_indices if 0 <= index < len(self.entries)]
         self.tree.delete(*self.tree.get_children())
         for index, row in enumerate(self.entries):
+            tags = [self._difficulty_tag(row)]
+            if index in valid:
+                tags.append("selected_row")  # a kept selection is born with the white tag (see _on_queue_select)
             self.tree.insert("", "end", iid=str(index), values=(
                 row.get("Pack", ""), row.get("Title", ""), row.get("Type", ""),
                 row.get("Difficulty", ""), row.get("Meter", ""),
                 format_duration(row.get("Time", 0)) if row.get("Time", "") != "" else "",
-            ), tags=(self._difficulty_tag(row),))
+            ), tags=tuple(tags))
         total_seconds = sum(number(row.get("Time")) for row in self.entries)
         self.count_var.set(f"{len(self.entries)} charts · {format_duration(total_seconds)} total")
-        selected_indices = selected_indices or []
-        valid = [index for index in selected_indices if 0 <= index < len(self.entries)]
         if valid:
             self.tree.selection_set(*(str(index) for index in valid))
             self.tree.focus(str(valid[0]))
             self.tree.see(str(valid[0]))
+        self._selected_items = {str(index) for index in valid}
+
+    def _on_queue_select(self, _event=None):
+        """Give the white "selected_row" tag to the rows that just became selected and take it from the rest."""
+        current = set(self.tree.selection())
+        for item in self._selected_items - current:
+            if self.tree.exists(item):  # a refresh may have removed the row already
+                self._set_selected_tag(item, False)
+        for item in current - self._selected_items:
+            self._set_selected_tag(item, True)
+        self._selected_items = current
+
+    def _set_selected_tag(self, item, selected):
+        tags = [tag for tag in self.tree.item(item, "tags") if tag != "selected_row"]
+        if selected:
+            tags.append("selected_row")
+        self.tree.item(item, tags=tags)
 
     @staticmethod
     def _difficulty_tag(row):

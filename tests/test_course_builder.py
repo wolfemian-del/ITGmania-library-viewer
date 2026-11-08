@@ -240,10 +240,12 @@ class CourseBuilderDialogTests(unittest.TestCase):
         for name, color in theme.DIFFICULTY_COLORS.items():
             self.assertEqual(configured.get(f"diff_{name}"), color)
         self.assertEqual(configured.get("diff_unknown"), theme.DIFFICULTY_COLOR_UNKNOWN)
+        self.assertEqual(configured.get("selected_row"), theme.TEXT_ON_ACCENT)
 
         bindings = {call.args[0]: call.args[1] for call in mock_tree.bind.call_args_list}
         self.assertIn("<Delete>", bindings)
         self.assertIn("<BackSpace>", bindings)
+        self.assertIn("<<TreeviewSelect>>", bindings)
 
         # The Delete handler removes the selected entry and keeps a selection (issue #39).
         builder.entries = [queue_row("A"), queue_row("B")]
@@ -330,6 +332,39 @@ class CourseQueueTests(unittest.TestCase):
 
         tags = [call.kwargs["tags"] for call in builder.tree.insert.call_args_list]
         self.assertEqual(tags, [("diff_Hard",), ("diff_Edit",), ("diff_unknown",)])
+
+    def test_refresh_queue_borns_a_kept_selection_with_the_white_tag(self):
+        builder = make_queue_builder(["A", "B", "C"])
+
+        builder.refresh_queue([1])
+
+        tags = [call.kwargs["tags"] for call in builder.tree.insert.call_args_list]
+        self.assertEqual(tags, [("diff_Hard",), ("diff_Hard", "selected_row"), ("diff_Hard",)])
+        self.assertEqual(builder._selected_items, {"1"})
+
+    def test_on_queue_select_moves_the_white_tag_with_the_selection(self):
+        builder = make_queue_builder(["A", "B"])
+        store = {"0": ("diff_Hard",), "1": ("diff_Hard",)}
+
+        def fake_item(item_id, option=None, **kwargs):
+            if "tags" in kwargs:
+                store[item_id] = tuple(kwargs["tags"])
+                return ""
+            return store.get(item_id, ())
+
+        builder.tree.item.side_effect = fake_item
+        builder.tree.exists.return_value = True
+        builder._selected_items = set()
+
+        builder.tree.selection.return_value = ("1",)
+        builder._on_queue_select()
+        self.assertEqual(store["1"], ("diff_Hard", "selected_row"))
+        self.assertEqual(store["0"], ("diff_Hard",))
+
+        builder.tree.selection.return_value = ("0",)
+        builder._on_queue_select()
+        self.assertEqual(store["0"], ("diff_Hard", "selected_row"))
+        self.assertEqual(store["1"], ("diff_Hard",))
 
 
 if __name__ == "__main__":
