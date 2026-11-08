@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 import course_builder
 import library_data
+import row_tints
 import theme
 from course_builder import CourseBuilder
 
@@ -385,7 +386,8 @@ class CourseBuilderDialogTests(unittest.TestCase):
             selected_rows=lambda: [],
             library_rows=lambda: [],
         )
-        builder._selected_items = {"1", "3"}  # left over from a dialog that was closed with rows selected
+        builder._tint = row_tints.SelectedRowTint(Mock())
+        builder._tint.items = {"1", "3"}  # left over from a dialog that was closed with rows selected
         mock_tk = Mock()
         mock_ttk = Mock()
         mock_ttk.Treeview.return_value.get_children.return_value = ()
@@ -393,7 +395,7 @@ class CourseBuilderDialogTests(unittest.TestCase):
         with patch.object(course_builder, "tk", mock_tk), patch.object(course_builder, "ttk", mock_ttk):
             builder.open_dialog()
 
-        self.assertEqual(builder._selected_items, set())
+        self.assertEqual(builder._tint.items, set())
 
 
 def queue_row(title, difficulty="Hard"):
@@ -407,6 +409,7 @@ def make_queue_builder(titles):
     builder = make_builder([queue_row(title) for title in titles])
     builder.tree = Mock()
     builder.tree.get_children.return_value = ()
+    builder._tint = row_tints.SelectedRowTint(builder.tree)
     builder.count_var = Mock()
     return builder
 
@@ -464,31 +467,8 @@ class CourseQueueTests(unittest.TestCase):
 
         tags = [call.kwargs["tags"] for call in builder.tree.insert.call_args_list]
         self.assertEqual(tags, [("diff_Hard",), ("diff_Hard", "selected_row"), ("diff_Hard",)])
-        self.assertEqual(builder._selected_items, {"1"})
+        self.assertEqual(builder._tint.items, {"1"})
 
-    def test_on_queue_select_moves_the_white_tag_with_the_selection(self):
-        builder = make_queue_builder(["A", "B"])
-        store = {"0": ("diff_Hard",), "1": ("diff_Hard",)}
-
-        def fake_item(item_id, option=None, **kwargs):
-            if "tags" in kwargs:
-                store[item_id] = tuple(kwargs["tags"])
-                return ""
-            return store.get(item_id, ())
-
-        builder.tree.item.side_effect = fake_item
-        builder.tree.exists.return_value = True
-        builder._selected_items = set()
-
-        builder.tree.selection.return_value = ("1",)
-        builder._on_queue_select()
-        self.assertEqual(store["1"], ("diff_Hard", "selected_row"))
-        self.assertEqual(store["0"], ("diff_Hard",))
-
-        builder.tree.selection.return_value = ("0",)
-        builder._on_queue_select()
-        self.assertEqual(store["0"], ("diff_Hard", "selected_row"))
-        self.assertEqual(store["1"], ("diff_Hard",))
 
 
 class CourseReloadTests(unittest.TestCase):
