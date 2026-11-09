@@ -33,7 +33,7 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 # The release number, shown in Help > About. Keep it equal to the newest heading in CHANGELOG.md (a test checks).
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 import row_tints
 import theme
