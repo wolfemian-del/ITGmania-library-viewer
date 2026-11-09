@@ -45,6 +45,10 @@ class SelectedRowTint:
     already carrying the tag (a refresh that kept it selected) is reported
     through note_selected, and a rebuilt tree's kept selection through
     reset, so the tracking stays true.
+
+    The tree may be None: the course dialog's tint is created before the
+    dialog (and its tree) exists. The bookkeeping methods work as usual
+    then; on_select has no selection to read and does nothing.
     """
 
     def __init__(self, tree):
@@ -53,6 +57,8 @@ class SelectedRowTint:
 
     def on_select(self, _event=None):
         """Give the white tag to the rows that just became selected and take it from the rest."""
+        if self._tree is None:  # no tree yet (see the class docstring): nothing to read
+            return
         current = set(self._tree.selection())
         for item in self.items - current:
             if self._tree.exists(item):  # a refresh may have removed the row already

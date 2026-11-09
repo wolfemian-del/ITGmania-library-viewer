@@ -20,6 +20,7 @@ def make_builder(entries=(), library_rows=()):
     builder._saved_geometry = None
     builder._report_geometry = None
     builder.title_var = None
+    builder._tint = row_tints.SelectedRowTint(None)  # as __init__ leaves it (issue #92)
     builder._status = Mock()
     builder._library_rows = lambda: list(library_rows)
     return builder
@@ -381,6 +382,13 @@ class CourseBuilderDialogTests(unittest.TestCase):
         existing.focus_force.assert_called_once()
         mock_tk.Toplevel.assert_not_called()  # no second window
 
+    def test_a_new_builder_has_working_tint_state_before_any_dialog_opens(self):
+        builder = make_builder()
+        builder._tint.reset(["0", "2"])
+        builder._tint.note_selected("3")
+        builder._tint.on_select()  # no tree yet: nothing to read, and it must not raise
+        self.assertEqual(builder._tint.items, {"0", "2", "3"})
+
     def test_reopening_the_dialog_forgets_which_rows_were_selected_last_time(self):
         builder = CourseBuilder(
             parent=Mock(),
@@ -389,7 +397,6 @@ class CourseBuilderDialogTests(unittest.TestCase):
             selected_rows=lambda: [],
             library_rows=lambda: [],
         )
-        builder._tint = row_tints.SelectedRowTint(Mock())
         builder._tint.items = {"1", "3"}  # left over from a dialog that was closed with rows selected
         mock_tk = Mock()
         mock_ttk = Mock()
@@ -412,7 +419,6 @@ def make_queue_builder(titles):
     builder = make_builder([queue_row(title) for title in titles])
     builder.tree = Mock()
     builder.tree.get_children.return_value = ()
-    builder._tint = row_tints.SelectedRowTint(builder.tree)
     builder.count_var = Mock()
     return builder
 

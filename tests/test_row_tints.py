@@ -91,6 +91,13 @@ class SelectedRowTintTests(unittest.TestCase):
         tint.reset()
         self.assertEqual(tint.items, set())
 
+    def test_a_tint_without_a_tree_tracks_items_and_ignores_selection_events(self):
+        tint = row_tints.SelectedRowTint(None)
+        tint.note_selected("a")
+        tint.reset(["b", "c"])
+        tint.on_select()  # no tree to read a selection from: a no-op, not a crash
+        self.assertEqual(tint.items, {"b", "c"})
+
 
 if __name__ == "__main__":
     unittest.main()
