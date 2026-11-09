@@ -889,10 +889,9 @@ def match_chart_query(row: dict, query: str | dict) -> bool:
             b = parse_numeric_bound(raw_val)
             if not b or not _compare_bound(b, row.get("Peak NPS")):
                 return False
-        elif field in RADAR_COUNT_FIELDS or SEARCH_FIELD_ALIASES.get(field) in RADAR_COUNT_FIELDS:
-            canonical_field = RADAR_COUNT_FIELDS.get(field) or RADAR_COUNT_FIELDS[SEARCH_FIELD_ALIASES[field]]
+        elif field in RADAR_COUNT_FIELDS:
             b = parse_numeric_bound(raw_val)
-            if not b or not _compare_bound(b, row.get(canonical_field)):
+            if not b or not _compare_bound(b, row.get(RADAR_COUNT_FIELDS[field])):
                 return False
         elif field in {f.casefold() for f in TECH_FIELDS}:
             canonical_field = next(f for f in TECH_FIELDS if f.casefold() == field)
