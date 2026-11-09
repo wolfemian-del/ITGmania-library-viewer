@@ -32,9 +32,11 @@ them in a sortable, filterable table, and can build .CRS course files. Read READ
   pull request and marked Accepted by the owner before implementation. Write one when a change
   creates or alters a component boundary or constructor contract, persists a new settings key or
   file format, or has two or more defensible designs where the choice constrains later work.
-  A change that applies a design an accepted proposal already settled needs no new proposal; its
-  pull request cites that proposal instead. Everything else goes straight to implementation with
-  the issue as the spec.
+  A change that applies a design an accepted proposal already settled needs no new proposal.
+  That covers carrying out the proposal itself and repeating its pattern in another component
+  with the same contract. Its pull request names the proposal and says it does not depart from
+  it; any departure (a different contract, settings shape or design choice) needs its own
+  proposal. Everything else goes straight to implementation with the issue as the spec.
 - In the pull request, say in plain language what changed and why, how you checked it, and which
   model wrote it. When a real design choice existed, say which option was taken and which was
   rejected.
