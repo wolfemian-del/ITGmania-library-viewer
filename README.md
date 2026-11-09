@@ -57,7 +57,7 @@ The **Time** column shows cached song music length as `minutes:seconds`; CSV exp
 
 The cache folder is commonly `%APPDATA%\ITGmania\Cache\Songs`. `Stats.xml` lives inside a player profile's save folder. The app does not edit either source.
 
-The app remembers the selected data paths, column order, visibility, and widths, and the course window's size and position, in `%APPDATA%\ITGmania Library Visualizer\settings.json` on Windows. The parsed library snapshot is stored beside it as `library_cache.json`. On other platforms these files use the standard per-user configuration directory.
+The app remembers the selected data paths, column order, visibility, and widths, and the course and Advanced Search windows' sizes and positions, in `%APPDATA%\ITGmania Library Visualizer\settings.json` on Windows. The parsed library snapshot is stored beside it as `library_cache.json`. On other platforms these files use the standard per-user configuration directory.
 
 ## Changing the look
 
@@ -77,7 +77,7 @@ The UI-independent parsing and course helpers live in `library_data.py`; `tests/
 
 The Build-a-course dialog is a separate component in `course_builder.py`, constructed by the main window with the few things it needs (its parent window, the status variable, the button factory, a way to read the table's selected rows, a way to read every row in the library, the remembered window geometry, and a callback that reports the geometry when the window closes); its tests are in `tests/test_course_builder.py`.
 
-The Advanced Search dialog is likewise a separate component in `advanced_search.py`, constructed by the main window with its parent window, the three widget factories, and the search variable it edits; its tests are in `tests/test_advanced_search.py`.
+The Advanced Search dialog is likewise a separate component in `advanced_search.py`, constructed by the main window with its parent window, the three widget factories, the search variable it edits, the remembered window geometry, and a callback that reports the geometry when the window closes; its tests are in `tests/test_advanced_search.py`.
 
 ## License
 

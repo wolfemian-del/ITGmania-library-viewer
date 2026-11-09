@@ -16,6 +16,7 @@ import theme
 from library_data import (
     GRADE_OPTIONS,
     build_dialog_query,
+    parse_course_geometry,
     split_dialog_query,
 )
 
@@ -29,15 +30,82 @@ class AdvancedSearch:
     combo_factory:  makes a themed combobox (LibraryApp._combo)
     search_var:     the main window's search text variable: read to seed
                     the fields when the dialog opens, written on Apply
+    saved_geometry: the remembered window geometry from settings, already
+                    validated by the app (canonical form), or None
+    report_geometry: callable told the window's geometry when it closes,
+                    so the app can remember it for the next open; or None
     """
 
-    def __init__(self, parent, entry_factory, button_factory, combo_factory, search_var):
+    def __init__(self, parent, entry_factory, button_factory, combo_factory, search_var,
+                 saved_geometry=None, report_geometry=None):
         self.parent = parent
         self._entry = entry_factory
         self._button = button_factory
         self._combo = combo_factory
         self._search_var = search_var
+        self._saved_geometry = saved_geometry
+        self._report_geometry = report_geometry
         self.window = None
+
+    def _geometry_for_open(self):
+        """The geometry string to open the dialog with (issue #98).
+
+        The remembered geometry when a meaningful part of the window would
+        be visible on the virtual desktop (which spans every monitor): at
+        least a grabbable strip of it, so a window left hanging a little off
+        an edge comes back as it was, while one left on a since-unplugged
+        monitor, or pushed almost entirely off an edge, does not open lost.
+        The top edge gets its own rule on top of that: a window can show
+        plenty of its body while its title bar sits above every monitor
+        (a stacked monitor unplugged since, say), leaving nothing to grab,
+        so the top edge must sit within a few pixels of the desktop's top.
+        In the fallback cases only the size is used and the window manager
+        places the window, so a lost position can never be re-saved on
+        close. Without a remembered geometry, the theme default. The same
+        rules as the course window's (issue #25).
+        """
+        if not self._saved_geometry:
+            return theme.ADVANCED_SEARCH_GEOMETRY
+        parsed = parse_course_geometry(self._saved_geometry)
+        if parsed is None:
+            return theme.ADVANCED_SEARCH_GEOMETRY
+        width, height, x, y = parsed
+        left = self.parent.winfo_vrootx()
+        top = self.parent.winfo_vrooty()
+        right = left + self.parent.winfo_vrootwidth()
+        bottom = top + self.parent.winfo_vrootheight()
+        visible_width = min(x + width, right) - max(x, left)
+        visible_height = min(y + height, bottom) - max(y, top)
+        if visible_width >= 100 and visible_height >= 32 and y >= top - 16:
+            return self._saved_geometry
+        return f"{width}x{height}"
+
+    def save_window_geometry(self):
+        """Report the dialog's current geometry so the next open restores it (issue #98).
+
+        Called when the dialog closes and when the app exits with the dialog
+        open. Does nothing when the dialog is closed, and nothing while the
+        window is minimized or maximized: those states report a parked or
+        full-screen geometry the user did not choose as the window's place.
+        """
+        if self.window is None or not self.window.winfo_exists():
+            return
+        if self.window.state() != "normal":
+            return
+        self._saved_geometry = self.window.geometry()
+        if self._report_geometry is not None:
+            self._report_geometry(self._saved_geometry)
+
+    def _close_window(self):
+        """Save the geometry and destroy the dialog: the one way this dialog closes.
+
+        Every close path — the Close button, the window's X button, Escape,
+        and Apply — funnels through here, so the geometry is remembered no
+        matter how the dialog was dismissed (issue #98).
+        """
+        self.save_window_geometry()
+        if self.window is not None:
+            self.window.destroy()
 
     def open_dialog(self):
         if self.window is not None and self.window.winfo_exists():
@@ -48,7 +116,7 @@ class AdvancedSearch:
         window = tk.Toplevel(self.parent)
         self.window = window
         window.title("Advanced Search")
-        window.geometry(theme.ADVANCED_SEARCH_GEOMETRY)
+        window.geometry(self._geometry_for_open())
         window.minsize(*theme.ADVANCED_SEARCH_MIN_SIZE)
         window.configure(bg=theme.BG_WINDOW)
         window.transient(self.parent)
@@ -173,7 +241,7 @@ class AdvancedSearch:
         def apply_search():
             q = build_query()
             self._search_var.set(q)
-            window.destroy()
+            self._close_window()
 
         def clear_fields():
             for v in (free_text_var, title_var, artist_var, pack_var, meter_min_var, meter_max_var,
@@ -183,11 +251,11 @@ class AdvancedSearch:
             grade_min_var.set("Any")
 
         self._button(btn_row, "Apply", apply_search, primary=True).pack(side="right", padx=(6, 0))
-        self._button(btn_row, "Close", window.destroy).pack(side="right")
+        self._button(btn_row, "Close", self._close_window).pack(side="right")
         self._button(btn_row, "Clear", clear_fields).pack(side="left")
 
         def _close(_event=None):
-            window.destroy()
+            self._close_window()
             return "break"
 
         def _apply_and_close(_event=None):
@@ -196,6 +264,7 @@ class AdvancedSearch:
 
         window.bind("<Escape>", _close)
         window.bind("<Return>", _apply_and_close)
+        window.protocol("WM_DELETE_WINDOW", self._close_window)
         # A new window does not always take keyboard focus (seen on Windows); without it Escape and Return
         # would go to the main window instead of this one.
         window.focus_force()

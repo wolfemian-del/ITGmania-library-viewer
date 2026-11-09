@@ -41,6 +41,7 @@ class CourseGeometryAppTests(unittest.TestCase):
         instance.show_distribution_panel = Mock(get=Mock(return_value=False))
         instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
         instance.course_geometry = course_geometry
+        instance.advanced_search_geometry = None
         instance._last_saved_settings = None
         return instance
 
@@ -81,6 +82,7 @@ class CourseGeometryAppTests(unittest.TestCase):
         builder = Mock()
         builder.confirm_discard_for_app_exit.return_value = True
         instance.course_builder = builder
+        instance.advanced_search = None
         manager = Mock()
         manager.attach_mock(builder, "builder")
         manager.attach_mock(instance.root, "root")
@@ -116,6 +118,69 @@ class CourseGeometryAppTests(unittest.TestCase):
             root.destroy()
 
 
+class AdvancedSearchGeometryAppTests(unittest.TestCase):
+    """Issue #98: validating, storing, and wiring the Advanced Search window's geometry.
+
+    The app-side half; the component half is in tests/test_advanced_search.py.
+    The rules are the course window's (issue #25) with this dialog's own
+    minimum size, through the shared validator.
+    """
+
+    def test_valid_advanced_search_geometry_accepts_and_canonicalizes(self):
+        self.assertEqual(app.LibraryApp._valid_advanced_search_geometry("700x640+10+10"), "700x640+10+10")
+        self.assertEqual(app.LibraryApp._valid_advanced_search_geometry("700x640-8+100"), "700x640+-8+100")
+
+    def test_valid_advanced_search_geometry_rejects_unusable_values(self):
+        for value in (None, "", "abc", "400x600+0+0", "900x500+0+0", "700x640+0", "0x0+0+0"):
+            with self.subTest(value=value):
+                self.assertIsNone(app.LibraryApp._valid_advanced_search_geometry(value))
+
+    def test_the_floor_is_this_dialogs_own_minimum_not_the_course_windows(self):
+        # Big enough for Advanced Search (480x520) but below the course floor (760 wide).
+        self.assertEqual(app.LibraryApp._valid_advanced_search_geometry("500x530+10+10"), "500x530+10+10")
+        self.assertIsNone(app.LibraryApp._valid_course_geometry("500x530+10+10"))
+        # Big enough for the course window (480 tall) but below this dialog's floor (520).
+        self.assertEqual(app.LibraryApp._valid_course_geometry("900x500+10+10"), "900x500+10+10")
+        self.assertIsNone(app.LibraryApp._valid_advanced_search_geometry("900x500+10+10"))
+
+    def make_saving_app(self, directory, advanced_search_geometry):
+        instance = object.__new__(app.LibraryApp)
+        instance.settings_path = Path(directory) / "settings.json"
+        instance.tree = Mock()
+        instance.cache_var = Mock(get=Mock(return_value="/cache"))
+        instance.stats_var = Mock(get=Mock(return_value="/stats.xml"))
+        instance.column_order = list(app.HEADERS)
+        instance.column_visibility = {col: Mock(get=Mock(return_value=True)) for col in app.HEADERS}
+        instance.tree.column.return_value = 100
+        instance.sort_keys = [("Pack", False)]
+        instance.show_distribution_panel = Mock(get=Mock(return_value=False))
+        instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
+        instance.course_geometry = None
+        instance.advanced_search_geometry = advanced_search_geometry
+        instance._last_saved_settings = None
+        return instance
+
+    def test_save_settings_includes_the_key_only_when_a_geometry_is_set(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.make_saving_app(directory, "700x640+10+10")
+            instance._save_settings()
+            data = json.loads((Path(directory) / "settings.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["advanced_search_geometry"], "700x640+10+10")
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.make_saving_app(directory, None)
+            instance._save_settings()
+            data = json.loads((Path(directory) / "settings.json").read_text(encoding="utf-8"))
+            self.assertNotIn("advanced_search_geometry", data)
+
+    def test_geometry_callback_stores_the_value_and_saves(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.advanced_search_geometry = None
+        instance._save_settings = Mock()
+        instance._advanced_search_geometry_changed("700x640+5+5")
+        self.assertEqual(instance.advanced_search_geometry, "700x640+5+5")
+        instance._save_settings.assert_called_once_with()
+
+
 class LibrarySnapshotTests(unittest.TestCase):
     @staticmethod
     def make_app(settings_path, cache_dir, stats_file):
@@ -129,6 +194,7 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance.refresh_table = Mock()
         instance._loaded = Mock()
         instance.course_geometry = None
+        instance.advanced_search_geometry = None
         instance._last_saved_settings = None
         return instance
 
@@ -657,11 +723,15 @@ class DialogKeyBindingTests(unittest.TestCase):
     def test_live_app_constructs_the_advanced_search_component_with_its_search_variable(self):
         # Proposal 0004's wiring guard: all five constructor inputs are required, so a
         # forgotten one fails loudly at startup; this catches passing the wrong object.
+        # The geometry pair (issue #98) is optional, so it is pinned here the same
+        # way the course builder's is: a forgotten one would silently disable it.
         if app.tk is None:
             self.skipTest("Tkinter is not installed in this environment")
         with tempfile.TemporaryDirectory() as tmp:
             settings_path = Path(tmp) / "settings.json"
-            with patch.object(app.LibraryApp, "_settings_file_path", return_value=settings_path):
+            with patch.object(app.LibraryApp, "_settings_file_path", return_value=settings_path), \
+                    patch.object(app.LibraryApp, "_valid_advanced_search_geometry",
+                                 return_value="700x640+5+5") as mock_valid:
                 try:
                     root = app.tk.Tk()
                 except app.tk.TclError:
@@ -671,6 +741,10 @@ class DialogKeyBindingTests(unittest.TestCase):
                     application = app.LibraryApp(root)
                     self.assertIsNotNone(application.advanced_search)
                     self.assertIs(application.advanced_search._search_var, application.search_var)
+                    mock_valid.assert_called_once_with(None)
+                    self.assertEqual(application.advanced_search._saved_geometry, "700x640+5+5")
+                    self.assertEqual(application.advanced_search._report_geometry,
+                                     application._advanced_search_geometry_changed)
                 finally:
                     root.destroy()
 
@@ -777,6 +851,7 @@ class PerformanceAndExportTests(unittest.TestCase):
             instance.show_distribution_panel = Mock(get=Mock(return_value=False))
             instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
             instance.course_geometry = None
+            instance.advanced_search_geometry = None
             instance._last_saved_settings = None
 
             # First save writes to disk
@@ -811,6 +886,7 @@ class PerformanceAndExportTests(unittest.TestCase):
             instance.show_distribution_panel = Mock(get=Mock(return_value=False))
             instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
             instance.course_geometry = None
+            instance.advanced_search_geometry = None
             instance._last_saved_settings = None
 
             # An earlier save in the session (any routine click) populates the dedup snapshot.
@@ -876,6 +952,7 @@ class LibraryAppExitTests(unittest.TestCase):
     def make_app(builder_answer=None):
         instance = object.__new__(app.LibraryApp)
         instance.root = Mock()
+        instance.advanced_search = None
         if builder_answer is None:
             instance.course_builder = None
         else:
@@ -898,6 +975,13 @@ class LibraryAppExitTests(unittest.TestCase):
         instance = self.make_app(builder_answer=False)
         instance._close_app()
         instance.root.destroy.assert_not_called()
+
+    def test_exit_saves_the_advanced_search_geometry(self):
+        instance = self.make_app()
+        instance.advanced_search = Mock()
+        instance._close_app()
+        instance.advanced_search.save_window_geometry.assert_called_once_with()
+        instance.root.destroy.assert_called_once_with()
 
 
 if __name__ == "__main__":

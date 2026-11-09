@@ -288,7 +288,11 @@ class LibraryApp:
                                             report_geometry=self._course_geometry_changed)
         # The Advanced Search component (advanced_search.py): it edits the search variable's
         # text through its field form; the Advanced… button below calls its open_dialog directly.
-        self.advanced_search = AdvancedSearch(self.root, self._entry, self._button, self._combo, self.search_var)
+        self.advanced_search_geometry = self._valid_advanced_search_geometry(
+            self.saved_settings.get("advanced_search_geometry"))
+        self.advanced_search = AdvancedSearch(self.root, self._entry, self._button, self._combo, self.search_var,
+                                              saved_geometry=self.advanced_search_geometry,
+                                              report_geometry=self._advanced_search_geometry_changed)
         # The main window's X button goes through the same exit path as File → Exit (issue #87).
         self.root.protocol("WM_DELETE_WINDOW", self._close_app)
         paths = tk.Frame(self.root, bg=theme.BG_PANEL, padx=12, pady=10)
@@ -378,16 +382,25 @@ class LibraryApp:
         down the course dialog without running its discard prompt, so ask
         the course builder first; if it says no, nothing is destroyed and
         the app stays exactly as it was. An approved exit with the dialog
-        open also captures the dialog's geometry for next time (issue #25)."""
+        open also captures the dialog's geometry for next time (issue #25).
+        The Advanced Search dialog needs no prompt; its geometry is
+        captured the same way (issue #98)."""
         if self.course_builder is not None:
             if not self.course_builder.confirm_discard_for_app_exit():
                 return
             self.course_builder.save_window_geometry()
+        if self.advanced_search is not None:
+            self.advanced_search.save_window_geometry()
         self.root.destroy()
 
     def _course_geometry_changed(self, geometry):
         """The course window closed with a new geometry (issue #25): remember it in settings."""
         self.course_geometry = geometry
+        self._save_settings()
+
+    def _advanced_search_geometry_changed(self, geometry):
+        """The Advanced Search window closed with a new geometry (issue #98): remember it in settings."""
+        self.advanced_search_geometry = geometry
         self._save_settings()
 
     def _build_menubar(self):
@@ -563,20 +576,22 @@ class LibraryApp:
         return width if 55 <= width <= 2000 else None
 
     @staticmethod
-    def _valid_course_geometry(value):
-        """The canonical geometry string to restore the course window with, or None (issue #25).
+    def _valid_window_geometry(value, min_size):
+        """The canonical geometry string to restore a dialog with, or None.
 
-        The stored value must parse in full and be at least the dialog's minimum
-        size — a smaller value (a 1x1 read before the window was ever shown, say)
-        is rejected whole, position included — and comes back rebuilt in
-        canonical form, so only ever a string Tk itself could have written
-        reaches the window.
+        The stored value must parse in full and be at least the dialog's
+        minimum size — a smaller value (a 1x1 read before the window was
+        ever shown, say) is rejected whole, position included — and comes
+        back rebuilt in canonical form, so only ever a string Tk itself
+        could have written reaches the window. Shared by the course window
+        (issue #25) and the Advanced Search window (issue #98), which pass
+        their own minimum sizes.
         """
         parsed = parse_course_geometry(value)
         if parsed is None:
             return None
         width, height, x, y = parsed
-        min_width, min_height = theme.COURSE_BUILDER_MIN_SIZE
+        min_width, min_height = min_size
         if width < min_width or height < min_height:
             return None
         # Rebuilt exactly as Tk writes a position: "+100", and "+-8" for a
@@ -584,6 +599,16 @@ class LibraryApp:
         # Tk reads it as "8 pixels from the right edge" — so emitting it here
         # would move the window to the far side of the screen on restore.
         return f"{width}x{height}+{x}+{y}"
+
+    @staticmethod
+    def _valid_course_geometry(value):
+        """The canonical geometry string to restore the course window with, or None (issue #25)."""
+        return LibraryApp._valid_window_geometry(value, theme.COURSE_BUILDER_MIN_SIZE)
+
+    @staticmethod
+    def _valid_advanced_search_geometry(value):
+        """The canonical geometry string to restore the Advanced Search window with, or None (issue #98)."""
+        return LibraryApp._valid_window_geometry(value, theme.ADVANCED_SEARCH_MIN_SIZE)
 
     def _read_settings(self):
         try:
@@ -611,6 +636,9 @@ class LibraryApp:
         # the feature stays without the key until then.
         if self.course_geometry is not None:
             settings["course_geometry"] = self.course_geometry
+        # The Advanced Search window's geometry, on the same terms (issue #98).
+        if self.advanced_search_geometry is not None:
+            settings["advanced_search_geometry"] = self.advanced_search_geometry
         if self._last_saved_settings == settings:
             return
         temporary = self.settings_path.with_suffix(".tmp")
