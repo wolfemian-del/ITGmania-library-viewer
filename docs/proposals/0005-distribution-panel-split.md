@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft — Revision 1 (panel review complete; the resolutions in §7 were accepted by the owner on 2026-11-09) |
+| **Status** | Draft — Revision 2 (panel review complete; the resolutions in §7 were accepted by the owner on 2026-11-09, and §6 carries the staging amendments from the confirmation round) |
 | **Author** | Muse (Muse Spark) |
 | **Date** | 2026-11-09 |
 | **Base** | main `a94aa1b` (after PR #108; v1.1.0 tagged) |
@@ -62,6 +62,39 @@ corrected version:
 - **Q2's rejected alternative reworded:** the eager push's cost is an
   extra filter pass per refresh, stated as unmeasured; the argument
   for the lazy pull is the laziness itself, not a measured cost.
+
+---
+
+## Revision 2 (2026-11-09, from the confirmation round)
+
+Grok's fidelity audit confirmed Revision 1 is a faithful
+transcription of the accepted resolutions. GLM 5.3's adversarial
+re-check of §6 then found amendments of the same kinds its first
+review had found, all confined to §6 and folded in here:
+
+- **Step 2's zone function takes a third parameter**,
+  `theme.CHART_BAR_HEIGHT`'s value: the bars' y-coordinates derive
+  from the positions and the bar height, not from the drawn
+  matplotlib bars (Revision 1 named only two of the three theme-fed
+  values, leaving a literal implementer to hard-code the third).
+- **Step 3 pins the no-op Clear at the component level**: a Clear
+  with nothing active does not call `apply_chart_filter` at all, and
+  the app-side tests pin that a no-change call to it neither
+  refreshes nor nudges the cursor.
+- **The wiring guard counts seven entry points**, adding the chart
+  click, and the cursor-nudge assertion is placed on the app-side
+  `apply_chart_filter` tests, where the nudge now lives.
+- **Step 1 pins two more behaviours**: the settings save on a
+  visibility change (in the hide→show test) and the startup pack's
+  arguments (in the live startup test, via `pack_info()`).
+- **Wording**: "all new window-side tests"; "after hide then show";
+  the `SingleRefreshTests` sentence scoped to what the five tests
+  actually exercise; and the `MATPLOTLIB_AVAILABLE` count stated
+  precisely (five patch sites and one save-and-restore assignment —
+  re-verified against the test files during this round).
+
+Claude and ChatGPT-6 will see this revision, not Revision 1, when
+they confirm their amendments after their usage cooldowns.
 
 ---
 
@@ -170,8 +203,10 @@ see in one place, as with `CourseBuilder` and `AdvancedSearch`.
   matplotlib-missing path runs), banner pack/pack_forget,
   `_sync_distribution_toggle`, the *effect* of a metric change, bar
   colours and the active-bar edge, and the cursor nudge after a click
-  or Clear. Six `MATPLOTLIB_AVAILABLE` patch sites exist: five in the
-  distribution tests, one in `tests/test_library_visualizer.py`.
+  or Clear. Six places patch or assign
+  `MATPLOTLIB_AVAILABLE`: five `patch.object` sites in the
+  distribution tests, and one save-and-restore assignment in
+  `tests/test_library_visualizer.py`.
 - [CODE] CI coupling: the `windows-ui` job runs
   `python -m unittest discover -s tests -p test_ui_distribution.py`.
   The test file's name is load-bearing; renaming it needs a workflow
@@ -363,7 +398,7 @@ settings save both bind them.
 Three pull requests, in order. Each is independently green, and the
 order is the point: the safety net and the pure logic exist before
 the boundary moves, so the move PR can be judged as a move. All new
-tests for the panel live in `tests/test_ui_distribution.py` — the
+window-side tests for the panel live in `tests/test_ui_distribution.py` — the
 only test file the display-equipped `windows-ui` CI job runs (§2).
 
 **Step 1 — test hardening (no production code changes).** Write the
@@ -371,12 +406,14 @@ missing tests against today's `LibraryApp` methods, so they pin
 current behaviour before anything relocates:
 
 - a hide→**show** test: hiding forgets the panel, flips the toolbar
-  label to ▶ and calls `update_idletasks`; re-showing packs with the
+  label to ▶ and calls `update_idletasks`; hiding and re-showing
+  each invoke the settings save (a visibility change persists
+  today, and nothing else pins it); re-showing packs with the
   full recorded arguments (`side="right"`, `fill="y"`,
   `padx=(10, 0)`, `before=` the table frame — the argument a botched
   move is most likely to drop, leaving the panel squeezed to zero
   width) and redraws from the stored rows. A live test adds the
-  end-to-end assertion after a toggle cycle: the panel is mapped
+  end-to-end assertion after hide then show: the panel is mapped
   with width > 0;
 - the empty-state branch;
 - banner pack/pack_forget transitions;
@@ -388,7 +425,10 @@ current behaviour before anything relocates:
 - two gaps that are **live tests** (they need a real Tk root, so they
   carry the live test's skip pattern and run on `windows-ui`):
   startup validation of the two settings keys (the metric fallback
-  included), and canvas creation. The headless form of the canvas
+  included), and canvas creation. The startup test also asserts
+  the startup pack itself — `pack_info()` shows the side, fill and
+  padx of §5 and no `before=`, pinning the second pack site, which
+  only a real `_build` reaches. The headless form of the canvas
   test patches `Figure` and `FigureCanvasTkAgg` (`create=True` where
   the names may not exist) and asserts the Figure's arguments and
   that `mpl_connect` binds the click handler — it proves the calls;
@@ -408,10 +448,14 @@ the toggle-off and Difficulty special cases), the Clear decision
 (every active chart filter → the reset difficulty and the stripped
 query; pin its early return — a Clear with nothing active is a
 complete no-op), and the click-zone computation. The zone function
-takes the values of `theme.CHART_MIN_CLICK_FRACTION` and the `1.25`
-axis multiplier as parameters — `library_data` imports no theme, and
-the fraction is presentation tuning of the same kind as the bar
-colours — and returns `axis_max` alongside the bars, so the window's
+takes three theme-fed values as parameters — the values of
+`theme.CHART_MIN_CLICK_FRACTION` and `theme.CHART_BAR_HEIGHT` and
+the `1.25` axis multiplier — because `library_data` imports no
+theme, and all three are presentation tuning of the same kind as
+the bar colours. It derives each bar's y-coordinates from the bar
+positions and the bar height rather than reading them back from
+the drawn matplotlib bars (which would drag presentation objects
+into `library_data`), and returns `axis_max` alongside the bars, so the window's
 `set_xlim` and the click widths stay one source of truth. Bar colours
 themselves stay in the window code for the same reason. The app calls
 the new functions from the existing methods, and the tests that build
@@ -441,21 +485,33 @@ describes. Specifically:
   re-points at the component, the matplotlib-missing fallback moves
   into `tests/test_ui_distribution.py`, and the settings round trip
   stays exactly as it is (the variables remain app-side, §5). The
-  six `MATPLOTLIB_AVAILABLE` patch sites re-point at
-  `distribution_panel.MATPLOTLIB_AVAILABLE`. The five
-  `SingleRefreshTests` become app-side tests of `apply_chart_filter`
-  (the batching now lives there), while the component tests assert
-  which `(difficulty, query)` a click or Clear passes to it.
+  six places that patch or assign `MATPLOTLIB_AVAILABLE` (five
+  `patch.object` sites in the distribution tests, one
+  save-and-restore assignment in `tests/test_library_visualizer.py`)
+  re-point at `distribution_panel.MATPLOTLIB_AVAILABLE`. The
+  `SingleRefreshTests` stay app-side, where the batching lives:
+  the click-triggered ones are rerouted through `apply_chart_filter`
+  as tests of it, and the two that exercise the search debounce's
+  interaction with batching remain tests of that machinery. The
+  component tests assert which `(difficulty, query)` a click or
+  Clear passes to the callback — and that a Clear with nothing
+  active does not call it at all, pinning §5's complete no-op at
+  the level where the moved code decides it.
 - A wiring guard, per the existing components' pattern: a live test
   asserting the component's four variables *are* the app's variables;
   that `build_panel` actually ran (the panel widget exists — without
   this, a forgotten call leaves the component silently inert behind
   its `None` guards); that `refresh_table` reaches `show_rows`; and
-  that **all six entry points** land on the component — the toolbar
+  that **all seven entry points** land on the component — the toolbar
   toggle, the panel's ✕, the View checkbutton's sync, the metric
-  radios, the banner's Clear button, and the refresh push. A
-  mock-level assertion pins the cursor nudge: a click and a Clear
-  each end with `icursor("end")` on the search entry.
+  radios, the banner's Clear button, the refresh push, and the chart
+  click (whose hookup the canvas test's `mpl_connect` assertion
+  covers at creation; this guard asserts the connected handler is
+  the component's). The cursor nudge is asserted where it now
+  lives: the app-side `apply_chart_filter` tests check that
+  applying a change ends with `icursor("end")` on the search entry,
+  and that a call with nothing to change neither refreshes nor
+  nudges.
 - Acceptance, in CI terms: the full suite green on the ubuntu jobs
   (live tests skipping there, as today) and the live tests green
   with zero skips on the `windows-ui` job. Plus a live smoke: toggle
@@ -528,5 +584,8 @@ on 2026-11-09 (see "Revision 1" at the top):
 *Written by Muse (Muse Spark). Revision 1 incorporates the
 reviews of Claude (Sonnet 5.5), Grok 4.5, ChatGPT-6, and GLM 5.3
 (Vibe — also the staging review signed "Mistral"); the resolutions
-in §7 were accepted by the owner on 2026-11-09. Implementation
-follows in the staged PRs of §6, each linking back here.*
+in §7 were accepted by the owner on 2026-11-09. Revision 2,
+incorporating the §6 staging amendments from GLM 5.3's adversarial
+re-check after Grok's fidelity audit confirmed Revision 1, followed
+the same day. Implementation follows in the staged PRs of §6, each
+linking back here.*
