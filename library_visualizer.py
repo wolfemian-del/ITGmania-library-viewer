@@ -37,9 +37,9 @@ __version__ = "1.0.0"
 
 import row_tints
 import theme
+from advanced_search import AdvancedSearch
 from course_builder import CourseBuilder
 from library_data import (
-    GRADE_OPTIONS,
     TAP_FIELDS,
     TECH_FIELDS,
     CHART_FILTER_FIELDS,
@@ -47,7 +47,6 @@ from library_data import (
     aggregate_difficulty_distribution,
     aggregate_meter_distribution,
     bpm_sort_key,
-    build_dialog_query,
     difficulty_sort_key,
     distribution_summary_stats,
     filter_texts_match,
@@ -61,7 +60,6 @@ from library_data import (
     parse_course_geometry,
     parse_search_query,
     replace_search_directive,
-    split_dialog_query,
     stats_index,
 )
 
@@ -215,8 +213,9 @@ class LibraryApp:
         self._drag_start_x = None
         # Dialogs: a window attribute is None while that dialog is closed. The course builder is a
         # separate component (course_builder.py) that owns its window and queue; it is created in
-        # _build, once the status variable exists.
-        self.advanced_search_window = None
+        # _build, once the status variable exists. The Advanced Search component
+        # (advanced_search.py) follows the same pattern.
+        self.advanced_search = None
         self.about_window = None
         self.course_builder = None
         self._last_saved_settings = copy.deepcopy(self.saved_settings)
@@ -287,6 +286,9 @@ class LibraryApp:
                                             self._library_rows_for_course,
                                             saved_geometry=self.course_geometry,
                                             report_geometry=self._course_geometry_changed)
+        # The Advanced Search component (advanced_search.py): it edits the search variable's
+        # text through its field form; the Advanced… button below calls its open_dialog directly.
+        self.advanced_search = AdvancedSearch(self.root, self._entry, self._button, self._combo, self.search_var)
         # The main window's X button goes through the same exit path as File → Exit (issue #87).
         self.root.protocol("WM_DELETE_WINDOW", self._close_app)
         paths = tk.Frame(self.root, bg=theme.BG_PANEL, padx=12, pady=10)
@@ -298,7 +300,7 @@ class LibraryApp:
         tk.Label(bar, text="Search", fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(side="left", padx=(0, 6))
         self.search_entry = self._entry(bar, "", self.search_var)
         self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
-        self._button(bar, "Advanced…", self.open_advanced_search).pack(side="left", padx=(0, 8))
+        self._button(bar, "Advanced…", self.advanced_search.open_dialog).pack(side="left", padx=(0, 8))
         self.pack_filter = self._combo(bar, self.pack_var, ["All packs"])
         self.pack_filter.pack(side="left", padx=4)
         self.type_filter = self._combo(bar, self.type_var, ["All types"])
@@ -400,7 +402,7 @@ class LibraryApp:
 
         edit_menu = tk.Menu(menubar, tearoff=False)
         edit_menu.add_command(label="Find", accelerator="Ctrl+F", command=self.focus_search)
-        edit_menu.add_command(label="Advanced search…", accelerator="Ctrl+Shift+F", command=self.open_advanced_search)
+        edit_menu.add_command(label="Advanced search…", accelerator="Ctrl+Shift+F", command=self.advanced_search.open_dialog)
         edit_menu.add_command(label="Clear search", accelerator="Esc", command=self.clear_search)
         menubar.add_cascade(label="Edit", menu=edit_menu)
 
@@ -437,8 +439,8 @@ class LibraryApp:
         self.root.configure(menu=menubar)
         self.root.bind("<Control-f>", lambda _event: self.focus_search())
         self.root.bind("<Control-F>", lambda _event: self.focus_search())
-        self.root.bind("<Control-Shift-f>", lambda _event: self.open_advanced_search())
-        self.root.bind("<Control-Shift-F>", lambda _event: self.open_advanced_search())
+        self.root.bind("<Control-Shift-f>", lambda _event: self.advanced_search.open_dialog())
+        self.root.bind("<Control-Shift-F>", lambda _event: self.advanced_search.open_dialog())
         self.root.bind("<Escape>", self._on_main_escape)
 
     @staticmethod
@@ -642,7 +644,7 @@ class LibraryApp:
         return self.rows
 
     def _dialog_is_open(self):
-        for window in (self.advanced_search_window,
+        for window in (self.advanced_search.window if self.advanced_search is not None else None,
                        self.course_builder.window if self.course_builder is not None else None,
                        self.about_window):
             if window is not None and window.winfo_exists():
@@ -1419,168 +1421,6 @@ class LibraryApp:
         # A new window does not always take keyboard focus (seen on Windows); without it Escape and Return
         # would go to the main window instead of closing this one.
         window.focus_force()
-
-    def open_advanced_search(self):
-        if self.advanced_search_window is not None and self.advanced_search_window.winfo_exists():
-            self.advanced_search_window.lift()
-            self.advanced_search_window.focus_force()  # raised from behind the main window: give it the keys too
-            return
-
-        window = tk.Toplevel(self.root)
-        self.advanced_search_window = window
-        window.title("Advanced Search")
-        window.geometry(theme.ADVANCED_SEARCH_GEOMETRY)
-        window.minsize(*theme.ADVANCED_SEARCH_MIN_SIZE)
-        window.configure(bg=theme.BG_WINDOW)
-        window.transient(self.root)
-
-        tk.Label(window, text="Advanced Search", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
-                 font=theme.FONT_DIALOG_TITLE).pack(anchor="w", padx=18, pady=(14, 2))
-        tk.Label(window, text="Set field filters and a minimum grade. Free-text terms are ANDed; quote phrases.",
-                 fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(anchor="w", padx=18, pady=(0, 10))
-
-        form = tk.Frame(window, bg=theme.BG_WINDOW, padx=18)
-        form.pack(fill="both", expand=True)
-
-        free_text_var = tk.StringVar()
-        title_var = tk.StringVar()
-        artist_var = tk.StringVar()
-        pack_var = tk.StringVar()
-        meter_min_var = tk.StringVar()
-        meter_max_var = tk.StringVar()
-        bpm_min_var = tk.StringVar()
-        bpm_max_var = tk.StringVar()
-        time_min_var = tk.StringVar()
-        time_max_var = tk.StringVar()
-        nps_min_var = tk.StringVar()
-        nps_max_var = tk.StringVar()
-        grade_min_var = tk.StringVar(value="Any")
-        other_var = tk.StringVar()
-
-        # Fill the boxes from the current search text; filters the boxes cannot show exactly
-        # go in "Other filters" so that Apply keeps them.
-        current = split_dialog_query(self.search_var.get())
-        free_text_var.set(current["free_text"])
-        title_var.set(current["title"])
-        artist_var.set(current["artist"])
-        pack_var.set(current["pack"])
-        meter_min_var.set(current["meter"][0])
-        meter_max_var.set(current["meter"][1])
-        bpm_min_var.set(current["bpm"][0])
-        bpm_max_var.set(current["bpm"][1])
-        time_min_var.set(current["time"][0])
-        time_max_var.set(current["time"][1])
-        nps_min_var.set(current["peak_nps"][0])
-        nps_max_var.set(current["peak_nps"][1])
-        if current["grade"]:
-            grade_min_var.set(current["grade"])
-        other_var.set(current["other"])
-
-        def add_text_row(parent, label_text, var):
-            row = tk.Frame(parent, bg=theme.BG_WINDOW)
-            row.pack(fill="x", pady=3)
-            tk.Label(row, text=label_text, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, width=12, anchor="w",
-                     font=theme.FONT_BODY).pack(side="left")
-            self._entry(row, "", var).pack(side="left", fill="x", expand=True)
-
-        def add_range_row(parent, label_text, min_var, max_var, hint=""):
-            row = tk.Frame(parent, bg=theme.BG_WINDOW)
-            row.pack(fill="x", pady=3)
-            tk.Label(row, text=label_text, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, width=12, anchor="w",
-                     font=theme.FONT_BODY).pack(side="left")
-            e1 = self._entry(row, "", min_var)
-            e1.pack(side="left", fill="x", expand=True)
-            tk.Label(row, text="to", fg=theme.TEXT_HINT, bg=theme.BG_WINDOW, padx=8, font=theme.FONT_BODY).pack(side="left")
-            e2 = self._entry(row, "", max_var)
-            e2.pack(side="left", fill="x", expand=True)
-            if hint:
-                tk.Label(row, text=hint, fg=theme.TEXT_HINT, bg=theme.BG_WINDOW, font=theme.FONT_SMALL, padx=6).pack(side="left")
-
-        add_text_row(form, "Text", free_text_var)
-        add_text_row(form, "Title", title_var)
-        add_text_row(form, "Artist", artist_var)
-        add_text_row(form, "Pack", pack_var)
-
-        tk.Frame(form, bg=theme.BG_INPUT, height=1).pack(fill="x", pady=10)
-
-        add_range_row(form, "Meter", meter_min_var, meter_max_var)
-        add_range_row(form, "BPM", bpm_min_var, bpm_max_var)
-        add_range_row(form, "Time", time_min_var, time_max_var, "e.g. 1:30 or 90")
-        add_range_row(form, "Peak NPS", nps_min_var, nps_max_var)
-
-        g_row = tk.Frame(form, bg=theme.BG_WINDOW)
-        g_row.pack(fill="x", pady=3)
-        tk.Label(g_row, text="Min Grade", fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, width=12, anchor="w",
-                 font=theme.FONT_BODY).pack(side="left")
-        g_options = ["Any"] + list(GRADE_OPTIONS)
-        self._combo(g_row, grade_min_var, g_options).pack(side="left")
-
-        tk.Frame(form, bg=theme.BG_INPUT, height=1).pack(fill="x", pady=10)
-        add_text_row(form, "Other filters", other_var)
-        tk.Label(form, text="Kept from your search: filters without a box above. Edit or clear them here.",
-                 fg=theme.TEXT_HINT, bg=theme.BG_WINDOW, font=theme.FONT_SMALL, anchor="w").pack(fill="x")
-
-        preview_frame = tk.Frame(window, bg=theme.BG_PREVIEW, padx=12, pady=8)
-        preview_frame.pack(fill="x", padx=18, pady=(10, 4))
-        tk.Label(preview_frame, text="Query:", fg=theme.TEXT_MUTED, bg=theme.BG_PREVIEW,
-                 font=theme.FONT_SMALL).pack(side="left", padx=(0, 6))
-        query_preview = tk.Label(preview_frame, text="", fg=theme.TEXT_LABEL, bg=theme.BG_PREVIEW,
-                                 font=theme.FONT_MONO_BOLD, anchor="w")
-        query_preview.pack(side="left", fill="x", expand=True)
-
-        def build_query():
-            return build_dialog_query({
-                "free_text": free_text_var.get(), "title": title_var.get(),
-                "artist": artist_var.get(), "pack": pack_var.get(),
-                "meter": (meter_min_var.get(), meter_max_var.get()),
-                "bpm": (bpm_min_var.get(), bpm_max_var.get()),
-                "time": (time_min_var.get(), time_max_var.get()),
-                "peak_nps": (nps_min_var.get(), nps_max_var.get()),
-                "grade": grade_min_var.get(), "other": other_var.get(),
-            })
-
-        def update_preview(*_):
-            query_preview.config(text=build_query())
-
-        for v in (free_text_var, title_var, artist_var, pack_var, meter_min_var, meter_max_var,
-                  bpm_min_var, bpm_max_var, time_min_var, time_max_var, nps_min_var, nps_max_var, grade_min_var,
-                  other_var):
-            v.trace_add("write", update_preview)
-        update_preview()
-
-        btn_row = tk.Frame(window, bg=theme.BG_WINDOW, padx=18, pady=12)
-        btn_row.pack(fill="x", side="bottom")
-
-        def apply_search():
-            q = build_query()
-            self.search_var.set(q)
-            window.destroy()
-
-        def clear_fields():
-            for v in (free_text_var, title_var, artist_var, pack_var, meter_min_var, meter_max_var,
-                      bpm_min_var, bpm_max_var, time_min_var, time_max_var, nps_min_var, nps_max_var,
-                      other_var):
-                v.set("")
-            grade_min_var.set("Any")
-
-        self._button(btn_row, "Apply", apply_search, primary=True).pack(side="right", padx=(6, 0))
-        self._button(btn_row, "Close", window.destroy).pack(side="right")
-        self._button(btn_row, "Clear", clear_fields).pack(side="left")
-
-        def _close(_event=None):
-            window.destroy()
-            return "break"
-
-        def _apply_and_close(_event=None):
-            apply_search()
-            return "break"
-
-        window.bind("<Escape>", _close)
-        window.bind("<Return>", _apply_and_close)
-        # A new window does not always take keyboard focus (seen on Windows); without it Escape and Return
-        # would go to the main window instead of this one.
-        window.focus_force()
-
 
 def main():
     if tk is None:

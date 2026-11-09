@@ -620,58 +620,8 @@ class RefreshGenerationTests(unittest.TestCase):
 
 
 class DialogKeyBindingTests(unittest.TestCase):
-    def test_open_advanced_search_binds_escape_and_return(self):
-        instance = object.__new__(app.LibraryApp)
-        instance.root = Mock()
-        instance.advanced_search_window = None
-        instance.search_var = Mock()
-        instance.search_entry = Mock()
-
-        mock_window = Mock()
-        bindings = {}
-        def mock_bind(seq, func):
-            bindings[seq] = func
-        mock_window.bind.side_effect = mock_bind
-        mock_tk = Mock()
-        mock_tk.Toplevel.return_value = mock_window
-        mock_ttk = Mock()
-
-        with patch.object(app, "tk", mock_tk), patch.object(app, "ttk", mock_ttk):
-            instance._button = Mock(return_value=Mock())
-            instance.open_advanced_search()
-
-        self.assertIn("<Escape>", bindings)
-        self.assertIn("<Return>", bindings)
-        # The window takes keyboard focus itself, so Escape and Return reach it without a click first.
-        mock_window.focus_force.assert_called_once()
-
-        # Escape closes the dialog without touching the main search text and stops the key event.
-        res_esc = bindings["<Escape>"]()
-        self.assertEqual(res_esc, "break")
-        mock_window.destroy.assert_called_once()
-        instance.search_var.set.assert_not_called()
-
-        # Return writes the built query to the main search box, closes the dialog and stops the key event.
-        mock_window.destroy.reset_mock()
-        res_ret = bindings["<Return>"]()
-        self.assertEqual(res_ret, "break")
-        instance.search_var.set.assert_called_once()
-        mock_window.destroy.assert_called_once()
-
-
-    def test_opening_a_dialog_that_is_already_open_raises_it_and_gives_it_focus(self):
-        # The Build course half of this test lives in tests/test_course_builder.py,
-        # with the component it now tests.
-        instance = object.__new__(app.LibraryApp)
-        existing = Mock()
-        existing.winfo_exists.return_value = True
-        instance.advanced_search_window = existing
-        mock_tk = Mock()
-        with patch.object(app, "tk", mock_tk):
-            instance.open_advanced_search()
-        existing.lift.assert_called_once()
-        existing.focus_force.assert_called_once()
-        mock_tk.Toplevel.assert_not_called()  # no second window
+    # The Advanced Search dialog tests live in tests/test_advanced_search.py,
+    # with the component they now test.
 
     def test_main_escape_clears_search_only_when_no_dialog_is_open(self):
         instance = object.__new__(app.LibraryApp)
@@ -681,7 +631,8 @@ class DialogKeyBindingTests(unittest.TestCase):
         closed_window = Mock()
         closed_window.winfo_exists.return_value = False
 
-        instance.advanced_search_window = None
+        instance.advanced_search = Mock()
+        instance.advanced_search.window = None
         instance.about_window = None
         instance.course_builder = Mock()
         instance.course_builder.window = closed_window
@@ -694,14 +645,34 @@ class DialogKeyBindingTests(unittest.TestCase):
         instance.clear_search.assert_not_called()  # Build course open
 
         instance.course_builder.window = None
-        instance.advanced_search_window = open_window
+        instance.advanced_search.window = open_window
         instance._on_main_escape()
         instance.clear_search.assert_not_called()  # Advanced Search open
 
-        instance.advanced_search_window = None
+        instance.advanced_search.window = None
         instance.about_window = open_window
         instance._on_main_escape()
         instance.clear_search.assert_not_called()  # About open
+
+    def test_live_app_constructs_the_advanced_search_component_with_its_search_variable(self):
+        # Proposal 0004's wiring guard: all five constructor inputs are required, so a
+        # forgotten one fails loudly at startup; this catches passing the wrong object.
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed in this environment")
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            with patch.object(app.LibraryApp, "_settings_file_path", return_value=settings_path):
+                try:
+                    root = app.tk.Tk()
+                except app.tk.TclError:
+                    self.skipTest("Tk cannot open a display in this environment")
+                try:
+                    root.withdraw()
+                    application = app.LibraryApp(root)
+                    self.assertIsNotNone(application.advanced_search)
+                    self.assertIs(application.advanced_search._search_var, application.search_var)
+                finally:
+                    root.destroy()
 
 
 class AboutDialogTests(unittest.TestCase):
