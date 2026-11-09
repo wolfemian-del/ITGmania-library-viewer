@@ -20,7 +20,7 @@ On Linux and macOS, choose the cache and profile paths with **Browse…**; the a
 
 - Select the cache output folder, where cache files are directly inside `Cache/Songs`. The original `Songs/Pack/Song` directory tree is not the cache and is not scanned recursively. If that tree is selected, the app reports that no files were found at the folder level and suggests the cache folder.
 - The status line reports the number of files scanned and charts parsed, plus unreadable files and files with no recognized charts. A cache file needs chart metadata including `STEPSTYPE` and `DIFFICULTY` to appear in the table.
-- Scores are matched by normalized song directory, steps type, and difficulty, without regard to letter case. When there are multiple scores for a chart, the highest `PercentDP` is shown. A profile with no `SongScores` is valid and simply has no matched scores.
+- Scores are matched by normalized song directory, steps type, and difficulty, without regard to letter case; Edit charts are matched by description as well, because several Edits can share a directory, steps type, and difficulty (falling back to the shared Edit score when the cached chart has no description). When there are multiple scores for a chart, the highest `PercentDP` is shown. A profile with no `SongScores` is valid and simply has no matched scores.
 - If `Stats.xml` is malformed, incomplete, or cannot be read, loading stops and the app displays an error. Unreadable individual cache files are skipped and included in the status count.
 
 ## Browse
@@ -50,7 +50,7 @@ On Linux and macOS, choose the cache and profile paths with **Browse…**; the a
 
 New courses contain a `#COURSE:title;` line followed by one `#SONG:path:difficulty:;` line per queued chart. Existing courses can use either two-field (`#SONG:path:diff;`) or three-field directives, or `#SONGSELECT`. Titles, paths, and difficulties cannot contain semicolons, colons, newlines, or `//` comment markers. The app does not edit existing chart entries or modifiers when appending.
 
-The table includes chart meter, peak NPS, radar note counts, the player's highest `PercentDP` score for the chart, grade, play count, last played date, best-score tap judgments and combo, and cached tech counts. `Stats.xml` scores are matched to cached charts by song directory, steps type, and difficulty.
+The table includes chart meter, peak NPS, radar note counts, the player's highest `PercentDP` score for the chart, grade, play count, last played date, best-score tap judgments and combo, and cached tech counts. `Stats.xml` scores are matched to cached charts by song directory, steps type, and difficulty (Edit charts also by description).
 
 The **Time** column shows cached song music length as `minutes:seconds`; CSV exports retain that value in seconds. The **BPM** column shows the song's tempo range from the cache (`#BPMS`, with `#DISPLAYBPM` when set). Sorting by BPM uses maximum then minimum tempo so a mostly-fast chart with a brief slow section ranks with other fast charts. Grade sorts in ITGmania tier order (S+ before S before S−, and so on), not alphabetically. The course builder shows each queued song's time and the summed course length.
 
@@ -62,7 +62,7 @@ The app remembers the selected data paths, column order, visibility, and widths,
 
 ## Changing the look
 
-Every color and font the window uses is defined, with a note on what it is for, in `theme.py`. To restyle the app, edit the values there and restart it; the window code only refers to the names (for example `theme.BG_WINDOW`), and a test fails if a color or font is typed directly into the window code (`library_visualizer.py`, `course_builder.py`, `row_tints.py`, or `advanced_search.py`) again. `theme.DIFFICULTY_COLORS` controls both the distribution chart bars and the song table row tints. Row heights and panel widths are fixed numbers in `library_visualizer.py`, so a much larger font may also need those adjusted.
+Every color and font the window uses is defined, with a note on what it is for, in `theme.py`. To restyle the app, edit the values there and restart it; the window code only refers to the names (for example `theme.BG_WINDOW`), and a test fails if a color or font is typed directly into the window code (`library_visualizer.py`, `course_builder.py`, `row_tints.py`, or `advanced_search.py`) again. `theme.DIFFICULTY_COLORS` controls both the distribution chart bars and the song table row tints. Row heights, panel widths, and window sizes are likewise fixed numbers in `theme.py`, so a much larger font may also need those adjusted.
 
 ## Development checks
 
