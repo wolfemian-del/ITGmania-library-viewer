@@ -136,10 +136,10 @@ class AdvancedSearchGeometryAppTests(unittest.TestCase):
                 self.assertIsNone(app.LibraryApp._valid_advanced_search_geometry(value))
 
     def test_the_floor_is_this_dialogs_own_minimum_not_the_course_windows(self):
-        # Big enough for Advanced Search (480x520) but below the course floor (760 wide).
+        # Big enough for Advanced Search (480x520) but below the course floor (700 wide).
         self.assertEqual(app.LibraryApp._valid_advanced_search_geometry("500x530+10+10"), "500x530+10+10")
         self.assertIsNone(app.LibraryApp._valid_course_geometry("500x530+10+10"))
-        # Big enough for the course window (480 tall) but below this dialog's floor (520).
+        # Big enough for the course window (440 tall) but below this dialog's floor (520).
         self.assertEqual(app.LibraryApp._valid_course_geometry("900x500+10+10"), "900x500+10+10")
         self.assertIsNone(app.LibraryApp._valid_advanced_search_geometry("900x500+10+10"))
 
