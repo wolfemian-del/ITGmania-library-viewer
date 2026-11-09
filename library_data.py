@@ -17,6 +17,15 @@ DIFFICULTY_RANK = {difficulty.casefold(): index for index, difficulty in enumera
 RADAR_FIELDS = ("Stream", "Voltage", "Air", "Freeze", "Chaos", "Notes",
                 "TapsAndHolds", "Jumps", "Holds", "Mines", "Hands", "Rolls",
                 "Lifts", "Fakes")
+RADAR_COUNT_FIELDS = {
+    "jumps": "Jumps",
+    "holds": "Holds",
+    "rolls": "Rolls",
+    "mines": "Mines",
+    "hands": "Hands",
+    "lifts": "Lifts",
+    "taps": "Taps/Holds",
+}
 TAP_FIELDS = ("W1", "W2", "W3", "W4", "W5", "Miss")
 GRADE_NAMES = {
     "Tier01": "★★★★", "Tier02": "★★★", "Tier03": "★★", "Tier04": "★",
@@ -36,6 +45,7 @@ __all__ = [
     "DIFFICULTY_ORDER",
     "GRADE_OPTIONS",
     "GRADE_NAMES",
+    "RADAR_COUNT_FIELDS",
     "RADAR_FIELDS",
     "SEARCH_FIELD_ALIASES",
     "TAP_FIELDS",
@@ -594,6 +604,24 @@ SEARCH_FIELD_ALIASES = {
     "nps": "peak_nps",
     "peak_nps": "peak_nps",
     "peaknps": "peak_nps",
+    "jumps": "jumps",
+    "jump": "jumps",
+    "holds": "holds",
+    "hold": "holds",
+    "rolls": "rolls",
+    "roll": "rolls",
+    "mines": "mines",
+    "mine": "mines",
+    "hands": "hands",
+    "hand": "hands",
+    "lifts": "lifts",
+    "lift": "lifts",
+    "taps": "taps",
+    "tap": "taps",
+    "taps_holds": "taps",
+    "tapsholds": "taps",
+    "tapsandholds": "taps",
+    "taps/holds": "taps",
     **{f.casefold(): f.casefold() for f in TECH_FIELDS},
 }
 
@@ -860,6 +888,10 @@ def match_chart_query(row: dict, query: str | dict) -> bool:
         elif field == "peak_nps":
             b = parse_numeric_bound(raw_val)
             if not b or not _compare_bound(b, row.get("Peak NPS")):
+                return False
+        elif field in RADAR_COUNT_FIELDS:
+            b = parse_numeric_bound(raw_val)
+            if not b or not _compare_bound(b, row.get(RADAR_COUNT_FIELDS[field])):
                 return False
         elif field in {f.casefold() for f in TECH_FIELDS}:
             canonical_field = next(f for f in TECH_FIELDS if f.casefold() == field)
