@@ -2,11 +2,66 @@
 
 | | |
 |---|---|
-| **Status** | Draft — for review |
+| **Status** | Draft — Revision 1 (panel review complete; the resolutions in §7 were accepted by the owner on 2026-11-09) |
 | **Author** | Muse (Muse Spark) |
 | **Date** | 2026-11-09 |
 | **Base** | main `a94aa1b` (after PR #108; v1.1.0 tagged) |
 | **Related** | The split sequence adopted after proposal 0001 (Course Builder → Advanced Search → **distribution** → settings/snapshot). Measurements in §2 are from a survey by Claude (Sonnet 5.5), 2026-11-09, re-verified against this base by the author. No dedicated issue; the implementation PRs will be the vehicles, as with proposals 0002 and 0004. |
+
+---
+
+## Revision 1 (2026-11-09, from the panel review)
+
+Reviewed by Claude (Sonnet 5.5), Grok 4.5, ChatGPT-6, and GLM 5.3
+(Vibe — which also produced the staging review signed "Mistral": one
+model, two separately-prompted reports). All four recommend accepting
+the proposal. The owner accepted the resolutions below on 2026-11-09.
+The changes, each folded into the text so later readers see the
+corrected version:
+
+- **Q3 overturned (Claude):** the component does not receive the
+  batching context manager. It computes the new filter values and
+  calls an app-side `apply_chart_filter(difficulty=None, query=None)`
+  callback; `None` means "leave it alone", so the app makes exactly
+  today's writes, inside its own batching, and nudges the cursor
+  itself. Claude verified the equivalence with a prototype run (6
+  click and 3 Clear scenarios; writes, refresh counts and cursor
+  nudges matched). `search_entry` leaves the design entirely.
+- **Q5 overturned (Claude):** `_build`'s order is untouched. The
+  component receives the table frame through a `sibling_frame`
+  callable, resolved when the panel is shown — avoiding an inferred
+  risk that moving the frame's creation line would change the Tab
+  focus order.
+- **Q6 simplified (Claude):** the hide path calls the panel frame's
+  own `update_idletasks()` (application-wide in Tk). Neither a root
+  input nor `winfo_toplevel()` is needed.
+- **Q4 amended (Claude):** `build_panel` also sets the toolbar
+  button's initial label, so the "Distribution ◀/▶" strings live in
+  one place.
+- **Q2 simplified (Claude):** the app's `_filter_rows` is passed
+  directly as the pull callable — `ignore_metric` is already its
+  first parameter, so no wrapper is needed.
+- **§2 corrected (Claude, Grok, GLM):** the method block spans 254
+  lines of file, of which the eleven method bodies total 244; the
+  method list now follows the file's order; `dist_summary_var` is
+  created in `_build_distribution_panel`, not `__init__`; the
+  visibility funnel claim is qualified (the startup pack and initial
+  label are set directly in `_build`); and three distribution tests
+  live in `tests/test_library_visualizer.py`, not one.
+- **§6 expanded (Claude; GLM 5.3's staging review):** Step 1 gains a
+  hide→show test pinning the re-show's full pack arguments, a
+  metric-change effect test, and a bar-colour/edge test, and marks
+  the canvas-creation and startup-validation gaps as live tests;
+  Step 2's click-zone function takes the theme fraction and axis
+  multiplier as parameters and returns `axis_max`, pins Clear's
+  no-op early return, and re-points the tests' `ChartBar`
+  references; Step 3's wiring guard covers all six entry points,
+  asserts the cursor nudge and that `build_panel` ran, and its
+  acceptance criterion is stated in CI terms. The row-push method is
+  renamed `show_rows` (Tk widgets already have an `update()`).
+- **Q2's rejected alternative reworded:** the eager push's cost is an
+  extra filter pass per refresh, stated as unmeasured; the argument
+  for the lazy pull is the laziness itself, not a measured cost.
 
 ---
 
@@ -32,11 +87,11 @@ see in one place, as with `CourseBuilder` and `AdvancedSearch`.
 ## 2. Current State (measured on main `a94aa1b`)
 
 - [CODE] The panel is 11 methods in one block of `library_visualizer.py`
-  (lines 1118–1371, 244 lines): `_build_distribution_panel`,
-  `_ensure_distribution_canvas`, `_set_distribution_visible`,
-  `toggle_distribution_panel`, `_sync_distribution_toggle`,
-  `_on_distribution_metric_changed`, `_on_chart_click`,
-  `clear_chart_filter`, `_metric_filter_present`,
+  spanning lines 1118–1371 (254 lines of file; the method bodies total
+  244): `_build_distribution_panel`, `_ensure_distribution_canvas`,
+  `_set_distribution_visible`, `toggle_distribution_panel`,
+  `_sync_distribution_toggle`, `_on_distribution_metric_changed`,
+  `clear_chart_filter`, `_on_chart_click`, `_metric_filter_present`,
   `_distribution_rows`, and `_update_distribution_panel` (105 lines on
   its own). The `ChartBar` NamedTuple sits at lines 89–95. Collateral
   code outside the block: the matplotlib import (26–33), state in
@@ -44,14 +99,17 @@ see in one place, as with `CourseBuilder` and `AdvancedSearch`.
   menu checkbutton, two settings keys, and one call from
   `refresh_table` — roughly 55 further lines.
 - [CODE] It owns 12 attributes: the variables `show_distribution_panel`
-  (BooleanVar) and `distribution_metric` (StringVar) plus
-  `dist_summary_var`; the widgets `dist_panel`, `dist_chart_frame`,
-  `dist_banner_frame`, `dist_banner_label`; the matplotlib trio
-  `dist_canvas`, `dist_fig`, `dist_ax`; and the data `_current_dist_bars`
-  (the click map) and `_last_visible_rows`. A 13th, `dist_button`, is
-  shared: the toolbar creates it, the panel rewrites its label (◀/▶).
-  State fills in three stages — variables in `__init__`, widgets in
-  `_build_distribution_panel`, the figure lazily on first draw.
+  (BooleanVar) and `distribution_metric` (StringVar); `dist_summary_var`
+  (a third variable, created later — see the stages below); the widgets
+  `dist_panel`, `dist_chart_frame`, `dist_banner_frame`,
+  `dist_banner_label`; the matplotlib trio `dist_canvas`, `dist_fig`,
+  `dist_ax`; and the data `_current_dist_bars` (the click map) and
+  `_last_visible_rows`. A 13th, `dist_button`, is shared: the toolbar
+  creates it, the panel rewrites its label (◀/▶). State fills in three
+  stages — the two settings variables in `__init__`, the widgets
+  (including `dist_summary_var`, which `__init__` only declares as
+  `None`) in `_build_distribution_panel`, and the figure lazily on
+  first draw.
 - [CODE] Outside references from the panel methods, counted by AST:
   `search_var` (8 uses, read *and* written), `diff_var` (6, read and
   written), `_button` (2), `_save_settings` (2), `dist_button` (2),
@@ -68,11 +126,13 @@ see in one place, as with `CourseBuilder` and `AdvancedSearch`.
   `_sync_distribution_toggle` (Tk has already flipped the variable);
   the metric radio buttons call `_on_distribution_metric_changed`; the
   banner's Clear button calls `clear_chart_filter`; a matplotlib
-  `button_press_event` calls `_on_chart_click`. All visibility changes
-  already funnel through `_set_distribution_visible`, which sets the
-  variable, packs or forgets the panel, rewrites the toolbar label,
-  redraws (or calls `update_idletasks()` on hide), and saves settings.
-  There is no keyboard shortcut.
+  `button_press_event` calls `_on_chart_click`. After startup, all
+  visibility changes funnel through `_set_distribution_visible`, which
+  sets the variable, packs or forgets the panel, rewrites the toolbar
+  label, redraws (or calls `update_idletasks()` on hide), and saves
+  settings. The startup pack and the initial toolbar label are set
+  directly in `_build`, outside that funnel — so the label text
+  currently lives in two places. There is no keyboard shortcut.
 - [CODE] Rows flow both ways. The push is the visible list from
   `refresh_table`, stored in `_last_visible_rows` even while the panel
   is hidden. The pull: when the chart's own metric is the active filter,
@@ -99,20 +159,26 @@ see in one place, as with `CourseBuilder` and `AdvancedSearch`.
   `min_click_width`, the clickable rule) in `_update_distribution_panel`.
 - [CODE] Window-side coverage: 21 tests in `tests/test_ui_distribution.py`,
   built on a `make_app` fixture that hand-sets about 20 attributes on a
-  bare `LibraryApp`. `_on_chart_click` is heavily covered, including
-  real-geometry clicks through matplotlib's Agg backend. Untested today:
-  the hide path (pack_forget, the ▶ label, `update_idletasks`), the
+  bare `LibraryApp`, plus three distribution tests in
+  `tests/test_library_visualizer.py` (the settings round trip, Clear,
+  and the matplotlib-missing fallback). `_on_chart_click` is heavily
+  covered, including real-geometry clicks through matplotlib's Agg
+  backend. Untested today: the hide path (pack_forget, the ▶ label,
+  `update_idletasks`) and the re-show's pack arguments, the
   empty-state "No charts match" branch, startup validation of the two
   settings, canvas creation (the Figure and `mpl_connect`; only the
-  matplotlib-missing path runs), banner pack/pack_forget, and
-  `_sync_distribution_toggle`. Six `MATPLOTLIB_AVAILABLE` patch sites
-  exist: five in the distribution tests, one in
-  `tests/test_library_visualizer.py`.
+  matplotlib-missing path runs), banner pack/pack_forget,
+  `_sync_distribution_toggle`, the *effect* of a metric change, bar
+  colours and the active-bar edge, and the cursor nudge after a click
+  or Clear. Six `MATPLOTLIB_AVAILABLE` patch sites exist: five in the
+  distribution tests, one in `tests/test_library_visualizer.py`.
 - [CODE] CI coupling: the `windows-ui` job runs
   `python -m unittest discover -s tests -p test_ui_distribution.py`.
   The test file's name is load-bearing; renaming it needs a workflow
   edit, which only the owner can make (the app bot has no Workflows
-  permission).
+  permission). The headless ubuntu jobs run the whole suite but skip
+  the live tests by design, so a live test placed in any other file
+  runs in no CI job that has a display.
 
 ## 3. The Decision: The Component's Contract
 
@@ -122,8 +188,8 @@ A new module `distribution_panel.py` holds a component that owns the
 panel end to end, mirroring `CourseBuilder` and `AdvancedSearch`: the
 twelve attributes, the widget building, the drawing, the click and
 Clear handlers, and the visibility funnel. The constructor receives the
-seams below. Each seam is stated with its precedent; the ones with a
-real alternative are repeated as questions in §7.
+seams below. Each seam is stated with its precedent; the ones that had
+a real alternative are recorded as resolved questions in §7.
 
 - **The four Tk variables, passed directly.** `search_var`, `diff_var`,
   `show_distribution_panel` and `distribution_metric` are each assigned
@@ -138,30 +204,41 @@ real alternative are repeated as questions in §7.
   validation, and keeps reading them in `_save_settings`; the component
   receives them as inputs. Settings handling does not move (§5).
 - **Rows in: a push, plus one pull callable.** `refresh_table` calls
-  the component's `update(visible_rows)` — today's
-  `_update_distribution_panel` under its own name. For the pull, the
-  component receives `rows_without_metric`, a callable wrapping the
-  app's `_filter_rows(ignore_metric=…)` — the `selected_rows` /
-  `library_rows` precedent from proposal 0001, used because
-  `_filter_rows` itself serves the table as well and stays app-side.
+  the component's `show_rows(visible_rows)` — today's
+  `_update_distribution_panel` renamed, because Tk widgets already
+  have an `update()` and the two would be easy to confuse. For the
+  pull, the component receives the app's `_filter_rows` itself as the
+  callable: its first parameter is already `ignore_metric`, so the
+  component calls it with the metric when the chart's own filter is
+  present — the callable precedent from proposal 0001
+  (`selected_rows` / `library_rows`), with no wrapper. `_filter_rows`
+  stays app-side because it also serves the table.
   `_metric_filter_present` needs only the two variables and
   `library_data`, so it moves into the component as-is.
-- **Filter changes out: the batching context manager, passed in.**
-  A click and a Clear must change `diff_var` and `search_var`
-  atomically — one refresh, not several — and that machinery
-  (`_batched_filter_changes`, with its debounce cancellation) is the
-  app's. The component receives the bound context manager as a
-  constructor input and wraps its writes in it, exactly as today; the
-  `search_entry` cursor nudge stays in the component, with the entry
-  widget handed over at build time (§4). The alternative — one
-  `apply_chart_filter(diff, query)` callback that absorbs the batching
-  and the nudge — is Q3 in §7; it is fewer inputs but makes the app
-  write `diff_var` even when a click changed only the query, a small
-  behaviour delta this proposal prefers not to smuggle into a move.
-- **Reporting out: a `save_settings` callable.** `_set_distribution_visible`
-  and `_on_distribution_metric_changed` save settings today. The
-  component receives the app's `_save_settings` as a callable input —
-  the report-callable pattern from proposal 0003 (`report_geometry`).
+- **Filter changes out: an `apply_chart_filter` callback.** A click
+  and a Clear must change `diff_var` and `search_var` atomically — one
+  refresh, not several — and the batching machinery that guarantees
+  that is the app's. The component computes the new values (after §6's
+  extraction, via the `library_data` decision functions, which return
+  exactly those two values) and calls the app's
+  `apply_chart_filter(difficulty=None, query=None)`: a value left as
+  `None` is not written, so the app makes exactly the writes today's
+  code makes — a Meter click writes only the query, a Difficulty click
+  writes the difficulty and, when it changed, the query — inside
+  `_batched_filter_changes()`, and then moves the search cursor to the
+  end, as today. The app-side method is about six lines, and the
+  "write the variables only inside a batch" rule gets a single owner
+  instead of travelling with the component as an unwritten convention.
+  The draft's alternative — handing the component the bound context
+  manager, plus the search entry for the nudge — was overturned in
+  review (§7, Q3): the callback reproduces today's behaviour
+  write-for-write (prototype-verified in review) with a smaller
+  component, and the component only ever *reads* the two variables.
+- **Reporting out: a `save_settings` callable.**
+  `_set_distribution_visible` and `_on_distribution_metric_changed`
+  save settings today. The component receives the app's
+  `_save_settings` as a callable input — the report-callable pattern
+  from proposal 0003 (`report_geometry`).
 - **The widget factories.** The panel builds its ✕ and Clear buttons
   with the app's themed `_button`; it is passed in, as both existing
   components receive it. Everything else the panel builds with plain
@@ -189,8 +266,8 @@ constructions — before the toolbar button (line ~321), the menubar
 (line 377) and every other entry point that names it, so all entry
 points can be repointed directly, per proposal 0004's Q2 resolution.
 Its constructor inputs are the state seams: `button_factory`,
-`search_var`, `diff_var`, `show_var`, `metric_var`,
-`rows_without_metric`, `batched_filter_changes`, `save_settings` —
+`search_var`, `diff_var`, `show_var`, `metric_var`, the pull callable
+(the app's `_filter_rows`), `apply_chart_filter`, `save_settings` —
 eight inputs, stated here per the proposal 0001 safeguard. (For scale:
 `CourseBuilder` sits at seven after two growth steps; this panel
 genuinely has more contact with the app, and the contract says so
@@ -198,45 +275,42 @@ openly instead of hiding it.)
 
 **Widget building.** The widgets cannot be built at construction time:
 their parent, `content_frame`, is created later in `_build`, and the
-show path packs the panel `before` the table frame. So the component
-has a `build_panel(content_frame, table_frame, toolbar_button,
-search_entry)` step that the app calls where `_build_distribution_panel`
-is called today. It creates the panel's widgets (today's method body,
-unchanged), stores those four widget-time references, and performs the
-startup pack if the show variable is set — with today's arguments,
-which omit `before=…`; the pack order still ends up panel-before-table
-because the table frame is packed after, exactly as today. One
-deliberate, behaviour-neutral change makes this possible: the table
-frame's *creation* line moves above the panel build call (its pack
-call does not move), so `table_frame` exists to be handed over. Frame
-creation has no visual effect; no pack call changes order or
-arguments. Reviewers who prefer it can instead give the component a
-sibling callable — Q5 in §7.
+show path packs the panel `before` the table frame, which is also
+created later. So the component has a
+`build_panel(content_frame, toolbar_button, sibling_frame)` step that
+the app calls where `_build_distribution_panel` is called today.
+`sibling_frame` is a zero-argument callable returning the app's table
+frame, resolved only when the panel is shown — `_build`'s order is
+not changed at all. `build_panel` creates the panel's widgets
+(today's method body, unchanged), stores those widget-time
+references, sets the toolbar button's initial label from the show
+variable (so the "Distribution ◀/▶" strings exist only in the
+component), and performs the startup pack if the show variable is
+set — with today's arguments, which omit `before=…`; the pack order
+still ends up panel-before-table because the table frame is packed
+after, exactly as today.
 
 **Visibility.** `set_visible(bool)`, `toggle()` and `sync_toggle()`
 are today's three methods, moved: the toolbar button and the panel's
 ✕ point at `toggle`, the View checkbutton at `sync_toggle` with the
 shared show variable, and `set_visible` remains the single funnel —
-setting the variable, packing or forgetting, rewriting the toolbar
-button's label (the button reference arrives via `build_panel`),
-redrawing from the stored rows on show, calling the root's
-`update_idletasks()` on hide, and invoking the `save_settings`
-callable. The component reaches the root for `update_idletasks()`
-through the panel frame's `winfo_toplevel()`, or takes the root as a
-ninth input; the draft leaves this to Q6, with a slight preference for
-`winfo_toplevel()` — the panel frame's toplevel *is* the root, and it
-keeps the contract at eight.
+setting the variable, packing (with `before=sibling_frame()`) or
+forgetting, rewriting the toolbar button's label, redrawing from the
+stored rows on show, calling the panel frame's own
+`update_idletasks()` on hide (the call is application-wide in Tk, so
+no root reference is needed), and invoking the `save_settings`
+callable.
 
-**Updating and clicking.** `update(visible_rows)` is
-`_update_distribution_panel` moved: store the rows, return early while
-hidden, compute chart rows (stored rows, or the
-`rows_without_metric` pull when the chart's own filter is present),
-banner, summary, canvas, bars. `_on_chart_click` and
-`clear_chart_filter` keep today's shape: compute the new filter values
-(after §6's extraction, by calling the `library_data` decision
-functions), apply them to the variables inside the
-`batched_filter_changes` block, then nudge the cursor. The matplotlib
-guarded import and `MATPLOTLIB_AVAILABLE` move into
+**Updating and clicking.** `show_rows(visible_rows)` is
+`_update_distribution_panel` moved: store the rows *first* (today's
+ordering — the stored copy updates even while the panel is hidden),
+return early while hidden, compute chart rows (stored rows, or the
+`_filter_rows` pull when the chart's own filter is present), banner,
+summary, canvas, bars. `_on_chart_click` and `clear_chart_filter`
+keep today's shape, except that applying the result goes through the
+`apply_chart_filter` callback: compute the decision, call the
+callback with whichever of (difficulty, query) changed, done. The
+matplotlib guarded import and `MATPLOTLIB_AVAILABLE` move into
 `distribution_panel.py` with the canvas code; the app keeps no
 matplotlib import.
 
@@ -247,9 +321,13 @@ are inputs now), the matplotlib import block, and seven `library_data`
 imports that only the panel used (the three aggregates,
 `distribution_summary_stats`, `get_active_chart_filters`,
 `filter_texts_match`, `replace_search_directive`). `CHART_FILTER_FIELDS`
-and `parse_search_query` stay — `_filter_rows` uses both. The README's
-architecture paragraphs gain a sentence for the new component, next to
-the other two.
+and `parse_search_query` stay — `_filter_rows` uses both. The app
+gains one small method, `apply_chart_filter` (§3). The README's
+architecture paragraphs gain a sentence for the new component, next
+to the other two, and note that two persistence patterns coexist by
+design: dialog geometry is a value in and a report out, while the
+panel's variables are shared objects, because the View menu and the
+settings save both bind them.
 
 ## 5. What Does Not Change
 
@@ -264,7 +342,11 @@ the other two.
   its filter off; a Difficulty click also removes any redundant `diff`
   directive from the query; Clear removes every chart filter and
   resets the difficulty dropdown; both end with the cursor at the end
-  of the search box and exactly one table refresh.
+  of the search box and exactly one table refresh; a Clear with no
+  active chart filter does nothing at all — no refresh, no cursor
+  move. Which variables each path writes is preserved write-for-write
+  (§3), and `show_rows` keeps today's ordering of storing the pushed
+  rows before the hidden check.
 - The two settings keys, their startup validation, and their place in
   `_save_settings`. The settings/snapshot move — last in the sequence —
   inherits the arrangement §3 settles: the variables stay app-created
@@ -280,17 +362,42 @@ the other two.
 
 Three pull requests, in order. Each is independently green, and the
 order is the point: the safety net and the pure logic exist before
-the boundary moves, so the move PR can be judged as a move.
+the boundary moves, so the move PR can be judged as a move. All new
+tests for the panel live in `tests/test_ui_distribution.py` — the
+only test file the display-equipped `windows-ui` CI job runs (§2).
 
 **Step 1 — test hardening (no production code changes).** Write the
 missing tests against today's `LibraryApp` methods, so they pin
-current behaviour before anything relocates: the hide path
-(`pack_forget`, the ▶ label, `update_idletasks`), the empty-state
-branch, startup validation of both settings keys (the metric fallback
-included), canvas creation with a real Figure (and that
-`mpl_connect` binds the click handler), banner pack/pack_forget
-transitions, and `_sync_distribution_toggle`. Step 3 re-points these
-tests at the component rather than rewriting them.
+current behaviour before anything relocates:
+
+- a hide→**show** test: hiding forgets the panel, flips the toolbar
+  label to ▶ and calls `update_idletasks`; re-showing packs with the
+  full recorded arguments (`side="right"`, `fill="y"`,
+  `padx=(10, 0)`, `before=` the table frame — the argument a botched
+  move is most likely to drop, leaving the panel squeezed to zero
+  width) and redraws from the stored rows. A live test adds the
+  end-to-end assertion after a toggle cycle: the panel is mapped
+  with width > 0;
+- the empty-state branch;
+- banner pack/pack_forget transitions;
+- `_sync_distribution_toggle`;
+- the *effect* of a metric change (the chart redraws for the new
+  metric and settings are saved — today the handler is only called,
+  in the live test, with its effect unasserted);
+- bar colours and the active bar's white edge;
+- two gaps that are **live tests** (they need a real Tk root, so they
+  carry the live test's skip pattern and run on `windows-ui`):
+  startup validation of the two settings keys (the metric fallback
+  included), and canvas creation. The headless form of the canvas
+  test patches `Figure` and `FigureCanvasTkAgg` (`create=True` where
+  the names may not exist) and asserts the Figure's arguments and
+  that `mpl_connect` binds the click handler — it proves the calls;
+  the real click path through the TkAgg machinery is what the live
+  test adds, and `RealChartClickTests` already cover the geometry
+  headlessly through an Agg canvas.
+
+Step 3 re-points these tests at the component rather than rewriting
+them.
 
 **Step 2 — pure-logic extraction to `library_data.py`.** Move
 `ChartBar` and add the Tk-free decision functions the window methods
@@ -299,100 +406,127 @@ already contain: the bar hit test (today's `next(...)` expression in
 difficulty text and query → the new difficulty and query, including
 the toggle-off and Difficulty special cases), the Clear decision
 (every active chart filter → the reset difficulty and the stripped
-query), and the click-zone computation (`axis_max`, `min_click_width`,
-and the clickable rule: a bar is clickable when its count is positive
-or it is the active filter). The app calls them from the existing
-methods; tests join `tests/test_distribution.py`. Bar colours stay in
-the window code: `library_data` is theme-free, and choosing a colour
-is presentation.
+query; pin its early return — a Clear with nothing active is a
+complete no-op), and the click-zone computation. The zone function
+takes the values of `theme.CHART_MIN_CLICK_FRACTION` and the `1.25`
+axis multiplier as parameters — `library_data` imports no theme, and
+the fraction is presentation tuning of the same kind as the bar
+colours — and returns `axis_max` alongside the bars, so the window's
+`set_xlim` and the click widths stay one source of truth. Bar colours
+themselves stay in the window code for the same reason. The app calls
+the new functions from the existing methods, and the tests that build
+`app.ChartBar` are re-pointed at `library_data` in this step. The
+decision tests join `tests/test_distribution.py`.
 
 **Step 3 — the component move.** `distribution_panel.py` as §4
 describes. Specifically:
 
 - Move purity: the eleven methods move recognisably (a normalized
   diff, as for proposals 0001 and 0004), with renames limited to the
-  seams (`self.search_var` → the constructor input, and so on).
+  seams (`self.search_var` → the constructor input, and so on) and
+  the one deliberate rename, `_update_distribution_panel` →
+  `show_rows`.
 - The theme guard must keep covering the moved code: add
   `distribution_panel.py` to `WINDOW_SOURCES` in
   `tests/test_theme.py` and to README's styling paragraph — the
   proposal 0004 lesson, learned when the same list went stale on
   PR #89.
-- The tests keep their file: `tests/test_ui_distribution.py` is
-  re-pointed at the component (its fixtures build a `DistributionPanel`
-  with fake inputs instead of hand-setting ~20 attributes on a bare
-  app — the ergonomics payoff of the split, as issue #92 was for the
-  course builder), and the file keeps its name so the `windows-ui` CI
-  pattern needs no workflow edit (Q8). The one distribution test in
-  `tests/test_library_visualizer.py` (the matplotlib-missing fallback)
-  moves into it, and the six `MATPLOTLIB_AVAILABLE` patch sites
-  re-point at `distribution_panel.MATPLOTLIB_AVAILABLE`.
+- The tests keep their file and their name, so the `windows-ui` CI
+  pattern needs no workflow edit (Q8). `tests/test_ui_distribution.py`
+  is re-pointed at the component — its fixtures build a
+  `DistributionPanel` with fake inputs instead of hand-setting ~20
+  attributes on a bare app, the ergonomics payoff of the split, as
+  issue #92 was for the course builder. Of the three distribution
+  tests in `tests/test_library_visualizer.py`: the Clear test
+  re-points at the component, the matplotlib-missing fallback moves
+  into `tests/test_ui_distribution.py`, and the settings round trip
+  stays exactly as it is (the variables remain app-side, §5). The
+  six `MATPLOTLIB_AVAILABLE` patch sites re-point at
+  `distribution_panel.MATPLOTLIB_AVAILABLE`. The five
+  `SingleRefreshTests` become app-side tests of `apply_chart_filter`
+  (the batching now lives there), while the component tests assert
+  which `(difficulty, query)` a click or Clear passes to it.
 - A wiring guard, per the existing components' pattern: a live test
-  asserting the component's four variables *are* the app's variables,
-  that `refresh_table` reaches `update`, and that all three visibility
-  entry points land on the component.
-- Full suite green with zero skips under Xvfb, and a live smoke:
-  toggle the panel from the toolbar, the View menu and the ✕; switch
+  asserting the component's four variables *are* the app's variables;
+  that `build_panel` actually ran (the panel widget exists — without
+  this, a forgotten call leaves the component silently inert behind
+  its `None` guards); that `refresh_table` reaches `show_rows`; and
+  that **all six entry points** land on the component — the toolbar
+  toggle, the panel's ✕, the View checkbutton's sync, the metric
+  radios, the banner's Clear button, and the refresh push. A
+  mock-level assertion pins the cursor nudge: a click and a Clear
+  each end with `icursor("end")` on the search entry.
+- Acceptance, in CI terms: the full suite green on the ubuntu jobs
+  (live tests skipping there, as today) and the live tests green
+  with zero skips on the `windows-ui` job. Plus a live smoke: toggle
+  the panel from the toolbar, the View menu and the ✕; switch
   metrics; click a bar and click it again to toggle off; Clear from
   the banner; quit and relaunch to confirm both settings persist.
 
-## 7. Open Questions for Reviewers
+## 7. Open Questions — Resolved
 
-Each question states the draft's recommendation; reviewers are asked
-to ratify or overturn it, as with proposal 0004's Q1–Q3.
+All ten were answered in the panel review and accepted by the owner
+on 2026-11-09 (see "Revision 1" at the top):
 
-- **Q1. Variable ownership.** The four variables are app-created in
-  `__init__` (with today's settings validation) and passed directly
-  (recommended — the 0004 A1 reasoning, and the menu/radio/save
-  bindings leave no other honest shape), or the component creates the
-  two panel variables and the app reads them back for the menu and
-  `_save_settings`?
-- **Q2. The rows seam.** Push via `update(visible_rows)` plus the
-  `rows_without_metric` pull callable (recommended), or the app pushes
-  both row lists (visible, and the metric-ignoring variant computed
-  eagerly on every refresh — simpler contract, wasted work whenever
-  the chart's own filter is inactive)?
-- **Q3. Applying a filter change.** Pass the bound
-  `_batched_filter_changes` context manager and keep the cursor nudge
-  in the component (recommended — the moved code stays verbatim), or
-  one `apply_chart_filter(diff, query)` app-side callback that absorbs
-  both, accepting that `diff_var` is then written even by clicks that
-  changed only the query?
-- **Q4. The toolbar button.** The app creates it (it is toolbar
-  furniture, built before the panel exists) and hands it to
-  `build_panel`; the component sets only its label (recommended), or
-  the component creates the button and the app packs it — splitting
-  the toolbar's construction across two owners?
-- **Q5. Construction shape.** Two-phase — constructor in `_build`
-  beside the other components, `build_panel(...)` at today's call
-  site, enabled by moving the table frame's creation line (not its
-  pack) above that call (recommended), or a sibling callable the
-  component consults when showing, leaving `_build`'s order untouched?
-- **Q6. `update_idletasks` on hide.** Reach the root through the panel
-  frame's `winfo_toplevel()` (slight preference — the contract stays
-  at eight inputs), or pass the root as a ninth constructor input, as
-  both existing components receive their parent?
-- **Q7. Staging.** The three PRs of §6 in order (recommended), or
-  fewer: extraction and move combined (a bigger PR whose middle state
-  no test run ever sees), or the move alone with the step-1 tests
-  folded into it?
-- **Q8. The test file's name.** Keep `tests/test_ui_distribution.py`
-  so the `windows-ui` workflow pattern is untouched (recommended), or
-  rename to `tests/test_distribution_panel.py` for symmetry with the
-  module and let the owner edit the workflow in the web UI?
-- **Q9. Matplotlib ownership.** The guarded import and
-  `MATPLOTLIB_AVAILABLE` move into `distribution_panel.py`, and all
-  six patch sites re-point there (recommended), or the flag stays
-  app-side and is passed in — leaving the app importing matplotlib it
-  no longer uses?
-- **Q10. Settings.** No change in this split: keys, validation and
-  `_save_settings` stay as they are, and the settings/snapshot move
-  inherits them (recommended), or should this proposal also settle
-  how the panel's two keys will be represented after that move?
+- **Q1. Variable ownership. Resolved: the draft's recommendation** —
+  the four variables are app-created in `__init__` (with today's
+  settings validation) and passed directly. Unanimous; the menu,
+  radio and save bindings leave no other honest shape.
+- **Q2. The rows seam. Resolved: push plus pull, simplified** —
+  `show_rows(visible_rows)` for the push, and the app's `_filter_rows`
+  passed directly as the pull callable (Claude's simplification: no
+  wrapper, since `ignore_metric` is its first parameter). The
+  rejected alternative — the app eagerly pushing both row lists —
+  costs an extra filter pass on every refresh whether or not the
+  chart's own filter is active; that cost is unmeasured, and the
+  argument for the lazy pull is the laziness itself.
+- **Q3. Applying a filter change. Resolved: the `apply_chart_filter`
+  callback** (Claude, overturning the draft's context-manager
+  recommendation; the owner accepted). The None-means-unchanged
+  signature reproduces today's writes exactly — prototype-verified
+  in review across 6 click and 3 Clear scenarios — the batching rule
+  gets a single owner, and `search_entry` leaves the component
+  entirely. ChatGPT-6's observation that the batching context
+  manager is non-reentrant stands as a property of the app's
+  existing helper, unchanged by this split; with the callback, the
+  component never touches it.
+- **Q4. The toolbar button. Resolved: the draft's recommendation,
+  amended** — the app creates the button and hands it to
+  `build_panel`, which also sets its initial label, so the label
+  strings exist only in the component.
+- **Q5. Construction shape. Resolved: two-phase, with the sibling
+  callable** (Claude, overturning the draft's creation-line move;
+  the owner accepted). Moving the table frame's creation line
+  risked changing the Tab focus order, which follows widget
+  creation order [INFERRED in review; the callable makes the
+  question moot, so no owner check is needed]. ChatGPT-6 confirmed
+  the *pack* order argument was sound; the focus order was the
+  unexamined half.
+- **Q6. `update_idletasks` on hide. Resolved: the panel frame's own
+  call** — application-wide in Tk, so neither the root nor
+  `winfo_toplevel()` is needed (Claude's simplification;
+  ChatGPT-6 had found `winfo_toplevel()` sound but it is one hop
+  more than necessary).
+- **Q7. Staging. Resolved: the three PRs of §6, in order**
+  (unanimous), with review's cautions folded into §6: the zone
+  function's theme parameters, the canvas test's patching form, and
+  the `ChartBar` test re-pointing settled in Step 2.
+- **Q8. The test file's name. Resolved: keep
+  `tests/test_ui_distribution.py`** (unanimous), with Claude's
+  addition that the new tests and guards live in that file, since
+  it is the only one the display-equipped CI job runs.
+- **Q9. Matplotlib ownership. Resolved: the draft's
+  recommendation** — the guarded import and `MATPLOTLIB_AVAILABLE`
+  move into `distribution_panel.py`; all six patch sites re-point
+  there. Unanimous.
+- **Q10. Settings. Resolved: no change in this split** (unanimous).
+  The settings/snapshot move inherits the keys as they are, and the
+  README notes the two coexisting persistence patterns (§4).
 
 ---
 
-*Written by Muse (Muse Spark). Draft for review by Claude
-(Sonnet 5.5), Grok 4.5, GLM 5.3 (Vibe), Mistral and ChatGPT-6;
-resolutions will be recorded at the top when the owner accepts.
-Implementation follows in the staged PRs of §6, each linking back
-here.*
+*Written by Muse (Muse Spark). Revision 1 incorporates the
+reviews of Claude (Sonnet 5.5), Grok 4.5, ChatGPT-6, and GLM 5.3
+(Vibe — also the staging review signed "Mistral"); the resolutions
+in §7 were accepted by the owner on 2026-11-09. Implementation
+follows in the staged PRs of §6, each linking back here.*
