@@ -28,8 +28,14 @@ them in a sortable, filterable table, and can build .CRS course files. Read READ
 - Never commit to main without the owner's explicit say-so. Use a one-use branch per task and open
   a pull request; another LLM reviews it, and only the owner merges.
 - Ask the owner before committing to this repo, once per branch, unless the owner has said not to.
+- Some changes get a design proposal first: a numbered document in docs/proposals/, reviewed like a
+  pull request and marked Accepted by the owner before implementation. Write one when a change
+  creates or alters a component boundary or constructor contract, persists a new settings key or
+  file format, or has two or more defensible designs where the choice constrains later work.
+  Everything else goes straight to implementation with the issue as the spec.
 - In the pull request, say in plain language what changed and why, how you checked it, and which
-  model wrote it.
+  model wrote it. When a real design choice existed, say which option was taken and which was
+  rejected.
 - Reviewing: report findings to the owner first and get confirmation before making fixes. Explain
   the real effect of each issue and order by importance. Say which findings you ran and which you
   only read.
