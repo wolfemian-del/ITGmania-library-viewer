@@ -1101,6 +1101,118 @@ class SearchQueryTests(unittest.TestCase):
         self.assertTrue(data.match_chart_query(row, "percent:>=95"))
         self.assertFalse(data.match_chart_query(row, "percent:>=96"))
 
+    def test_search_field_aliases_register_radar_counts(self):
+        expected_mappings = {
+            "jumps": "jumps",
+            "jump": "jumps",
+            "holds": "holds",
+            "hold": "holds",
+            "rolls": "rolls",
+            "roll": "rolls",
+            "mines": "mines",
+            "mine": "mines",
+            "hands": "hands",
+            "hand": "hands",
+            "lifts": "lifts",
+            "lift": "lifts",
+            "taps": "taps",
+            "tap": "taps",
+            "taps_holds": "taps",
+            "tapsholds": "taps",
+            "tapsandholds": "taps",
+            "taps/holds": "taps",
+        }
+        for alias, canonical in expected_mappings.items():
+            with self.subTest(alias=alias):
+                self.assertIn(alias, data.SEARCH_FIELD_ALIASES)
+                self.assertEqual(data.SEARCH_FIELD_ALIASES[alias], canonical)
+
+    def test_match_chart_query_radar_exact_and_range_bounds(self):
+        row = {
+            "Title": "Radar Track",
+            "Taps/Holds": 450,
+            "Jumps": 30,
+            "Holds": 15,
+            "Rolls": 5,
+            "Mines": 2,
+            "Hands": 4,
+            "Lifts": 1,
+        }
+
+        # Exact and equality operator
+        self.assertTrue(data.match_chart_query(row, "jumps:30"))
+        self.assertTrue(data.match_chart_query(row, "jumps:=30"))
+        self.assertFalse(data.match_chart_query(row, "jumps:25"))
+        self.assertTrue(data.match_chart_query(row, "mines:2"))
+        self.assertFalse(data.match_chart_query(row, "mines:0"))
+
+        # Greater than / Greater or equal
+        self.assertTrue(data.match_chart_query(row, "jumps:>20"))
+        self.assertFalse(data.match_chart_query(row, "jumps:>30"))
+        self.assertTrue(data.match_chart_query(row, "holds:>=15"))
+        self.assertFalse(data.match_chart_query(row, "holds:>=16"))
+
+        # Less than / Less or equal
+        self.assertTrue(data.match_chart_query(row, "mines:<5"))
+        self.assertFalse(data.match_chart_query(row, "mines:<2"))
+        self.assertTrue(data.match_chart_query(row, "mines:<=2"))
+        self.assertTrue(data.match_chart_query(row, "lifts:<=1"))
+        self.assertFalse(data.match_chart_query(row, "lifts:<1"))
+
+        # Range bounds (.. and -)
+        self.assertTrue(data.match_chart_query(row, "rolls:1..10"))
+        self.assertTrue(data.match_chart_query(row, "rolls:5..10"))
+        self.assertFalse(data.match_chart_query(row, "rolls:6..10"))
+        self.assertTrue(data.match_chart_query(row, "hands:2-6"))
+        self.assertFalse(data.match_chart_query(row, "hands:5-8"))
+
+        # Taps directive maps to Taps/Holds column
+        self.assertTrue(data.match_chart_query(row, "taps:450"))
+        self.assertTrue(data.match_chart_query(row, "taps:>400"))
+        self.assertFalse(data.match_chart_query(row, "taps:>500"))
+        self.assertTrue(data.match_chart_query(row, "taps:400-500"))
+        self.assertTrue(data.match_chart_query(row, "tap:>=450"))
+        self.assertTrue(data.match_chart_query(row, "taps_holds:450"))
+        self.assertTrue(data.match_chart_query(row, 'taps/holds:450'))
+
+        # Singular aliases
+        self.assertTrue(data.match_chart_query(row, "jump:>25"))
+        self.assertTrue(data.match_chart_query(row, "hold:15"))
+        self.assertTrue(data.match_chart_query(row, "roll:5"))
+        self.assertTrue(data.match_chart_query(row, "mine:2"))
+        self.assertTrue(data.match_chart_query(row, "hand:4"))
+        self.assertTrue(data.match_chart_query(row, "lift:1"))
+
+        # Multiple combined directives
+        self.assertTrue(data.match_chart_query(row, "jumps:>20 holds:>=15 mines:<5 taps:400-500"))
+        self.assertFalse(data.match_chart_query(row, "jumps:>20 holds:>=15 mines:0 taps:400-500"))
+
+    def test_match_chart_query_radar_missing_and_invalid(self):
+        empty_row = {"Title": "Empty"}
+        zero_row = {"Title": "Zero", "Mines": 0, "Jumps": 0}
+
+        # Missing column should not match positive or exact conditions
+        self.assertFalse(data.match_chart_query(empty_row, "jumps:>0"))
+        self.assertFalse(data.match_chart_query(empty_row, "jumps:0"))
+        self.assertFalse(data.match_chart_query(empty_row, "mines:0"))
+
+        # Zero column matches zero
+        self.assertTrue(data.match_chart_query(zero_row, "mines:0"))
+        self.assertFalse(data.match_chart_query(zero_row, "mines:>0"))
+        self.assertTrue(data.match_chart_query(zero_row, "jumps:<=0"))
+
+        # Invalid bounds do not match
+        row = {"Jumps": 10}
+        self.assertFalse(data.match_chart_query(row, "jumps:abc"))
+        self.assertFalse(data.match_chart_query(row, "jumps:"))
+
+    def test_replace_search_directive_radar_counts(self):
+        query = "jumps:>10 mines:0"
+        self.assertEqual(data.replace_search_directive(query, "jumps", ">20"), "jumps:>20 mines:0")
+        self.assertEqual(data.replace_search_directive(query, "jump", ">20"), "jumps:>20 mines:0")
+        self.assertEqual(data.replace_search_directive(query, "mines", None), "jumps:>10")
+        self.assertEqual(data.replace_search_directive(query, "mine", None), "jumps:>10")
+
     def test_match_chart_query_grade_ranges_and_unplayed_charts(self):
         played_b = {"Grade": "B", "Score": 800000}
         played_s = {"Grade": "S", "Score": 960000}
@@ -1170,6 +1282,12 @@ class AdvancedSearchDialogTests(unittest.TestCase):
         parts = data.split_dialog_query("jacks:>0 plays:>=3 type:single diff:hard pack:One")
         self.assertEqual(parts["pack"], "One")
         self.assertEqual(parts["other"], "jacks:>0 plays:>=3 type:single difficulty:hard")
+
+    def test_radar_filters_without_a_box_are_kept(self):
+        parts = data.split_dialog_query("jumps:>10 mines:0 holds:>=5 taps:100-200 pack:One")
+        self.assertEqual(parts["pack"], "One")
+        self.assertEqual(parts["other"], "jumps:>10 mines:0 holds:>=5 taps:100-200")
+        self.assertEqual(data.build_dialog_query(parts), "pack:One jumps:>10 mines:0 holds:>=5 taps:100-200")
 
     def test_peak_nps_loads_into_its_boxes(self):
         parts = data.split_dialog_query("nps:>=10 nps:<=20")
