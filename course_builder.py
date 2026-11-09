@@ -60,7 +60,9 @@ class CourseBuilder:
         self.title_var = None
         self.tree = None
         self.count_var = None
-        self._tint = None  # the queue tree's SelectedRowTint, created with the tree in open_dialog
+        # The tint exists from construction so selection bookkeeping never meets
+        # None (issue #92); open_dialog replaces it with one bound to the queue tree.
+        self._tint = row_tints.SelectedRowTint(None)
 
     def _geometry_for_open(self):
         """The geometry string to open the dialog with (issue #25).
