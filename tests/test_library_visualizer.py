@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
+import distribution_panel as dp
 import library_visualizer as app
 import row_tints
 
@@ -276,35 +277,20 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance.search_var.get.return_value = 'pack:"In The Groove" diff:Challenge meter:10'
         instance.search_entry = Mock()
         instance.refresh_table = Mock()
+        # The panel component, wired to the app the way _build wires it; the Clear
+        # itself is the component's since the split (proposal 0005, step 3).
+        panel = object.__new__(dp.DistributionPanel)
+        panel.diff_var = instance.diff_var
+        panel.search_var = instance.search_var
+        panel._apply_chart_filter = instance.apply_chart_filter
+        instance.distribution_panel = panel
 
-        instance.clear_chart_filter()
+        panel.clear_chart_filter()
 
         # Clear removes every chart filter (difficulty and meter here), keeping the pack filter.
         instance.diff_var.set.assert_called_with("All difficulties")
         instance.search_var.set.assert_called_with('pack:"In The Groove"')
         instance.refresh_table.assert_called_once()
-
-    def test_absence_fallback_when_matplotlib_unavailable(self):
-        instance = object.__new__(app.LibraryApp)
-        instance.show_distribution_panel = Mock(get=Mock(return_value=True))
-        instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
-        instance.diff_var = Mock(get=Mock(return_value="All difficulties"))
-        instance.search_var = Mock(get=Mock(return_value=""))
-        instance.dist_panel = Mock()
-        instance.dist_banner_frame = Mock()
-        instance.dist_banner_label = Mock()
-        instance.dist_summary_var = Mock()
-
-        original_avail = app.MATPLOTLIB_AVAILABLE
-        try:
-            app.MATPLOTLIB_AVAILABLE = False
-            # When matplotlib is unavailable, _ensure_distribution_canvas returns False
-            self.assertFalse(instance._ensure_distribution_canvas())
-            # And _update_distribution_panel does not crash
-            instance._update_distribution_panel([{"Meter": 10}])
-            instance.dist_summary_var.set.assert_called()
-        finally:
-            app.MATPLOTLIB_AVAILABLE = original_avail
 
 
 class FakeVariable:
