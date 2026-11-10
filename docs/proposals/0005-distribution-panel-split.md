@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft — Revision 2 (panel review complete; the resolutions in §7 were accepted by the owner on 2026-11-09, and §6 carries the staging amendments from the confirmation round) |
+| **Status** | Accepted (owner, 2026-11-09) |
 | **Author** | Muse (Muse Spark) |
 | **Date** | 2026-11-09 |
 | **Base** | main `a94aa1b` (after PR #108; v1.1.0 tagged) |
@@ -95,6 +95,36 @@ review had found, all confined to §6 and folded in here:
 
 Claude and ChatGPT-6 will see this revision, not Revision 1, when
 they confirm their amendments after their usage cooldowns.
+
+---
+
+## Acceptance (2026-11-09)
+
+Confirmed by Claude (comment 6756921079 — every amendment stands as
+intended, and the zone function's shape fits the decision
+functions) and ChatGPT-6 (comment 6757042596 — the pack order under
+the sibling callable, the non-reentrancy disposition, and the
+seven-entry-point inventory all cleared, with no further
+amendments), completing the panel: all four distinct reviewer
+models accept. Accepted by the owner the same day, with Claude's
+confirmation-round items — five Step 2 tightenings and two wording
+fixes, none blocking — folded into §§4–6 as part of this marking
+rather than left in the comment thread:
+
+- the zone function derives `y_max` as `y_min + bar_height`, per
+  item 1 in §6 Step 2;
+- the axis multiplier is named `theme.CHART_AXIS_HEADROOM` in
+  Step 2 (today a bare `1.25` literal in the window code);
+- the zone parameters are keyword-only, with an Agg
+  extent-comparison test;
+- the hit test returns `None` for tokenless bars, absorbing
+  today's guard;
+- §6 names who reverses the rows (the app, as today);
+- §4 states the callback's write rule exactly, matching Clear's
+  unconditional query write;
+- Step 1's startup test pins the startup pack by `pack_slaves()`
+  ordering, an absent `before=` being unassertable from
+  `pack_info()`.
 
 ---
 
@@ -344,7 +374,12 @@ return early while hidden, compute chart rows (stored rows, or the
 summary, canvas, bars. `_on_chart_click` and `clear_chart_filter`
 keep today's shape, except that applying the result goes through the
 `apply_chart_filter` callback: compute the decision, call the
-callback with whichever of (difficulty, query) changed, done. The
+callback with the resulting (difficulty, query), done. The
+component passes `None` for a variable today's code does not write
+on that path, and the computed value where today's code writes
+unconditionally — a Clear's query write is the case — even when
+the value equals the current one, so the write pattern stays
+exact (§5). The
 matplotlib guarded import and `MATPLOTLIB_AVAILABLE` move into
 `distribution_panel.py` with the canvas code; the app keeps no
 matplotlib import.
@@ -425,10 +460,13 @@ current behaviour before anything relocates:
 - two gaps that are **live tests** (they need a real Tk root, so they
   carry the live test's skip pattern and run on `windows-ui`):
   startup validation of the two settings keys (the metric fallback
-  included), and canvas creation. The startup test also asserts
-  the startup pack itself — `pack_info()` shows the side, fill and
-  padx of §5 and no `before=`, pinning the second pack site, which
-  only a real `_build` reaches. The headless form of the canvas
+  included), and canvas creation. The startup test also pins
+  the startup pack: `pack_info()` shows the side, fill and padx of
+  §5, and `pack_slaves()` on the content frame shows the panel
+  ahead of the table frame — the panel's position is the
+  observable fact (an absent `before=` cannot be asserted from
+  `pack_info()`), and the second pack site is reached only by a
+  real `_build`. The headless form of the canvas
   test patches `Figure` and `FigureCanvasTkAgg` (`create=True` where
   the names may not exist) and asserts the Figure's arguments and
   that `mpl_connect` binds the click handler — it proves the calls;
@@ -442,21 +480,38 @@ them.
 **Step 2 — pure-logic extraction to `library_data.py`.** Move
 `ChartBar` and add the Tk-free decision functions the window methods
 already contain: the bar hit test (today's `next(...)` expression in
-`_on_chart_click`), the click decision (metric, clicked token, current
+`_on_chart_click`; it returns `None` for a bar with no token,
+absorbing today's `not token or label == "?"` guard — the "?"
+rows carry empty tokens, so the label check is redundant), the click decision (metric, clicked token, current
 difficulty text and query → the new difficulty and query, including
 the toggle-off and Difficulty special cases), the Clear decision
 (every active chart filter → the reset difficulty and the stripped
 query; pin its early return — a Clear with nothing active is a
 complete no-op), and the click-zone computation. The zone function
-takes three theme-fed values as parameters — the values of
-`theme.CHART_MIN_CLICK_FRACTION` and `theme.CHART_BAR_HEIGHT` and
-the `1.25` axis multiplier — because `library_data` imports no
+takes three tuning values as keyword-only parameters (three
+look-alike floats — 0.15, 0.68, 1.25 — are too easy to swap
+silently): the values of `theme.CHART_MIN_CLICK_FRACTION` and
+`theme.CHART_BAR_HEIGHT` and the axis multiplier, which this step
+names in `theme.py` as `CHART_AXIS_HEADROOM` — today it is a bare
+`1.25` literal in the window code, and the click-zone test's
+hard-coded 1.25 follows the constant. `library_data` imports no
 theme, and all three are presentation tuning of the same kind as
-the bar colours. It derives each bar's y-coordinates from the bar
-positions and the bar height rather than reading them back from
-the drawn matplotlib bars (which would drag presentation objects
-into `library_data`), and returns `axis_max` alongside the bars, so the window's
-`set_xlim` and the click widths stay one source of truth. Bar colours
+the bar colours. The caller passes the rows already in display
+order (the app reverses them, as today), so a bar's position means
+the i-th entry of the same list the chart draws from. The function
+derives each bar's y-coordinates from the bar positions and the
+bar height rather than reading them back from the drawn matplotlib
+bars (which would drag presentation objects into `library_data`):
+`y_min` is position − bar_height/2, and `y_max` is `y_min +
+bar_height` — today's construction, via `get_y()` + `get_height()`;
+computing `y_max` independently as position + bar_height/2
+diverges in the last digit on roughly a quarter of bars (Claude's
+1,830-bar Agg comparison in the confirmation round). It returns
+`axis_max` alongside the bars, so the window's
+`set_xlim` and the click widths stay one source of truth, and a
+test in the style of `RealChartClickTests` compares its extents
+against an Agg-drawn chart — today's Mock-based bar tests would
+not catch a swapped parameter. Bar colours
 themselves stay in the window code for the same reason. The app calls
 the new functions from the existing methods, and the tests that build
 `app.ChartBar` are re-pointed at `library_data` in this step. The
@@ -587,5 +642,7 @@ reviews of Claude (Sonnet 5.5), Grok 4.5, ChatGPT-6, and GLM 5.3
 in §7 were accepted by the owner on 2026-11-09. Revision 2,
 incorporating the §6 staging amendments from GLM 5.3's adversarial
 re-check after Grok's fidelity audit confirmed Revision 1, followed
-the same day. Implementation follows in the staged PRs of §6, each
+the same day; acceptance, with Claude's confirmation-round
+tightenings folded into §§4–6, closed the review later that day.
+Implementation follows in the staged PRs of §6, each
 linking back here.*
