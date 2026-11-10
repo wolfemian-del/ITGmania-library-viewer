@@ -198,7 +198,7 @@ def tag_map(text: str) -> dict[str, str]:
     # one way keeps the alternatives disjoint and parsing linear-time.
     for m in re.finditer(r"(?m)^#([^:;\r\n]+):((?:\\.|[^;\\\r\n]|(?:\r\n(?!#)|\r(?!\n)(?!#)|\n(?!#)))*);", text):
         raw_val = m.group(2).strip()
-        decoded_val = re.sub(r"\\(.)", r"\1", raw_val)
+        decoded_val = re.sub(r"\\(.)", r"\1", raw_val) if "\\" in raw_val else raw_val
         tags[m.group(1).upper()] = decoded_val
     return tags
 
@@ -294,7 +294,7 @@ def _merged_edit_fallback(scores: dict, base_key: tuple[str, str, str]) -> dict:
 
 def parse_cache_file(path: Path, scores: dict) -> list[dict]:
     # Cache files are UTF-8 Simfile text; split away the song metadata before chart parsing.
-    text = path.read_text(encoding="utf-8-sig", errors="replace")
+    text = path.read_bytes().decode("utf-8-sig", errors="replace")
     chunks = re.split(r"(?m)^#NOTEDATA:;\s*\r?\n", text)
     song_tags = tag_map(chunks[0])
     song_file = song_tags.get("SONGFILENAME", "")
