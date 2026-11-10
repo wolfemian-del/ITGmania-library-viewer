@@ -214,6 +214,27 @@ class DistributionVisibilityTests(unittest.TestCase):
         panel.dist_panel.pack_forget.assert_called_once_with()
         panel.dist_button.configure.assert_called_once_with(text="Distribution ▶")
 
+    def test_before_build_panel_every_visibility_entry_is_a_no_op(self):
+        # A toggle that fires before the app's _build has called build_panel must do nothing:
+        # no variable write, no pack, no button label, no settings save. The constructor
+        # itself leaves the panel unbuilt; a row push is only stored (proposal 0005 §5).
+        show_var, save, sibling = Mock(), Mock(), Mock()
+        panel = dp.DistributionPanel(
+            button_factory=Mock(), search_var=Mock(), diff_var=Mock(),
+            show_distribution_panel=show_var, distribution_metric=Mock(),
+            filter_rows=Mock(), apply_chart_filter=Mock(), save_settings=save)
+        panel._sibling_frame = sibling
+        self.assertIsNone(panel.dist_panel)
+        panel.set_visible(True)
+        panel.set_visible(False)
+        panel.toggle()
+        panel.sync_toggle()
+        panel.show_rows([{"Meter": 10}])
+        show_var.set.assert_not_called()
+        save.assert_not_called()
+        sibling.assert_not_called()
+        self.assertEqual(panel._last_visible_rows, [{"Meter": 10}])
+
     def test_canvas_creation_builds_the_figure_and_binds_the_click(self):
         panel = object.__new__(dp.DistributionPanel)
         panel.dist_canvas = None
@@ -848,10 +869,9 @@ class RealChartClickTests(unittest.TestCase):
         self.assertIsNone(self.click_pixels(axes_box.x0 - 12, row_px))
 
 
-class LiveDistributionStartupTests(unittest.TestCase):
-    """Startup behaviour with a real window (proposal 0005, step 1): the two settings
-    keys are validated, and the startup pack — the second pack site, reached only by
-    a real _build — puts the panel ahead of the table with its recorded arguments."""
+class LiveWindowCase(unittest.TestCase):
+    """Opens a real LibraryApp for the live tests below. It has no tests of its own, so the
+    classes that share it do not each re-run the other's tests."""
 
     def make_live_app(self, settings):
         if app.tk is None:
@@ -877,6 +897,12 @@ class LiveDistributionStartupTests(unittest.TestCase):
         if isinstance(padx, int):
             return (padx, padx)
         return tuple(int(part) for part in str(padx).strip("()").replace(",", " ").split())
+
+
+class LiveDistributionStartupTests(LiveWindowCase):
+    """Startup behaviour with a real window (proposal 0005, step 1): the two settings
+    keys are validated, and the startup pack — the second pack site, reached only by
+    a real _build — puts the panel ahead of the table with its recorded arguments."""
 
     def test_startup_validates_the_metric_and_packs_the_panel_first(self):
         application = self.make_live_app({"show_distribution": True, "distribution_metric": "Bogus"})
@@ -949,7 +975,7 @@ class LiveDistributionStartupTests(unittest.TestCase):
         self.assertEqual(application.search_var.get(), "meter:11")
 
 
-class LiveDistributionWiringTests(LiveDistributionStartupTests):
+class LiveDistributionWiringTests(LiveWindowCase):
     """The wiring guard for the component (proposal 0005, step 3): in a real window,
     the component holds the app's own variables, build_panel actually ran, refresh
     reaches show_rows, and all seven entry points land on the component."""
@@ -1013,12 +1039,17 @@ class LiveDistributionWiringTests(LiveDistributionStartupTests):
         panel.set_visible(True)
         root.update()
 
-        # 4. A metric radio runs the component's metric handler (and saves settings).
+        # 4. A metric radio runs the component's metric handler. A Tk radio button sets its own
+        # variable whether or not a command is attached, so the variable alone proves nothing
+        # about the wiring; spy on what the handler does (save settings, redraw) instead.
         metric_bar = panel.dist_panel.winfo_children()[1]
         radios = {w.cget("value"): w for w in metric_bar.winfo_children()
                   if isinstance(w, app.tk.Radiobutton)}
-        radios["BPM"].invoke()
+        with patch.object(panel, "_save_settings") as save, patch.object(panel, "show_rows") as redraw:
+            radios["BPM"].invoke()
         self.assertEqual(application.distribution_metric.get(), "BPM")
+        save.assert_called_once_with()
+        redraw.assert_called_once_with(panel._last_visible_rows)
         radios["Meter"].invoke()
         self.assertEqual(application.distribution_metric.get(), "Meter")
 
