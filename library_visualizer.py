@@ -11,6 +11,7 @@ import os
 import queue
 import sys
 import threading
+import time
 try:
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
@@ -48,6 +49,10 @@ from library_data import (
 )
 
 SEARCH_DEBOUNCE_MS = 200
+# How long one batch of table-row inserts may run before yielding to the event
+# loop (see _insert_batch): long enough to fill quickly, short enough that the
+# window stays responsive while a big library streams in.
+ROW_INSERT_BUDGET_SECONDS = 0.012
 LIBRARY_CACHE_SCHEMA_VERSION = 2
 HEADERS = ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart", "Score",
            "Grade", "Best %", "Plays", "Last played", "Peak NPS", "Taps/Holds", "Jumps",
@@ -192,7 +197,14 @@ class LibraryApp:
         for var in (self.cache_var, self.stats_var):
             var.trace_add("write", lambda *_: self._source_paths_changed())
         self.root.after(75, self._poll_load_results)
-        self.load_cached_data()
+        # The saved snapshot is loaded once the window has painted, not here:
+        # reading and rendering it can take a moment at library scale, and doing
+        # it before the event loop starts would leave the user watching the
+        # console (or an unpainted window) with no explanation.
+        if self.library_cache_path.is_file():
+            self.status.set("Loading saved library…")
+            self.progress.start(12)
+        self.root.after(50, self._load_initial_snapshot)
 
     def _style(self):
         style = ttk.Style()
@@ -481,6 +493,19 @@ class LibraryApp:
                 pass
         return refreshed_at
 
+    def _load_initial_snapshot(self):
+        """Load the saved snapshot (scheduled from __init__ so the window paints first)."""
+        if self._load_generation:
+            # A Load / refresh pressed inside the deferral window supersedes
+            # the startup restore: the scan owns the progress bar, the Load
+            # button, and the status line until it delivers, and its result
+            # replaces whatever the restore would have shown.
+            return
+        try:
+            self.load_cached_data()
+        finally:
+            self.progress.stop()
+
     def load_cached_data(self):
         try:
             with self.library_cache_path.open("r", encoding="utf-8") as handle:
@@ -489,7 +514,7 @@ class LibraryApp:
             self.status.set("No saved library snapshot yet. Choose your paths, then click Load / refresh.")
             self.refresh_table()
             return
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             self.status.set(f"Saved library snapshot could not be read ({exc}). Click Load / refresh to rebuild it.")
             self.refresh_table()
             return
@@ -1053,8 +1078,9 @@ class LibraryApp:
         self.tree.delete(*self.tree.get_children())
         self.tree_item_rows = {}
         self._tree_tint.reset()
+        # The count label is set by _insert_batch: a progress count while rows
+        # are still streaming in, the final totals once the last batch lands.
         self._insert_batch(visible, 0, generation, selected_rows)
-        self.count_label.set(f"{len(visible):,} charts shown · {len(self.rows):,} total")
         self.distribution_panel.show_rows(visible)
 
     def _update_sort_headings(self):
@@ -1072,8 +1098,13 @@ class LibraryApp:
         if generation != self._render_generation:
             return
         selected_rows = selected_rows or set()
-        stop = min(start + 500, len(rows))
-        for row in rows[start:stop]:
+        # Insert for a short time budget rather than a fixed count: fast
+        # machines finish in fewer, fuller batches; slow ones stay responsive.
+        # At least one row always goes in, so the loop cannot stall.
+        deadline = time.perf_counter() + ROW_INSERT_BUDGET_SECONDS
+        stop = start
+        while stop < len(rows):
+            row = rows[stop]
             values = []
             for col in HEADERS:
                 value = row.get(col, "")
@@ -1088,8 +1119,14 @@ class LibraryApp:
             if keep_selected:
                 self.tree.selection_add(item)
                 self._tree_tint.note_selected(item)
+            stop += 1
+            if time.perf_counter() >= deadline:
+                break
         if stop < len(rows):
+            self.count_label.set(f"Loading {stop:,} of {len(rows):,} charts…")
             self.root.after(1, lambda: self._insert_batch(rows, stop, generation, selected_rows))
+        else:
+            self.count_label.set(f"{len(rows):,} charts shown · {len(self.rows):,} total")
 
     def apply_chart_filter(self, difficulty=None, query=None):
         """Apply a distribution chart's filter change as one batched update (proposal 0005).

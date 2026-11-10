@@ -3,6 +3,7 @@ import queue
 import re
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
@@ -233,6 +234,18 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance.refresh_table.assert_called_once()
         self.assertIn("different data paths", instance.status.set.call_args.args[0])
 
+    def test_snapshot_with_invalid_utf8_reports_could_not_be_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = self.make_app(root / "settings.json", root / "Cache" / "Songs", root / "Stats.xml")
+            instance.library_cache_path.write_bytes(b"\xff\xfe not utf-8")
+
+            instance.load_cached_data()
+
+        instance._loaded.assert_not_called()
+        instance.refresh_table.assert_called_once()
+        self.assertIn("could not be read", instance.status.set.call_args.args[0])
+
     def test_snapshot_is_not_restored_with_an_unsupported_schema(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -386,6 +399,7 @@ class RowTintTests(unittest.TestCase):
         instance.tree = Mock()
         instance._render_generation = 1
         instance.tree_item_rows = {}
+        instance.count_label = Mock()
         instance._tree_tint = row_tints.SelectedRowTint(instance.tree)
         instance.root = Mock()
         instance.tree.insert.side_effect = ["item0", "item1", "item2"]
@@ -396,6 +410,7 @@ class RowTintTests(unittest.TestCase):
             {"Title": "Song C", "Difficulty": "CustomUnknown", "Time": 60},
         ]
         # Song B is pre-selected
+        instance.rows = rows
         instance._insert_batch(rows, 0, 1, selected_rows={id(rows[1])})
 
         self.assertEqual(instance.tree.insert.call_count, 3)
@@ -434,6 +449,127 @@ class LibraryRowsForCourseTests(unittest.TestCase):
         instance.rows = [{"Title": "A"}, {"Title": "B"}]
 
         self.assertIs(instance._library_rows_for_course(), instance.rows)
+
+class InsertBatchProgressTests(unittest.TestCase):
+    """_insert_batch fills the table in time-boxed batches, and the count
+    label tells the truth while it does (startup polish)."""
+
+    @staticmethod
+    def make_instance(row_count=3):
+        instance = object.__new__(app.LibraryApp)
+        instance.tree = Mock()
+        instance.tree.insert.side_effect = [f"item{i}" for i in range(row_count)]
+        instance._render_generation = 1
+        instance.tree_item_rows = {}
+        instance.count_label = Mock()
+        instance._tree_tint = row_tints.SelectedRowTint(instance.tree)
+        instance.root = Mock()
+        rows = [{"Title": f"Song {i}", "Difficulty": "Hard", "Time": 60} for i in range(row_count)]
+        instance.rows = rows
+        return instance, rows
+
+    def test_a_zero_budget_inserts_one_row_and_reports_progress(self):
+        instance, rows = self.make_instance()
+        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 0):
+            instance._insert_batch(rows, 0, 1)
+        self.assertEqual(instance.tree.insert.call_count, 1)
+        instance.count_label.set.assert_called_once_with("Loading 1 of 3 charts…")
+        instance.root.after.assert_called_once()
+        # The scheduled continuation finishes the job and sets the final totals.
+        continuation = instance.root.after.call_args.args[1]
+        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
+            continuation()
+        self.assertEqual(instance.tree.insert.call_count, 3)
+        instance.count_label.set.assert_called_with("3 charts shown · 3 total")
+
+    def test_a_generous_budget_inserts_everything_in_one_batch(self):
+        instance, rows = self.make_instance()
+        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
+            instance._insert_batch(rows, 0, 1)
+        self.assertEqual(instance.tree.insert.call_count, 3)
+        instance.count_label.set.assert_called_once_with("3 charts shown · 3 total")
+        instance.root.after.assert_not_called()
+
+
+class InitialSnapshotTests(unittest.TestCase):
+    """The deferred startup load (startup polish): _load_initial_snapshot is
+    the after() callback __init__ schedules so the window paints first."""
+
+    @staticmethod
+    def make_instance():
+        instance = object.__new__(app.LibraryApp)
+        instance.progress = Mock()
+        instance.load_cached_data = Mock()
+        instance._load_generation = 0
+        return instance
+
+    def test_it_loads_and_stops_the_progress_bar(self):
+        instance = self.make_instance()
+        instance._load_initial_snapshot()
+        instance.load_cached_data.assert_called_once_with()
+        instance.progress.stop.assert_called_once_with()
+
+    def test_it_does_nothing_when_a_user_scan_has_already_started(self):
+        instance = self.make_instance()
+        instance._load_generation = 1
+        instance._load_initial_snapshot()
+        instance.load_cached_data.assert_not_called()
+        instance.progress.stop.assert_not_called()
+
+    def test_it_stops_the_progress_bar_even_when_loading_fails(self):
+        instance = self.make_instance()
+        instance.load_cached_data.side_effect = RuntimeError("boom")
+        with self.assertRaises(RuntimeError):
+            instance._load_initial_snapshot()
+        instance.progress.stop.assert_called_once_with()
+
+
+class LiveStartupSnapshotTests(unittest.TestCase):
+    """Startup with a saved snapshot, in a real window: construction returns
+    before the snapshot is read; the load lands once the event loop runs."""
+
+    def test_the_snapshot_loads_after_construction_not_during_it(self):
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        self.addCleanup(root.destroy)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        settings_dir = Path(tmp.name)
+        settings_path = settings_dir / "settings.json"
+        cache_dir = settings_dir / "Cache"
+        stats_file = settings_dir / "Stats.xml"
+        stats_file.write_text("<Stats/>")
+        settings_path.write_text(json.dumps(
+            {"cache_dir": str(cache_dir), "stats_file": str(stats_file)}))
+        row = {header: "" for header in app.HEADERS}
+        row.update({"Title": "Song", "Pack": "P", "Type": "dance-single",
+                    "Difficulty": "Hard", "Meter": 10, "Course path": "P/Song"})
+        payload = {"schema_version": app.LIBRARY_CACHE_SCHEMA_VERSION,
+                   "cache_dir": str(cache_dir), "stats_file": str(stats_file),
+                   "refreshed_at": "2026-11-10T08:00:00-05:00", "files": 1,
+                   "skipped_files": 0, "files_without_charts": 0,
+                   "nested_song_tree": False, "rows": [dict(row) for _ in range(3)]}
+        (settings_dir / "library_cache.json").write_text(json.dumps(payload))
+        patcher = patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        application = app.LibraryApp(root)
+        # Nothing has been read yet: the load is scheduled, not done.
+        self.assertEqual(application.rows, [])
+        self.assertEqual(application.status.get(), "Loading saved library…")
+        # Pump the event loop until the deferred load lands and the rows fill in.
+        deadline = time.monotonic() + 10
+        while len(application.tree.get_children()) < 3 and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.02)
+        self.assertEqual(len(application.rows), 3)
+        self.assertTrue(application.status.get().startswith("Showing saved library snapshot"))
+        self.assertEqual(len(application.tree.get_children()), 3)
 
 
 class CourseReloadNotificationTests(unittest.TestCase):
