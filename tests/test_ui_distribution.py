@@ -491,6 +491,43 @@ class FullDistributionTests(unittest.TestCase):
         self.assertEqual(colours[labels.index("?")], theme.CHART_BAR_UNKNOWN)
         self.assertEqual(colours[labels.index("10")], theme.ACCENT)
 
+    def test_a_difficulty_name_the_table_does_not_know_gets_the_unknown_colour(self):
+        instance = self.make_app(metric="Difficulty")
+        instance.rows = [dict(self.ROWS[0], Difficulty="Quirky"), dict(self.ROWS[1], Difficulty="Hard")]
+        bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(7)]
+        instance.dist_ax.barh.return_value = bars
+        with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
+            instance._update_distribution_panel(instance._filter_rows())
+        labels = [bar.label for bar in instance._current_dist_bars]
+        colours = instance.dist_ax.barh.call_args.kwargs["color"]
+        self.assertEqual(colours[labels.index("Quirky")], theme.DIFFICULTY_COLOR_UNKNOWN)
+        self.assertEqual(colours[labels.index("Hard")], theme.DIFFICULTY_COLORS["Hard"])
+
+    def test_a_normal_draw_ends_with_a_repaint(self):
+        # Without draw_idle the chart is built but never shown until something else repaints it.
+        instance = self.make_app(metric="Meter")
+        bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(3)]
+        instance.dist_ax.barh.return_value = bars
+        with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
+            instance._update_distribution_panel(instance._filter_rows())
+        instance.dist_canvas.draw_idle.assert_called_once_with()
+
+    def test_rows_arriving_while_the_panel_is_hidden_are_stored_and_nothing_is_drawn(self):
+        # The table keeps refreshing while the panel is closed; re-showing redraws from these rows.
+        instance = self.make_app(metric="Meter")
+        instance.show_distribution_panel.get.return_value = False
+        instance._ensure_distribution_canvas = Mock()
+        rows = [self.ROWS[0]]
+        with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
+            instance._update_distribution_panel(rows)
+        self.assertIs(instance._last_visible_rows, rows)
+        # Hidden means hidden: no canvas is built, nothing is drawn, the banner and summary are left alone.
+        instance._ensure_distribution_canvas.assert_not_called()
+        instance.dist_ax.barh.assert_not_called()
+        instance.dist_summary_var.set.assert_not_called()
+        instance.dist_banner_frame.pack.assert_not_called()
+        instance.dist_banner_frame.pack_forget.assert_not_called()
+
 
 class FakeVar:
     """Stands in for a Tk variable: set() runs the 'write' traces straight away, as Tk does."""
