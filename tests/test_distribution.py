@@ -1,3 +1,4 @@
+import importlib.util
 import unittest
 import library_data as data
 
@@ -326,6 +327,153 @@ class DistributionTests(unittest.TestCase):
 
         # Empty rows
         self.assertEqual(data.distribution_summary_stats("Meter", []), "0 charts")
+
+
+class ChartClickLogicTests(unittest.TestCase):
+    """The chart's pure decision logic, extracted from the window methods (proposal 0005 step 2).
+
+    The tuning values are passed as literals, the way the window passes the theme constants,
+    so these tests stay free of theme like library_data itself.
+    """
+
+    ZONE = dict(min_click_fraction=0.15, bar_height=0.68, axis_headroom=1.25)
+
+    def test_zone_extents_widths_and_axis(self):
+        bars, axis_max = data.chart_bars(
+            [("10", 2, "10", False), ("11", 1, "11", False), ("12", 4, "12", False)], **self.ZONE)
+        self.assertEqual(axis_max, 4 * 1.25)
+        # Bar i is centred on position i; y_max is y_min + bar_height, never position + bar_height/2.
+        for i, bar in enumerate(bars):
+            self.assertEqual(bar.y_min, i - 0.68 / 2)
+            self.assertEqual(bar.y_max, bar.y_min + 0.68)
+        self.assertEqual([bar.click_width for bar in bars], [2, 1, 4])
+        self.assertEqual([bar.label for bar in bars], ["10", "11", "12"])
+        self.assertEqual([bar.token for bar in bars], ["10", "11", "12"])
+
+    def test_zone_minimum_width_widens_short_bars(self):
+        bars, axis_max = data.chart_bars([("10", 100, "10", False), ("11", 1, "11", False)], **self.ZONE)
+        self.assertEqual(axis_max, 125.0)
+        self.assertEqual(bars[0].click_width, 100)
+        self.assertEqual(bars[1].click_width, 125.0 * 0.15)  # one chart, widened to the minimum
+
+    def test_zone_empty_rows_lose_their_token_unless_active(self):
+        bars, _axis_max = data.chart_bars(
+            [("Easy", 0, "Easy", False), ("Hard", 0, "Hard", True), ("?", 3, "", False)], **self.ZONE)
+        self.assertEqual([bar.token for bar in bars], ["", "Hard", ""])
+
+    def test_zone_no_items(self):
+        self.assertEqual(data.chart_bars([], **self.ZONE), ([], 1.25))
+
+    def test_hit_test_inside_outside_and_tokenless(self):
+        bars, _axis_max = data.chart_bars([("10", 2, "10", False), ("11", 1, "11", False)], **self.ZONE)
+        self.assertIs(data.chart_bar_at(bars, 0.5, 0.0), bars[0])
+        self.assertIs(data.chart_bar_at(bars, 2.0, 0.0), bars[0])   # the zone's right edge counts
+        self.assertIs(data.chart_bar_at(bars, 0.5, 1.0), bars[1])
+        self.assertIsNone(data.chart_bar_at(bars, 2.5, 0.0))         # past the click zone
+        self.assertIsNone(data.chart_bar_at(bars, -0.1, 0.0))        # left of the axis
+        self.assertIsNone(data.chart_bar_at(bars, 0.5, 0.5))         # the gap between two bars
+        self.assertIsNone(data.chart_bar_at(bars, None, 0.0))        # a click on a row label
+        self.assertIsNone(data.chart_bar_at(bars, 0.5, None))
+        self.assertIsNone(data.chart_bar_at([], 0.5, 0.0))
+        # An empty row is in the zone but has nothing to filter to.
+        empty, _axis_max = data.chart_bars([("Easy", 0, "Easy", False)], **self.ZONE)
+        self.assertIsNone(data.chart_bar_at(empty, 0.1, 0.0))
+        self.assertIsNone(data.chart_bar_at([data.ChartBar(-0.34, 0.34, "?", "")], 0.1, 0.0))
+
+    def test_hit_test_question_mark_difficulty_bar_is_not_clickable(self):
+        # A difficulty literally named "?" passes through the aggregate as its own token,
+        # so the token check alone would let it be clicked; the hit test keeps the window
+        # handler's rule that a bar labelled "?" is never clickable.
+        self.assertIsNone(data.chart_bar_at([data.ChartBar(-0.34, 0.34, "?", "?")], 0.1, 0.0))
+        items = data.aggregate_difficulty_distribution([{"Difficulty": "?"}])
+        bars, _axis_max = data.chart_bars(items, **self.ZONE)
+        question_index = next(i for i, bar in enumerate(bars) if bar.label == "?")
+        self.assertEqual(bars[question_index].token, "?")
+        self.assertIsNone(data.chart_bar_at(bars, 0.1, float(question_index)))
+
+    def test_click_decision_meter_set_and_toggle_off(self):
+        self.assertEqual(
+            data.chart_click_decision("Meter", "11", "All difficulties", "Smiley"),
+            (None, "Smiley meter:11"))
+        self.assertEqual(
+            data.chart_click_decision("Meter", "11", "All difficulties", "Smiley meter:11"),
+            (None, "Smiley"))
+        # A hand-typed equivalent filter still toggles off.
+        self.assertEqual(
+            data.chart_click_decision("Meter", "11", "All difficulties", "Smiley meter:11.0"),
+            (None, "Smiley"))
+
+    def test_click_decision_difficulty_writes_the_dropdown(self):
+        # Setting a difficulty writes only the dropdown; the query is untouched.
+        self.assertEqual(
+            data.chart_click_decision("Difficulty", "Hard", "All difficulties", "Smiley"),
+            ("Hard", None))
+        # A redundant diff directive is removed, and only then is the query written.
+        self.assertEqual(
+            data.chart_click_decision("Difficulty", "Hard", "All difficulties", "Smiley diff:easy"),
+            ("Hard", "Smiley"))
+        # Clicking the active difficulty toggles it off.
+        self.assertEqual(
+            data.chart_click_decision("Difficulty", "Hard", "Hard", "Smiley"),
+            ("All difficulties", None))
+        self.assertEqual(
+            data.chart_click_decision("Difficulty", "Hard", "All difficulties", "Smiley diff:hard"),
+            ("All difficulties", "Smiley"))
+
+    def test_click_decision_bpm_pair_set_and_toggle_off(self):
+        token = (">=120", "<140")
+        self.assertEqual(
+            data.chart_click_decision("BPM", token, "All difficulties", "Smiley bpm:150"),
+            (None, "Smiley bpm:>=120 bpm:<140"))
+        self.assertEqual(
+            data.chart_click_decision("BPM", token, "All difficulties", "Smiley bpm:>=120 bpm:<140"),
+            (None, "Smiley"))
+
+    def test_clear_decision(self):
+        # Nothing active: the complete no-op.
+        self.assertIsNone(data.chart_clear_decision("All difficulties", "Smiley"))
+        # Difficulty and query filters together.
+        self.assertEqual(
+            data.chart_clear_decision("Hard", "Smiley meter:11"),
+            ("All difficulties", "Smiley"))
+        # Query filters only: the dropdown is not written.
+        self.assertEqual(
+            data.chart_clear_decision("All difficulties", "Smiley meter:11 bpm:>=120 bpm:<140"),
+            (None, "Smiley"))
+        # Difficulty active through a directive is reset the same way.
+        self.assertEqual(
+            data.chart_clear_decision("All difficulties", "Smiley diff:hard meter:11"),
+            ("All difficulties", "Smiley"))
+        # The dropdown alone: the query is still written, with its (unchanged) stripped text.
+        self.assertEqual(
+            data.chart_clear_decision("Hard", "Smiley"),
+            ("All difficulties", "Smiley"))
+
+
+@unittest.skipUnless(importlib.util.find_spec("matplotlib"), "matplotlib is not installed")
+class ChartBarsAggTests(unittest.TestCase):
+    """Draws the chart with matplotlib's Agg backend and compares extents exactly.
+
+    The zone function's derived y-extents must equal the drawn bars' get_y()/get_height()
+    extents bit for bit; a formula that recomputes y_max from the position diverges in the
+    last digit on roughly a quarter of bars (proposal 0005, acceptance round).
+    """
+
+    def test_zone_extents_match_a_drawn_chart_exactly(self):
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
+
+        items = [(f"bar{i}", (i * 7) % 13, str(i), False) for i in range(40)]
+        bars, _axis_max = data.chart_bars(
+            items, min_click_fraction=0.15, bar_height=0.68, axis_headroom=1.25)
+        figure = Figure(figsize=(3.0, 4.0), dpi=100)
+        ax = figure.add_subplot(111)
+        drawn = ax.barh(list(range(len(items))), [item[1] for item in items], align="center", height=0.68)
+        FigureCanvasAgg(figure).draw()
+        self.assertEqual(len(bars), len(drawn))
+        for bar, patch in zip(bars, drawn):
+            self.assertEqual(bar.y_min, patch.get_y())
+            self.assertEqual(bar.y_max, patch.get_y() + patch.get_height())
 
 
 if __name__ == "__main__":

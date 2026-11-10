@@ -21,7 +21,6 @@ except ImportError:
     ttk = None
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import NamedTuple
 
 try:
     import matplotlib
@@ -47,9 +46,12 @@ from library_data import (
     aggregate_difficulty_distribution,
     aggregate_meter_distribution,
     bpm_sort_key,
+    chart_bar_at,
+    chart_bars,
+    chart_click_decision,
+    chart_clear_decision,
     difficulty_sort_key,
     distribution_summary_stats,
-    filter_texts_match,
     format_duration,
     get_active_chart_filters,
     grade_sort_key,
@@ -59,7 +61,6 @@ from library_data import (
     parse_cache_file,
     parse_course_geometry,
     parse_search_query,
-    replace_search_directive,
     stats_index,
 )
 
@@ -84,16 +85,6 @@ COLUMN_GROUPS = {
 DEFAULT_VISIBLE_GROUPS = ("Song & chart", "Score")
 DEFAULT_VISIBLE_COLUMNS = frozenset(
     column for group in DEFAULT_VISIBLE_GROUPS for column in COLUMN_GROUPS[group])
-
-
-class ChartBar(NamedTuple):
-    """One row of the distribution chart, in the chart's own coordinates, as the click handler needs it."""
-    y_min: float
-    y_max: float
-    label: str
-    token: str | tuple  # the filter value(s) a click applies; "" when the row cannot be clicked
-    click_width: float = float("inf")  # a click to the right of this x does nothing
-
 
 class LibraryApp:
     # Defaults for state that is only set later, so every instance has these attributes.
@@ -1205,49 +1196,29 @@ class LibraryApp:
 
     def clear_chart_filter(self):
         """Remove every filter the distribution charts can set (difficulty, meter and BPM)."""
-        active = get_active_chart_filters(self.diff_var.get(), self.search_var.get())
-        if not active:
+        decision = chart_clear_decision(self.diff_var.get(), self.search_var.get())
+        if decision is None:
             return
-        query = self.search_var.get()
+        new_difficulty, new_query = decision
         with self._batched_filter_changes():
-            for metric, _ in active:
-                if metric == "Difficulty":
-                    self.diff_var.set("All difficulties")
-                query = replace_search_directive(query, CHART_FILTER_FIELDS[metric], None)
-            self.search_var.set(query)
+            if new_difficulty is not None:
+                self.diff_var.set(new_difficulty)
+            self.search_var.set(new_query)
         self.search_entry.icursor("end")
 
     def _on_chart_click(self, event):
         # xdata and ydata are None when the click is outside the plot area (for example on a row label).
-        if event.xdata is None or event.ydata is None or not self._current_dist_bars:
-            return
-        clicked = next(
-            (bar for bar in self._current_dist_bars
-             if bar.y_min <= event.ydata <= bar.y_max and 0 <= event.xdata <= bar.click_width),
-            None,
-        )
-        if clicked is None or not clicked.token or clicked.label == "?":
+        clicked = chart_bar_at(self._current_dist_bars, event.xdata, event.ydata)
+        if clicked is None:
             # Blank space, a '?' row or a row with nothing to filter to is not clickable.
             return
-        target_token = clicked.token
-
-        metric = self.distribution_metric.get()
-        query = self.search_var.get()
-        current = dict(get_active_chart_filters(self.diff_var.get(), query)).get(metric)
-        already_active = current is not None and filter_texts_match(current, target_token)
-
+        new_difficulty, new_query = chart_click_decision(
+            self.distribution_metric.get(), clicked.token, self.diff_var.get(), self.search_var.get())
         with self._batched_filter_changes():
-            if metric == "Difficulty":
-                self.diff_var.set("All difficulties" if already_active else target_token)
-                # Remove redundant diff from search bar so they don't fight
-                new_query = replace_search_directive(query, "diff", None)
-                if new_query != query:
-                    self.search_var.set(new_query)
-            else:
-                new_query = replace_search_directive(
-                    query, CHART_FILTER_FIELDS[metric], None if already_active else target_token)
+            if new_difficulty is not None:
+                self.diff_var.set(new_difficulty)
+            if new_query is not None:
                 self.search_var.set(new_query)
-
         self.search_entry.icursor("end")
 
     def _metric_filter_present(self, metric):
@@ -1311,10 +1282,10 @@ class LibraryApp:
         else:  # BPM
             data_items = aggregate_bpm_distribution(chart_rows, active_val=active_val)
 
-        labels = [item[0] for item in reversed(data_items)]
-        counts = [item[1] for item in reversed(data_items)]
-        tokens = [item[2] for item in reversed(data_items)]
-        actives = [item[3] for item in reversed(data_items)]
+        display_items = list(reversed(data_items))
+        labels = [item[0] for item in display_items]
+        counts = [item[1] for item in display_items]
+        actives = [item[3] for item in display_items]
 
         y_positions = list(range(len(labels)))
         bar_colors = []
@@ -1335,25 +1306,22 @@ class LibraryApp:
                 edge_colors.append(theme.BG_INPUT)
                 linewidths.append(0.8)
 
-        bars = self.dist_ax.barh(
+        self.dist_ax.barh(
             y_positions, counts, align="center",
             color=bar_colors, edgecolor=edge_colors, linewidth=linewidths, height=theme.CHART_BAR_HEIGHT,
         )
 
         max_count = max(counts) if counts else 1
-        axis_max = max_count * 1.25
-        min_click_width = axis_max * theme.CHART_MIN_CLICK_FRACTION
-        for i, (bar, count) in enumerate(zip(bars, counts)):
-            y = bar.get_y()
-            h = bar.get_height()
-            # An empty row has nothing to filter to, so it is not clickable, unless it is the active
-            # filter, which has to stay clickable so that clicking it again can switch it off.
-            clickable = counts[i] > 0 or actives[i]
-            self._current_dist_bars.append(ChartBar(
-                y, y + h, labels[i], tokens[i] if clickable else "", max(count, min_click_width)))
+        self._current_dist_bars, axis_max = chart_bars(
+            display_items,
+            min_click_fraction=theme.CHART_MIN_CLICK_FRACTION,
+            bar_height=theme.CHART_BAR_HEIGHT,
+            axis_headroom=theme.CHART_AXIS_HEADROOM,
+        )
+        for chart_bar, count in zip(self._current_dist_bars, counts):
             if count > 0:
                 self.dist_ax.text(
-                    count + max_count * 0.03, y + h / 2, str(count),
+                    count + max_count * 0.03, chart_bar.y_min + theme.CHART_BAR_HEIGHT / 2, str(count),
                     va="center", ha="left", color=theme.TEXT_PRIMARY, fontsize=theme.CHART_TEXT_SIZE_COUNT,
                 )
 
