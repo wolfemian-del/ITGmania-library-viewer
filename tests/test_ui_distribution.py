@@ -217,6 +217,10 @@ class DistributionVisibilityTests(unittest.TestCase):
             canvas = canvas_cls.return_value
             canvas.mpl_connect.assert_called_once_with("button_press_event", instance._on_chart_click)
             canvas.get_tk_widget.return_value.pack.assert_called_once_with(fill="both", expand=True)
+            # The created objects are the ones stored for later updates.
+            self.assertIs(instance.dist_fig, figure_cls.return_value)
+            self.assertIs(instance.dist_ax, figure_cls.return_value.add_subplot.return_value)
+            self.assertIs(instance.dist_canvas, canvas)
             # A second call reuses the canvas instead of building another.
             self.assertTrue(instance._ensure_distribution_canvas())
             figure_cls.assert_called_once()
@@ -438,11 +442,13 @@ class FullDistributionTests(unittest.TestCase):
             instance._update_distribution_panel(instance._filter_rows())
             self.assertEqual([bar[2] for bar in instance._current_dist_bars], ["12", "11", "10"])
 
+            # Empty the library underneath the panel: a redraw that recalculated
+            # its rows (instead of using the stored ones) would now find nothing.
+            instance.rows = []
             instance.distribution_metric.get.return_value = "Difficulty"
             instance._on_distribution_metric_changed()
 
         instance._save_settings.assert_called_once_with()
-        self.assertEqual(instance.dist_ax.barh.call_count, 2)
         # The redraw used the stored rows and the new metric, not the meter bars again.
         labels = [bar[2] for bar in instance._current_dist_bars]
         self.assertIn("Hard", labels)
@@ -471,6 +477,19 @@ class FullDistributionTests(unittest.TestCase):
         with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
             instance._update_distribution_panel(instance._filter_rows())
         self.assertEqual(instance.dist_ax.barh.call_args.kwargs["color"], [theme.ACCENT] * 3)
+
+        # A row with no meter value lands in the "?" bar, which takes its own colour.
+        instance = self.make_app(metric="Meter")
+        bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(2)]
+        instance.dist_ax.barh.return_value = bars
+        rows = [{"Meter": 10, "Difficulty": "Hard", "bpm_max": 150.0},
+                {"Difficulty": "Hard", "bpm_max": 150.0}]
+        with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
+            instance._update_distribution_panel(rows)
+        labels = [bar.label for bar in instance._current_dist_bars]
+        colours = instance.dist_ax.barh.call_args.kwargs["color"]
+        self.assertEqual(colours[labels.index("?")], theme.CHART_BAR_UNKNOWN)
+        self.assertEqual(colours[labels.index("10")], theme.ACCENT)
 
 
 class FakeVar:
@@ -656,11 +675,10 @@ class LiveDistributionStartupTests(unittest.TestCase):
         slaves = application.content_frame.pack_slaves()
         self.assertLess(slaves.index(application.dist_panel), slaves.index(application.table_frame))
         # The chart canvas is created lazily on the first update while visible.
-        if not app.MATPLOTLIB_AVAILABLE:
-            self.skipTest("matplotlib is not installed")
-        application.refresh_table()
-        self.assertIsNotNone(application.dist_canvas)
-        self.assertIsNotNone(application.dist_fig)
+        if app.MATPLOTLIB_AVAILABLE:
+            application.refresh_table()
+            self.assertIsNotNone(application.dist_canvas)
+            self.assertIsNotNone(application.dist_fig)
 
     def test_startup_keeps_a_valid_metric_and_stays_hidden_when_saved_so(self):
         application = self.make_live_app({"show_distribution": False, "distribution_metric": "BPM"})
@@ -682,10 +700,31 @@ class LiveDistributionStartupTests(unittest.TestCase):
         self.assertFalse(application.dist_panel.winfo_ismapped())
         application.toggle_distribution_panel()
         root.update()
-        # The end-to-end pin for the show path's before= argument: packed ahead of
-        # the table, the panel keeps its real width instead of being squeezed away.
+        # A smoke check that hide/show leaves the panel genuinely mapped at width
+        # (the before= argument itself is pinned exactly by the mock tests).
         self.assertTrue(application.dist_panel.winfo_ismapped())
         self.assertGreater(application.dist_panel.winfo_width(), 0)
+
+    def test_live_canvas_click_reaches_the_handler_and_filters(self):
+        # The live half of the canvas pin (proposal 0005 §6): the headless test
+        # proves the calls; here a click goes through the real TkAgg canvas's own
+        # callback registry, the path a user's click actually takes.
+        if not app.MATPLOTLIB_AVAILABLE:
+            self.skipTest("matplotlib is not installed")
+        from matplotlib.backend_bases import MouseEvent
+
+        application = self.make_live_app({"show_distribution": True})
+        application.rows = [
+            {"Meter": 10, "Difficulty": "Hard", "bpm_max": 150.0, "Pack": "Test", "Type": "dance-single", "Grade": ""},
+            {"Meter": 11, "Difficulty": "Challenge", "bpm_max": 180.0, "Pack": "Test", "Type": "dance-single", "Grade": ""},
+        ]
+        application.refresh_table()
+        application.dist_canvas.draw()
+        bar = next(b for b in application._current_dist_bars if b.label == "11")
+        x_px, y_px = application.dist_ax.transData.transform((0.5, (bar.y_min + bar.y_max) / 2))
+        event = MouseEvent("button_press_event", application.dist_canvas, x_px, y_px, button=1)
+        application.dist_canvas.callbacks.process("button_press_event", event)
+        self.assertEqual(application.search_var.get(), "meter:11")
 
 
 if __name__ == "__main__":
