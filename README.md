@@ -62,7 +62,7 @@ The app remembers the selected data paths, column order, visibility, and widths,
 
 ## Changing the look
 
-Every color and font the window uses is defined, with a note on what it is for, in `theme.py`. To restyle the app, edit the values there and restart it; the window code only refers to the names (for example `theme.BG_WINDOW`), and a test fails if a color or font is typed directly into the window code (`library_visualizer.py`, `course_builder.py`, `row_tints.py`, or `advanced_search.py`) again. `theme.DIFFICULTY_COLORS` controls both the distribution chart bars and the song table row tints. Row heights, panel widths, and window sizes are likewise fixed numbers in `theme.py`, so a much larger font may also need those adjusted.
+Every color and font the window uses is defined, with a note on what it is for, in `theme.py`. To restyle the app, edit the values there and restart it; the window code only refers to the names (for example `theme.BG_WINDOW`), and a test fails if a color or font is typed directly into the window code (`library_visualizer.py`, `course_builder.py`, `row_tints.py`, `advanced_search.py`, or `distribution_panel.py`) again. `theme.DIFFICULTY_COLORS` controls both the distribution chart bars and the song table row tints. Row heights, panel widths, and window sizes are likewise fixed numbers in `theme.py`, so a much larger font may also need those adjusted.
 
 ## Development checks
 
@@ -79,6 +79,8 @@ The UI-independent parsing and course helpers live in `library_data.py`; `tests/
 The Build-a-course dialog is a separate component in `course_builder.py`, constructed by the main window with the few things it needs (its parent window, the status variable, the button factory, a way to read the table's selected rows, a way to read every row in the library, the remembered window geometry, and a callback that reports the geometry when the window closes); its tests are in `tests/test_course_builder.py`.
 
 The Advanced Search dialog is likewise a separate component in `advanced_search.py`, constructed by the main window with its parent window, the three widget factories, the search variable it edits, the remembered window geometry, and a callback that reports the geometry when the window closes; its tests are in `tests/test_advanced_search.py`.
+
+The distribution panel beside the table is a separate component in `distribution_panel.py`, constructed by the main window with the button factory, the four variables it shares with the window (the search and difficulty variables, its show/hide variable, and its metric selector), a way to pull rows when the chart's own metric is the active filter, a callback that applies a chart click or Clear as one batched filter change, and the settings save; its tests are in `tests/test_ui_distribution.py`. The two dialogs and the panel persist differently by design: a dialog's geometry is a value passed in and a callback reporting it back out, while the panel's variables are shared objects, because the View menu and the settings save both bind them directly.
 
 ## License
 

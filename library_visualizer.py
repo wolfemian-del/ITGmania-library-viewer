@@ -22,15 +22,6 @@ except ImportError:
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-try:
-    import matplotlib
-    matplotlib.use("TkAgg")
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-    from matplotlib.figure import Figure
-    MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    MATPLOTLIB_AVAILABLE = False
-
 # The release number, shown in Help > About. Keep it equal to the newest heading in CHANGELOG.md (a test checks).
 __version__ = "1.1.0"
 
@@ -38,22 +29,14 @@ import row_tints
 import theme
 from advanced_search import AdvancedSearch
 from course_builder import CourseBuilder
+from distribution_panel import DistributionPanel
 from library_data import (
     TAP_FIELDS,
     TECH_FIELDS,
     CHART_FILTER_FIELDS,
-    aggregate_bpm_distribution,
-    aggregate_difficulty_distribution,
-    aggregate_meter_distribution,
     bpm_sort_key,
-    chart_bar_at,
-    chart_bars,
-    chart_click_decision,
-    chart_clear_decision,
     difficulty_sort_key,
-    distribution_summary_stats,
     format_duration,
-    get_active_chart_filters,
     grade_sort_key,
     looks_like_song_tree,
     match_chart_query,
@@ -166,11 +149,6 @@ class LibraryApp:
         self.distribution_metric = tk.StringVar(
             value=saved_metric if saved_metric in ("Meter", "Difficulty", "BPM") else "Meter"
         )
-        self.dist_canvas = None
-        self.dist_fig = None
-        self.dist_ax = None
-        self._current_dist_bars = []
-        self._last_visible_rows = []
         self._tree_tint = None  # the song table's SelectedRowTint, created with the table in _build
         self._load_generation = 0  # counts Load / refresh requests; a scan from an older request is dropped
         self._snapshot_lock = threading.Lock()  # one scan at a time may check its generation and write the snapshot
@@ -190,12 +168,6 @@ class LibraryApp:
         self.progress = None
         self.count_label = None
         self.load_button = None
-        # Created by _build_distribution_panel(); None until then:
-        self.dist_panel = None  # the distribution code does nothing until the panel exists
-        self.dist_summary_var = None
-        self.dist_banner_frame = None
-        self.dist_banner_label = None
-        self.dist_chart_frame = None
         # Working state that starts empty:
         self.last_refreshed_at = ""  # when the saved snapshot was written (set by _loaded)
         self._render_generation = 0  # counts table redraws, so an unfinished older redraw stops (refresh_table)
@@ -205,10 +177,12 @@ class LibraryApp:
         # Dialogs: a window attribute is None while that dialog is closed. The course builder is a
         # separate component (course_builder.py) that owns its window and queue; it is created in
         # _build, once the status variable exists. The Advanced Search component
-        # (advanced_search.py) follows the same pattern.
+        # (advanced_search.py) and the distribution panel component (distribution_panel.py)
+        # follow the same pattern.
         self.advanced_search = None
         self.about_window = None
         self.course_builder = None
+        self.distribution_panel = None
         self._last_saved_settings = copy.deepcopy(self.saved_settings)
         self._style()
         self._build()
@@ -284,6 +258,20 @@ class LibraryApp:
         self.advanced_search = AdvancedSearch(self.root, self._entry, self._button, self._combo, self.search_var,
                                               saved_geometry=self.advanced_search_geometry,
                                               report_geometry=self._advanced_search_geometry_changed)
+        # The distribution panel component (distribution_panel.py): it owns the chart panel
+        # beside the table. The four variables stay the app's own (the View menu binds one,
+        # the settings save reads two), row pulls go through _filter_rows, and the panel's
+        # click/Clear changes come back through apply_chart_filter so they batch into one
+        # refresh. Its widgets are built by build_panel, below, once their parent exists.
+        self.distribution_panel = DistributionPanel(
+            button_factory=self._button,
+            search_var=self.search_var,
+            diff_var=self.diff_var,
+            show_distribution_panel=self.show_distribution_panel,
+            distribution_metric=self.distribution_metric,
+            filter_rows=self._filter_rows,
+            apply_chart_filter=self.apply_chart_filter,
+            save_settings=self._save_settings)
         # The main window's X button goes through the same exit path as File → Exit (issue #87).
         self.root.protocol("WM_DELETE_WINDOW", self._close_app)
         paths = tk.Frame(self.root, bg=theme.BG_PANEL, padx=12, pady=10)
@@ -309,17 +297,14 @@ class LibraryApp:
         self.load_button.pack(side="left", padx=4)
         self._button(bar, "Export CSV", self.export_csv).pack(side="left", padx=4)
         self._button(bar, "Build course…", self.course_builder.open_dialog).pack(side="left", padx=4)
-        self.dist_button = self._button(
-            bar,
-            "Distribution ◀" if self.show_distribution_panel.get() else "Distribution ▶",
-            self.toggle_distribution_panel,
-        )
+        # The label is the component's to set: build_panel (below) puts the saved state's
+        # ◀/▶ text on the button, and the component rewrites it on every visibility change.
+        self.dist_button = self._button(bar, "", self.distribution_panel.toggle)
         self.dist_button.pack(side="left", padx=4)
         self.content_frame = tk.Frame(self.root, bg=theme.BG_WINDOW)
         self.content_frame.pack(fill="both", expand=True, padx=18, pady=(0, 8))
-        self._build_distribution_panel()
-        if self.show_distribution_panel.get():
-            self.dist_panel.pack(side="right", fill="y", padx=(10, 0))
+        self.distribution_panel.build_panel(
+            self.content_frame, self.dist_button, lambda: self.table_frame)
         self.table_frame = tk.Frame(self.content_frame, bg=theme.BG_WINDOW)
         self.table_frame.pack(side="left", fill="both", expand=True)
         self.tree = ttk.Treeview(self.table_frame, columns=HEADERS, show="headings", selectmode="extended")
@@ -433,7 +418,7 @@ class LibraryApp:
         view_menu.add_checkbutton(
             label="Show distribution panel",
             variable=self.show_distribution_panel,
-            command=self._sync_distribution_toggle,
+            command=self.distribution_panel.sync_toggle,
         )
         menubar.add_cascade(label="View", menu=view_menu)
 
@@ -1070,7 +1055,7 @@ class LibraryApp:
         self._tree_tint.reset()
         self._insert_batch(visible, 0, generation, selected_rows)
         self.count_label.set(f"{len(visible):,} charts shown · {len(self.rows):,} total")
-        self._update_distribution_panel(visible)
+        self.distribution_panel.show_rows(visible)
 
     def _update_sort_headings(self):
         priorities = {column: (index, descending) for index, (column, descending) in enumerate(self.sort_keys, 1)}
@@ -1106,237 +1091,23 @@ class LibraryApp:
         if stop < len(rows):
             self.root.after(1, lambda: self._insert_batch(rows, stop, generation, selected_rows))
 
-    def _build_distribution_panel(self):
-        self.dist_panel = tk.Frame(self.content_frame, bg=theme.BG_PANEL, width=theme.DIST_PANEL_WIDTH, padx=10, pady=10)
-        self.dist_panel.pack_propagate(False)
+    def apply_chart_filter(self, difficulty=None, query=None):
+        """Apply a distribution chart's filter change as one batched update (proposal 0005).
 
-        # Header: Title + Close button
-        hdr = tk.Frame(self.dist_panel, bg=theme.BG_PANEL)
-        hdr.pack(fill="x", pady=(0, 6))
-        tk.Label(hdr, text="Distribution", fg=theme.TEXT_TITLE, bg=theme.BG_PANEL,
-                 font=theme.FONT_PANEL_TITLE).pack(side="left")
-        self._button(hdr, "✕", self.toggle_distribution_panel).pack(side="right")
-
-        # Metric selector
-        metric_bar = tk.Frame(self.dist_panel, bg=theme.BG_PANEL)
-        metric_bar.pack(fill="x", pady=(4, 6))
-        for m in ("Meter", "Difficulty", "BPM"):
-            b = tk.Radiobutton(
-                metric_bar, text=m, value=m, variable=self.distribution_metric,
-                indicatoron=False, bg=theme.BG_INPUT, fg=theme.TEXT_PRIMARY, selectcolor=theme.ACCENT_BG,
-                activebackground=theme.ACCENT_BG, activeforeground=theme.WHITE, font=theme.FONT_SMALL,
-                command=self._on_distribution_metric_changed, padx=6, pady=3,
-            )
-            b.pack(side="left", padx=2, expand=True, fill="x")
-
-        # Summary line
-        self.dist_summary_var = tk.StringVar(value="")
-        tk.Label(self.dist_panel, textvariable=self.dist_summary_var, fg=theme.TEXT_MUTED, bg=theme.BG_PANEL,
-                 font=theme.FONT_SMALL, wraplength=theme.DIST_PANEL_WIDTH - 24, justify="left").pack(fill="x", pady=(0, 6))
-
-        # Active filter banner: shown just above the chart, only while a chart filter is active.
-        # It is built here but not packed; _update_distribution_panel packs it before the chart container.
-        self.dist_banner_frame = tk.Frame(self.dist_panel, bg=theme.BG_INPUT, padx=8, pady=5)
-        self.dist_banner_label = tk.Label(self.dist_banner_frame, text="", fg=theme.ACCENT, bg=theme.BG_INPUT,
-                                          font=theme.FONT_BODY, wraplength=theme.DIST_PANEL_WIDTH - 90,
-                                          justify="left", anchor="w")
-        self.dist_banner_label.pack(side="left", fill="x", expand=True)
-        self._button(self.dist_banner_frame, "Clear", self.clear_chart_filter).pack(side="right")
-
-        # Chart container
-        self.dist_chart_frame = tk.Frame(self.dist_panel, bg=theme.BG_PANEL)
-        self.dist_chart_frame.pack(fill="both", expand=True)
-
-        if not MATPLOTLIB_AVAILABLE:
-            tk.Label(
-                self.dist_chart_frame,
-                text="Install matplotlib to enable\ndistribution charts\n\nRun:\npip install matplotlib",
-                fg=theme.TEXT_MUTED, bg=theme.BG_PANEL, font=theme.FONT_BODY, justify="center",
-            ).pack(expand=True, pady=40)
-
-    def _ensure_distribution_canvas(self):
-        if not MATPLOTLIB_AVAILABLE:
-            return False
-        if self.dist_canvas is None:
-            self.dist_fig = Figure(figsize=(3.0, 4.0), dpi=100, facecolor=theme.BG_PANEL)
-            self.dist_ax = self.dist_fig.add_subplot(111)
-            self.dist_canvas = FigureCanvasTkAgg(self.dist_fig, master=self.dist_chart_frame)
-            self.dist_canvas.mpl_connect("button_press_event", self._on_chart_click)
-            # No resize binding is needed here: the canvas widget fills the chart frame, and matplotlib's
-            # Tk canvas already resizes the figure and redraws when its widget changes size.
-            self.dist_canvas.get_tk_widget().pack(fill="both", expand=True)
-        return True
-
-    def _set_distribution_visible(self, visible: bool):
-        """Single source of truth for panel visibility (toolbar + View menu)."""
-        if self.dist_panel is None:
+        The distribution panel computes the new values and calls this; a value left
+        as None is not written, so the writes are exactly the ones the chart action
+        calls for. Applying a change ends with the search cursor at the end of the
+        box, as a chart click or Clear always has; a call with nothing to change
+        neither refreshes nor nudges.
+        """
+        if difficulty is None and query is None:
             return
-        self.show_distribution_panel.set(visible)
-        if visible:
-            self.dist_panel.pack(side="right", fill="y", padx=(10, 0), before=self.table_frame)
-            self.dist_button.configure(text="Distribution ◀")
-            self._update_distribution_panel(self._last_visible_rows)
-        else:
-            self.dist_panel.pack_forget()
-            self.dist_button.configure(text="Distribution ▶")
-            self.root.update_idletasks()
-        self._save_settings()
-
-    def toggle_distribution_panel(self):
-        """Toolbar button: flip current visibility."""
-        self._set_distribution_visible(not self.show_distribution_panel.get())
-
-    def _sync_distribution_toggle(self):
-        """View-menu checkbutton: BooleanVar already toggled by Tk; apply it to the UI."""
-        self._set_distribution_visible(self.show_distribution_panel.get())
-
-    def _on_distribution_metric_changed(self):
-        self._save_settings()
-        self._update_distribution_panel(self._last_visible_rows)
-
-    def clear_chart_filter(self):
-        """Remove every filter the distribution charts can set (difficulty, meter and BPM)."""
-        decision = chart_clear_decision(self.diff_var.get(), self.search_var.get())
-        if decision is None:
-            return
-        new_difficulty, new_query = decision
         with self._batched_filter_changes():
-            if new_difficulty is not None:
-                self.diff_var.set(new_difficulty)
-            self.search_var.set(new_query)
+            if difficulty is not None:
+                self.diff_var.set(difficulty)
+            if query is not None:
+                self.search_var.set(query)
         self.search_entry.icursor("end")
-
-    def _on_chart_click(self, event):
-        # xdata and ydata are None when the click is outside the plot area (for example on a row label).
-        clicked = chart_bar_at(self._current_dist_bars, event.xdata, event.ydata)
-        if clicked is None:
-            # Blank space, a '?' row or a row with nothing to filter to is not clickable.
-            return
-        new_difficulty, new_query = chart_click_decision(
-            self.distribution_metric.get(), clicked.token, self.diff_var.get(), self.search_var.get())
-        with self._batched_filter_changes():
-            if new_difficulty is not None:
-                self.diff_var.set(new_difficulty)
-            if new_query is not None:
-                self.search_var.set(new_query)
-        self.search_entry.icursor("end")
-
-    def _metric_filter_present(self, metric):
-        """Whether the table is currently filtered by this chart's own metric."""
-        if metric == "Difficulty" and self.diff_var.get() != "All difficulties":
-            return True
-        field = CHART_FILTER_FIELDS[metric]
-        directives = parse_search_query(self.search_var.get()).get("directives", [])
-        return any(directive_field == field for directive_field, _ in directives)
-
-    def _distribution_rows(self, metric):
-        """Rows behind the chart: every filter except the chart's own, so all bars stay visible."""
-        if self._metric_filter_present(metric):
-            return self._filter_rows(ignore_metric=metric)
-        return self._last_visible_rows
-
-    def _update_distribution_panel(self, visible_rows):
-        self._last_visible_rows = visible_rows
-        if self.dist_panel is None or not self.show_distribution_panel.get():
-            return
-
-        metric = self.distribution_metric.get()
-        chart_rows = self._distribution_rows(metric)
-
-        # Update active filter banner (every chart filter narrowing the table, not just this chart's)
-        active_filters = get_active_chart_filters(self.diff_var.get(), self.search_var.get())
-        if active_filters:
-            banner = " · ".join(f"{name} {value}" for name, value in active_filters)
-            self.dist_banner_label.configure(text=f"Filtered by: {banner}")
-            self.dist_banner_frame.pack(fill="x", pady=(0, 6), before=self.dist_chart_frame)
-        else:
-            self.dist_banner_frame.pack_forget()
-
-        # Update summary text
-        self.dist_summary_var.set(distribution_summary_stats(metric, chart_rows))
-
-        if not self._ensure_distribution_canvas():
-            return
-
-        # Redraw chart
-        self.dist_ax.clear()
-        self._current_dist_bars = []
-
-        if not chart_rows:
-            self.dist_ax.text(
-                0.5, 0.5, "No charts match\ncurrent filters",
-                color=theme.TEXT_MUTED, fontsize=theme.CHART_TEXT_SIZE_MESSAGE, ha="center", va="center",
-                transform=self.dist_ax.transAxes,
-            )
-            self.dist_ax.axis("off")
-            self.dist_canvas.draw_idle()
-            return
-
-        self.dist_ax.axis("on")
-        active_val = dict(active_filters).get(metric)
-
-        if metric == "Meter":
-            data_items = aggregate_meter_distribution(chart_rows, active_val=active_val)
-        elif metric == "Difficulty":
-            data_items = aggregate_difficulty_distribution(chart_rows, active_val=active_val)
-        else:  # BPM
-            data_items = aggregate_bpm_distribution(chart_rows, active_val=active_val)
-
-        display_items = list(reversed(data_items))
-        labels = [item[0] for item in display_items]
-        counts = [item[1] for item in display_items]
-        actives = [item[3] for item in display_items]
-
-        y_positions = list(range(len(labels)))
-        bar_colors = []
-        edge_colors = []
-        linewidths = []
-
-        for label, is_act in zip(labels, actives):
-            if metric == "Difficulty":
-                base_color = theme.DIFFICULTY_COLORS.get(label, theme.DIFFICULTY_COLOR_UNKNOWN)
-            else:
-                base_color = theme.ACCENT if label != "?" else theme.CHART_BAR_UNKNOWN
-
-            bar_colors.append(base_color)
-            if is_act:
-                edge_colors.append(theme.WHITE)
-                linewidths.append(1.5)
-            else:
-                edge_colors.append(theme.BG_INPUT)
-                linewidths.append(0.8)
-
-        self.dist_ax.barh(
-            y_positions, counts, align="center",
-            color=bar_colors, edgecolor=edge_colors, linewidth=linewidths, height=theme.CHART_BAR_HEIGHT,
-        )
-
-        max_count = max(counts) if counts else 1
-        self._current_dist_bars, axis_max = chart_bars(
-            display_items,
-            min_click_fraction=theme.CHART_MIN_CLICK_FRACTION,
-            bar_height=theme.CHART_BAR_HEIGHT,
-            axis_headroom=theme.CHART_AXIS_HEADROOM,
-        )
-        for chart_bar, count in zip(self._current_dist_bars, counts):
-            if count > 0:
-                self.dist_ax.text(
-                    count + max_count * 0.03, chart_bar.y_min + theme.CHART_BAR_HEIGHT / 2, str(count),
-                    va="center", ha="left", color=theme.TEXT_PRIMARY, fontsize=theme.CHART_TEXT_SIZE_COUNT,
-                )
-
-        self.dist_ax.set_yticks(y_positions)
-        self.dist_ax.set_yticklabels(labels, color=theme.TEXT_PRIMARY, fontsize=theme.CHART_TEXT_SIZE_LABEL)
-        self.dist_ax.set_xlim(0, axis_max)
-        self.dist_ax.set_facecolor(theme.BG_PANEL)
-        self.dist_fig.patch.set_facecolor(theme.BG_PANEL)
-        self.dist_ax.tick_params(colors=theme.TEXT_MUTED, labelsize=theme.CHART_TEXT_SIZE_LABEL, left=False, bottom=True)
-        self.dist_ax.spines["top"].set_visible(False)
-        self.dist_ax.spines["right"].set_visible(False)
-        self.dist_ax.spines["left"].set_visible(False)
-        self.dist_ax.spines["bottom"].set_color(theme.CHART_AXIS_LINE)
-        self.dist_fig.tight_layout(pad=1.0)
-        self.dist_canvas.draw_idle()
 
     def _shift_sort_click(self, event):
         if not event.state & 0x0001 or self.tree.identify_region(event.x, event.y) != "heading":
