@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -134,6 +135,91 @@ class DistributionUITests(unittest.TestCase):
 
         instance.search_var.set.assert_not_called()
         instance.refresh_table.assert_not_called()
+
+
+class DistributionVisibilityTests(unittest.TestCase):
+    """The visibility funnel (proposal 0005, step 1): hide, re-show, and the View-menu sync.
+
+    Until now only the show direction was exercised, and without its pack arguments —
+    the `before=` argument is the one a botched component move is most likely to drop,
+    leaving the panel squeezed to zero width next to the table.
+    """
+
+    @staticmethod
+    def make_instance(shown=True):
+        instance = object.__new__(app.LibraryApp)
+        instance.root = Mock()
+        instance.show_distribution_panel = Mock()
+        instance.show_distribution_panel.get.return_value = shown
+        instance.distribution_metric = Mock()
+        instance.distribution_metric.get.return_value = "Meter"
+        instance.dist_button = Mock()
+        instance.dist_panel = Mock()
+        instance.table_frame = Mock()
+        instance._save_settings = Mock()
+        instance._last_visible_rows = [{"Meter": 10, "Difficulty": "Hard", "bpm_max": 150}]
+        return instance
+
+    def test_hide_then_show_repacks_with_full_arguments_and_saves(self):
+        instance = self.make_instance(shown=True)
+
+        instance._set_distribution_visible(False)
+        instance.show_distribution_panel.set.assert_called_once_with(False)
+        instance.dist_panel.pack_forget.assert_called_once_with()
+        instance.dist_button.configure.assert_called_once_with(text="Distribution ▶")
+        instance.root.update_idletasks.assert_called_once_with()
+        instance._save_settings.assert_called_once_with()
+
+        instance.dist_panel.reset_mock()
+        instance.dist_button.reset_mock()
+        instance.root.reset_mock()
+        instance.show_distribution_panel.reset_mock()
+        instance._save_settings.reset_mock()
+        instance._update_distribution_panel = Mock()
+        instance._set_distribution_visible(True)
+        instance.show_distribution_panel.set.assert_called_once_with(True)
+        # The full recorded pack arguments, including before= the table frame.
+        instance.dist_panel.pack.assert_called_once_with(
+            side="right", fill="y", padx=(10, 0), before=instance.table_frame)
+        instance.dist_button.configure.assert_called_once_with(text="Distribution ◀")
+        # Re-showing redraws from the rows stored while the panel was hidden.
+        instance._update_distribution_panel.assert_called_once_with(instance._last_visible_rows)
+        instance._save_settings.assert_called_once_with()
+        # update_idletasks belongs to the hide path only.
+        instance.root.update_idletasks.assert_not_called()
+
+    def test_sync_distribution_toggle_applies_the_variable(self):
+        # The View-menu checkbutton has already flipped the variable; sync applies it.
+        instance = self.make_instance(shown=True)
+        instance._update_distribution_panel = Mock()
+        instance._sync_distribution_toggle()
+        instance.dist_panel.pack.assert_called_once_with(
+            side="right", fill="y", padx=(10, 0), before=instance.table_frame)
+
+        instance = self.make_instance(shown=False)
+        instance._sync_distribution_toggle()
+        instance.dist_panel.pack_forget.assert_called_once_with()
+        instance.dist_button.configure.assert_called_once_with(text="Distribution ▶")
+
+    def test_canvas_creation_builds_the_figure_and_binds_the_click(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.dist_canvas = None
+        instance.dist_fig = None
+        instance.dist_ax = None
+        instance.dist_chart_frame = Mock()
+        with patch.object(app, "MATPLOTLIB_AVAILABLE", True), \
+                patch.object(app, "Figure", create=True) as figure_cls, \
+                patch.object(app, "FigureCanvasTkAgg", create=True) as canvas_cls:
+            self.assertTrue(instance._ensure_distribution_canvas())
+            figure_cls.assert_called_once_with(figsize=(3.0, 4.0), dpi=100, facecolor=theme.BG_PANEL)
+            figure_cls.return_value.add_subplot.assert_called_once_with(111)
+            canvas_cls.assert_called_once_with(figure_cls.return_value, master=instance.dist_chart_frame)
+            canvas = canvas_cls.return_value
+            canvas.mpl_connect.assert_called_once_with("button_press_event", instance._on_chart_click)
+            canvas.get_tk_widget.return_value.pack.assert_called_once_with(fill="both", expand=True)
+            # A second call reuses the canvas instead of building another.
+            self.assertTrue(instance._ensure_distribution_canvas())
+            figure_cls.assert_called_once()
 
 
 class FullDistributionTests(unittest.TestCase):
@@ -314,6 +400,78 @@ class FullDistributionTests(unittest.TestCase):
         instance._on_chart_click(Mock(ydata=0.5, xdata=0.1))
         instance.search_var.set.assert_called_with("Smiley")
 
+    def test_banner_packs_with_a_filter_and_forgets_without_one(self):
+        bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(3)]
+        instance = self.make_app(query="meter:11")
+        instance.dist_ax.barh.return_value = bars
+        with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
+            instance._update_distribution_panel(instance._filter_rows())
+        instance.dist_banner_frame.pack.assert_called_once_with(
+            fill="x", pady=(0, 6), before=instance.dist_chart_frame)
+        instance.dist_banner_frame.pack_forget.assert_not_called()
+
+        instance = self.make_app(query="")
+        instance.dist_ax.barh.return_value = bars
+        with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
+            instance._update_distribution_panel(instance._filter_rows())
+        instance.dist_banner_frame.pack_forget.assert_called_once_with()
+        instance.dist_banner_frame.pack.assert_not_called()
+
+    def test_empty_state_draws_the_message_and_no_bars(self):
+        instance = self.make_app()
+        instance.rows = []
+        with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
+            instance._update_distribution_panel([])
+        instance.dist_ax.text.assert_called_once()
+        self.assertIn("No charts match", instance.dist_ax.text.call_args.args[2])
+        instance.dist_ax.axis.assert_called_with("off")
+        instance.dist_ax.barh.assert_not_called()
+        self.assertEqual(instance._current_dist_bars, [])
+        instance.dist_canvas.draw_idle.assert_called()
+
+    def test_metric_change_redraws_for_the_new_metric_and_saves(self):
+        instance = self.make_app(metric="Meter")
+        instance._save_settings = Mock()
+        bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(6)]
+        instance.dist_ax.barh.return_value = bars
+        with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
+            instance._update_distribution_panel(instance._filter_rows())
+            self.assertEqual([bar[2] for bar in instance._current_dist_bars], ["12", "11", "10"])
+
+            instance.distribution_metric.get.return_value = "Difficulty"
+            instance._on_distribution_metric_changed()
+
+        instance._save_settings.assert_called_once_with()
+        self.assertEqual(instance.dist_ax.barh.call_count, 2)
+        # The redraw used the stored rows and the new metric, not the meter bars again.
+        labels = [bar[2] for bar in instance._current_dist_bars]
+        self.assertIn("Hard", labels)
+        self.assertIn("Challenge", labels)
+        self.assertNotIn("10", labels)
+
+    def test_bar_colours_and_the_active_bars_white_edge(self):
+        instance, _tokens = self.draw_difficulty_chart(diff="Hard")
+        labels = [bar.label for bar in instance._current_dist_bars]
+        drawn = instance.dist_ax.barh.call_args
+        self.assertEqual(drawn.kwargs["height"], theme.CHART_BAR_HEIGHT)
+        colours, edges, widths = drawn.kwargs["color"], drawn.kwargs["edgecolor"], drawn.kwargs["linewidth"]
+        hard = labels.index("Hard")
+        self.assertEqual(colours[hard], theme.DIFFICULTY_COLORS["Hard"])
+        self.assertEqual(edges[hard], theme.WHITE)   # the active bar's white edge
+        self.assertEqual(widths[hard], 1.5)
+        challenge = labels.index("Challenge")
+        self.assertEqual(colours[challenge], theme.DIFFICULTY_COLORS["Challenge"])
+        self.assertEqual(edges[challenge], theme.BG_INPUT)
+        self.assertEqual(widths[challenge], 0.8)
+
+        # Meter bars all take the accent colour.
+        instance = self.make_app(metric="Meter")
+        bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(3)]
+        instance.dist_ax.barh.return_value = bars
+        with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
+            instance._update_distribution_panel(instance._filter_rows())
+        self.assertEqual(instance.dist_ax.barh.call_args.kwargs["color"], [theme.ACCENT] * 3)
+
 
 class FakeVar:
     """Stands in for a Tk variable: set() runs the 'write' traces straight away, as Tk does."""
@@ -451,6 +609,83 @@ class RealChartClickTests(unittest.TestCase):
         axes_box = self.instance.dist_ax.get_window_extent()
         row_px = self.instance.dist_ax.transData.transform((0, self.row_y["12"]))[1]
         self.assertIsNone(self.click_pixels(axes_box.x0 - 12, row_px))
+
+
+class LiveDistributionStartupTests(unittest.TestCase):
+    """Startup behaviour with a real window (proposal 0005, step 1): the two settings
+    keys are validated, and the startup pack — the second pack site, reached only by
+    a real _build — puts the panel ahead of the table with its recorded arguments."""
+
+    def make_live_app(self, settings):
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(settings_dir.cleanup)
+        settings_path = Path(settings_dir.name) / "settings.json"
+        if settings is not None:
+            settings_path.write_text(json.dumps(settings))
+        patcher = patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(root.destroy)
+        return app.LibraryApp(root)
+
+    @staticmethod
+    def padx_pair(info):
+        padx = info["padx"]
+        if isinstance(padx, int):
+            return (padx, padx)
+        return tuple(int(part) for part in str(padx).strip("()").replace(",", " ").split())
+
+    def test_startup_validates_the_metric_and_packs_the_panel_first(self):
+        application = self.make_live_app({"show_distribution": True, "distribution_metric": "Bogus"})
+        # An unrecognised saved metric falls back to Meter; a valid show flag is honoured.
+        self.assertEqual(application.distribution_metric.get(), "Meter")
+        self.assertTrue(application.show_distribution_panel.get())
+        self.assertEqual(application.dist_button.cget("text"), "Distribution ◀")
+        # The startup pack's arguments (an absent before= cannot be asserted from
+        # pack_info; the slaves order below is the observable consequence).
+        info = application.dist_panel.pack_info()
+        self.assertEqual(info["side"], "right")
+        self.assertEqual(info["fill"], "y")
+        self.assertEqual(self.padx_pair(info), (10, 0))
+        slaves = application.content_frame.pack_slaves()
+        self.assertLess(slaves.index(application.dist_panel), slaves.index(application.table_frame))
+        # The chart canvas is created lazily on the first update while visible.
+        if not app.MATPLOTLIB_AVAILABLE:
+            self.skipTest("matplotlib is not installed")
+        application.refresh_table()
+        self.assertIsNotNone(application.dist_canvas)
+        self.assertIsNotNone(application.dist_fig)
+
+    def test_startup_keeps_a_valid_metric_and_stays_hidden_when_saved_so(self):
+        application = self.make_live_app({"show_distribution": False, "distribution_metric": "BPM"})
+        self.assertEqual(application.distribution_metric.get(), "BPM")
+        self.assertFalse(application.show_distribution_panel.get())
+        self.assertEqual(application.dist_panel.winfo_manager(), "")
+        self.assertEqual(application.dist_button.cget("text"), "Distribution ▶")
+
+    def test_live_hide_then_show_keeps_the_panel_mapped_with_width(self):
+        application = self.make_live_app(None)
+        root = application.root
+        root.deiconify()
+        if not application.show_distribution_panel.get():
+            application.toggle_distribution_panel()
+        root.update()
+        self.assertTrue(application.dist_panel.winfo_ismapped())
+        application.toggle_distribution_panel()
+        root.update()
+        self.assertFalse(application.dist_panel.winfo_ismapped())
+        application.toggle_distribution_panel()
+        root.update()
+        # The end-to-end pin for the show path's before= argument: packed ahead of
+        # the table, the panel keeps its real width instead of being squeezed away.
+        self.assertTrue(application.dist_panel.winfo_ismapped())
+        self.assertGreater(application.dist_panel.winfo_width(), 0)
 
 
 if __name__ == "__main__":
