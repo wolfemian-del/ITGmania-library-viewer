@@ -41,7 +41,8 @@ them in a sortable, filterable table, and can build .CRS course files. Read READ
   model wrote it. When a real design choice existed, say which option was taken and which was
   rejected.
 - Templates: proposals start from docs/proposals/0000-template.md; PR bodies follow
-  .github/PULL_REQUEST_TEMPLATE.md.
+  .github/PULL_REQUEST_TEMPLATE.md; new issues follow the templates in
+  .github/ISSUE_TEMPLATE/.
 - Reviewing: report findings to the owner first and get confirmation before making fixes. Explain
   the real effect of each issue and order by importance. Say which findings you ran and which you
   only read.

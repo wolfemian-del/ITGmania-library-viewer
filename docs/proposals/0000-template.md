@@ -28,9 +28,11 @@ proposal lean — answer the prompts; do not add ceremony.
 When the owner accepts, before implementation:
 1. Change Status to: Accepted — approved by the owner on <date>,
    with the review resolutions below.
-2. Add a "## Review resolutions (<date>)" section here recording each
-   open question's outcome and any amendments reviewers required,
-   and retitle §7 "Open Questions — Resolved".
+2. Where §7 has questions, add a "## Review resolutions (<date>)"
+   section here recording each open question's outcome and any
+   amendments reviewers required, and retitle §7
+   "Open Questions — Resolved". If there were no genuine questions,
+   delete §7 instead of filling it in.
 3. When review changes the text, record the changes in a
    "## Revision N (<date>, from <source>)" section at the top, so
    later reviewers read the corrected draft, not the errors.
@@ -59,10 +61,8 @@ grep, not from memory — reviewers will check. Include a coupling
 inventory: lines and methods involved, call sites in both
 directions, outside references into the code being moved or changed,
 settings keys and shared helpers/constants it touches, and untested
-paths. (Proposal 0005's survey is the worked example: 244 lines
-across 11 methods, a bidirectional panel, 11 outside references,
-2 settings keys, 6 untested paths — that inventory is what made the
-split stageable.)>
+paths. (Proposal 0005 §2 is the worked example — that inventory is
+what made the split stageable.)>
 
 ## 3. The Decision: <the component's contract / the real choice>
 
@@ -71,8 +71,9 @@ recommendation inside each real choice, and give each defensible
 alternative a short statement of what it would mean and why it is
 not the recommendation — if a choice is close, say so, so a future
 reader can tell a coin-flip from a conviction. Where a contract is
-being set (constructor inputs, a settings key, a file format), state
-it here in full.>
+being set (constructor inputs, a settings key, a file format), name
+it here and explain the decision; the contract itself is stated in
+full in §4, not repeated here.>
 
 ## 4. Recommended Design in Detail (Option <X>)
 
@@ -81,10 +82,11 @@ boundary explicitly: what lives inside the new or changed component,
 what stays outside, and what it must not reach back into. Give the
 constructor contract as an enumerated input list (proposal 0005:
 eight inputs). Then apply the legibility test, the project's
-standing guideline: can a hypothetical human reviewer read the new
-component alone and understand it, without holding the rest of the
-file in mind? If not, the boundary is wrong, however small the
-diff.>
+standing guideline: state the one-sentence description of the
+component that a standalone reader needs first — what it does and
+what it is given. If that sentence cannot be written, or the
+component cannot be understood from it without holding the rest of
+the file in mind, the boundary is wrong, however small the diff.>
 
 ## 5. What Does Not Change
 
