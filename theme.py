@@ -90,3 +90,5 @@ DIST_PANEL_WIDTH = 320
 # among hundreds) is still easy to hit, while a click far to the right of it does nothing.
 CHART_MIN_CLICK_FRACTION = 0.15
 CHART_BAR_HEIGHT = 0.68
+# The chart's x-axis runs this many times past the longest bar, leaving headroom for the count labels.
+CHART_AXIS_HEADROOM = 1.25

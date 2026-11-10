@@ -60,7 +60,7 @@ class DistributionUITests(unittest.TestCase):
         instance.dist_summary_var.set.assert_called()
 
         # Simulate chart click on a meter bar
-        instance._current_dist_bars = [app.ChartBar(0.0, 1.0, "11", "11")]
+        instance._current_dist_bars = [data.ChartBar(0.0, 1.0, "11", "11")]
         click_event = Mock()
         click_event.ydata = 0.5
         click_event.xdata = 0.1
@@ -126,7 +126,7 @@ class DistributionUITests(unittest.TestCase):
         instance.diff_var = Mock(get=Mock(return_value="All difficulties"))
         instance.search_var = Mock(get=Mock(return_value=""))
         instance.refresh_table = Mock()
-        instance._current_dist_bars = [app.ChartBar(0.0, 1.0, "?", "")]
+        instance._current_dist_bars = [data.ChartBar(0.0, 1.0, "?", "")]
 
         event = Mock()
         event.ydata = 0.5
@@ -345,7 +345,7 @@ class FullDistributionTests(unittest.TestCase):
 
     def test_clicking_another_bar_replaces_filter_and_same_bar_clears_it(self):
         instance = self.make_app(query="Smiley meter:11", metric="Meter")
-        instance._current_dist_bars = [app.ChartBar(0.0, 1.0, "12", "12"), app.ChartBar(1.0, 2.0, "11", "11")]
+        instance._current_dist_bars = [data.ChartBar(0.0, 1.0, "12", "12"), data.ChartBar(1.0, 2.0, "11", "11")]
         instance._on_chart_click(Mock(ydata=0.5, xdata=0.1))
         instance.search_var.set.assert_called_with("Smiley meter:12")
         instance._on_chart_click(Mock(ydata=1.5, xdata=0.1))
@@ -353,7 +353,7 @@ class FullDistributionTests(unittest.TestCase):
 
     def test_clicks_outside_a_bars_click_zone_do_nothing(self):
         instance = self.make_app(metric="Meter")
-        instance._current_dist_bars = [app.ChartBar(0.0, 1.0, "11", "11", 4.0)]
+        instance._current_dist_bars = [data.ChartBar(0.0, 1.0, "11", "11", 4.0)]
         # Past the end of the zone, left of the axis, off the row, or outside the plot (no position).
         for x, y in ((4.5, 0.5), (100.0, 0.5), (-0.5, 0.5), (1.0, 1.5), (None, 0.5), (1.0, None)):
             instance._on_chart_click(Mock(xdata=x, ydata=y))
@@ -375,27 +375,27 @@ class FullDistributionTests(unittest.TestCase):
         with patch.object(app, "MATPLOTLIB_AVAILABLE", True):
             instance._update_distribution_panel(instance._filter_rows())
         widths = {bar.label: bar.click_width for bar in instance._current_dist_bars}
-        minimum = 22 * 1.25 * theme.CHART_MIN_CLICK_FRACTION  # the chart is 22 * 1.25 units wide
+        minimum = 22 * theme.CHART_AXIS_HEADROOM * theme.CHART_MIN_CLICK_FRACTION  # the chart is 22 * headroom units wide
         self.assertEqual(set(widths), {"12", "11", "10"})
         self.assertAlmostEqual(widths["12"], minimum)   # one chart: widened to the minimum
         self.assertAlmostEqual(widths["11"], minimum)
         self.assertAlmostEqual(widths["10"], 22)         # the long bar: its own length
-        instance.dist_ax.set_xlim.assert_called_with(0, 22 * 1.25)
+        instance.dist_ax.set_xlim.assert_called_with(0, 22 * theme.CHART_AXIS_HEADROOM)
 
     def test_clicking_a_bar_switches_off_a_hand_typed_version_of_its_filter(self):
         instance = self.make_app(query="Smiley meter:11.0", metric="Meter")
-        instance._current_dist_bars = [app.ChartBar(0.0, 1.0, "11", "11")]
+        instance._current_dist_bars = [data.ChartBar(0.0, 1.0, "11", "11")]
         instance._on_chart_click(Mock(ydata=0.5, xdata=0.1))
         instance.search_var.set.assert_called_with("Smiley")
 
         instance = self.make_app(query="Smiley bpm:<140 bpm:>=120", metric="BPM")
-        instance._current_dist_bars = [app.ChartBar(0.0, 1.0, "120-139", (">=120", "<140"))]
+        instance._current_dist_bars = [data.ChartBar(0.0, 1.0, "120-139", (">=120", "<140"))]
         instance._on_chart_click(Mock(ydata=0.5, xdata=0.1))
         instance.search_var.set.assert_called_with("Smiley")
 
     def test_clicking_a_bpm_bar_sets_both_range_directives(self):
         instance = self.make_app(query="Smiley bpm:150", metric="BPM")
-        instance._current_dist_bars = [app.ChartBar(0.0, 1.0, "120-139", (">=120", "<140"))]
+        instance._current_dist_bars = [data.ChartBar(0.0, 1.0, "120-139", (">=120", "<140"))]
         instance._on_chart_click(Mock(ydata=0.5, xdata=0.1))
         instance.search_var.set.assert_called_with("Smiley bpm:>=120 bpm:<140")
 
@@ -573,7 +573,7 @@ class SingleRefreshTests(unittest.TestCase):
         instance.search_var, instance.diff_var = FakeVar(query), FakeVar(diff)
         instance.search_entry = Mock()
         instance.distribution_metric = FakeVar(metric)
-        instance._current_dist_bars = bars or [app.ChartBar(0.0, 1.0, "11", "11")]
+        instance._current_dist_bars = bars or [data.ChartBar(0.0, 1.0, "11", "11")]
         instance.refreshes = 0
         instance.refresh_table = lambda *args, **kwargs: setattr(instance, "refreshes", instance.refreshes + 1)
         # The same wiring LibraryApp.__init__ does.
@@ -591,7 +591,7 @@ class SingleRefreshTests(unittest.TestCase):
         self.assertEqual(self.refreshes_after_everything_settles(instance), 1)
 
     def test_difficulty_click_that_also_cleans_the_search_box_refreshes_once(self):
-        instance = self.make_app("Difficulty", "Smiley diff:hard", bars=[app.ChartBar(0.0, 1.0, "Hard", "Hard")])
+        instance = self.make_app("Difficulty", "Smiley diff:hard", bars=[data.ChartBar(0.0, 1.0, "Hard", "Hard")])
         instance._on_chart_click(Mock(ydata=0.5, xdata=0.1))
         self.assertEqual(instance.search_var.get(), "Smiley")
         self.assertEqual(self.refreshes_after_everything_settles(instance), 1)
