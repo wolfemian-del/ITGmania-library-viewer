@@ -17,14 +17,31 @@ try:
 except ImportError:
     tk = None
 
-try:
-    import matplotlib
-    matplotlib.use("TkAgg")
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-    from matplotlib.figure import Figure
-    MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    MATPLOTLIB_AVAILABLE = False
+# matplotlib is imported lazily, the first time the chart canvas is actually
+# needed (_load_matplotlib below): the import costs most of the app's startup
+# import time, and the panel may never be opened. Until the first attempt,
+# MATPLOTLIB_AVAILABLE is None ("not tried yet"); after it, the flag is True
+# or False — exactly what an import-time check would have produced.
+Figure = None
+FigureCanvasTkAgg = None
+MATPLOTLIB_AVAILABLE = None
+
+
+def _load_matplotlib():
+    """Import matplotlib once, on first use, and report whether it is available."""
+    global Figure, FigureCanvasTkAgg, MATPLOTLIB_AVAILABLE
+    if MATPLOTLIB_AVAILABLE is None:
+        try:
+            import matplotlib
+            matplotlib.use("TkAgg")
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg as canvas_class
+            from matplotlib.figure import Figure as figure_class
+        except ImportError:
+            MATPLOTLIB_AVAILABLE = False
+        else:
+            Figure, FigureCanvasTkAgg = figure_class, canvas_class
+            MATPLOTLIB_AVAILABLE = True
+    return MATPLOTLIB_AVAILABLE
 
 import theme
 from library_data import (
@@ -79,6 +96,7 @@ class DistributionPanel:
         self.dist_canvas = None
         self.dist_fig = None
         self.dist_ax = None
+        self._matplotlib_missing_label = None  # the install note, created if the import fails
         self._current_dist_bars = []
         self._last_visible_rows = []
 
@@ -137,20 +155,14 @@ class DistributionPanel:
         self.dist_chart_frame = tk.Frame(self.dist_panel, bg=theme.BG_PANEL)
         self.dist_chart_frame.pack(fill="both", expand=True)
 
-        if not MATPLOTLIB_AVAILABLE:
-            tk.Label(
-                self.dist_chart_frame,
-                text="Install matplotlib to enable\ndistribution charts\n\nRun:\npip install matplotlib",
-                fg=theme.TEXT_MUTED, bg=theme.BG_PANEL, font=theme.FONT_BODY, justify="center",
-            ).pack(expand=True, pady=40)
-
         self.dist_button.configure(
             text="Distribution ◀" if self.show_distribution_panel.get() else "Distribution ▶")
         if self.show_distribution_panel.get():
             self.dist_panel.pack(side="right", fill="y", padx=(10, 0))
 
     def _ensure_distribution_canvas(self):
-        if not MATPLOTLIB_AVAILABLE:
+        if not _load_matplotlib():
+            self._show_matplotlib_missing()
             return False
         if self.dist_canvas is None:
             self.dist_fig = Figure(figsize=(3.0, 4.0), dpi=100, facecolor=theme.BG_PANEL)
@@ -161,6 +173,17 @@ class DistributionPanel:
             # Tk canvas already resizes the figure and redraws when its widget changes size.
             self.dist_canvas.get_tk_widget().pack(fill="both", expand=True)
         return True
+
+    def _show_matplotlib_missing(self):
+        """Put the install-matplotlib note in the chart area (the import was tried and failed)."""
+        if self.dist_chart_frame is None or self._matplotlib_missing_label is not None:
+            return
+        self._matplotlib_missing_label = tk.Label(
+            self.dist_chart_frame,
+            text="Install matplotlib to enable\ndistribution charts\n\nRun:\npip install matplotlib",
+            fg=theme.TEXT_MUTED, bg=theme.BG_PANEL, font=theme.FONT_BODY, justify="center",
+        )
+        self._matplotlib_missing_label.pack(expand=True, pady=40)
 
     def set_visible(self, visible: bool):
         """Single source of truth for panel visibility (toolbar + View menu)."""

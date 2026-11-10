@@ -616,6 +616,8 @@ class MatplotlibMissingTests(unittest.TestCase):
         panel.dist_banner_frame = Mock()
         panel.dist_banner_label = Mock()
         panel.dist_summary_var = Mock()
+        panel.dist_chart_frame = None
+        panel._matplotlib_missing_label = None
         panel._last_visible_rows = []
 
         original_avail = dp.MATPLOTLIB_AVAILABLE
@@ -628,6 +630,31 @@ class MatplotlibMissingTests(unittest.TestCase):
             panel.dist_summary_var.set.assert_called()
         finally:
             dp.MATPLOTLIB_AVAILABLE = original_avail
+
+class LazyMatplotlibTests(unittest.TestCase):
+    """The panel's matplotlib import is deferred to first use (startup polish):
+    the module starts unresolved, and the resolver settles the flag once."""
+
+    def test_the_resolver_imports_once_and_reports_availability(self):
+        original_flag, original_figure = dp.MATPLOTLIB_AVAILABLE, dp.Figure
+        try:
+            dp.MATPLOTLIB_AVAILABLE = None
+            dp.Figure = None
+            self.assertTrue(dp._load_matplotlib())  # matplotlib is installed here
+            self.assertIs(dp.MATPLOTLIB_AVAILABLE, True)
+            self.assertIsNotNone(dp.Figure)
+            # A second call is a no-op: the settled flag is reported as-is.
+            self.assertTrue(dp._load_matplotlib())
+        finally:
+            dp.MATPLOTLIB_AVAILABLE, dp.Figure = original_flag, original_figure
+
+    def test_a_settled_flag_is_not_re_resolved(self):
+        original_flag = dp.MATPLOTLIB_AVAILABLE
+        try:
+            dp.MATPLOTLIB_AVAILABLE = False
+            self.assertFalse(dp._load_matplotlib())
+        finally:
+            dp.MATPLOTLIB_AVAILABLE = original_flag
 
 
 class ComponentCallbackTests(unittest.TestCase):
@@ -920,7 +947,7 @@ class LiveDistributionStartupTests(LiveWindowCase):
         slaves = application.content_frame.pack_slaves()
         self.assertLess(slaves.index(panel.dist_panel), slaves.index(application.table_frame))
         # The chart canvas is created lazily on the first update while visible.
-        if dp.MATPLOTLIB_AVAILABLE:
+        if dp._load_matplotlib():
             application.refresh_table()
             self.assertIsNotNone(panel.dist_canvas)
             self.assertIsNotNone(panel.dist_fig)
@@ -956,7 +983,7 @@ class LiveDistributionStartupTests(LiveWindowCase):
         # The live half of the canvas pin (proposal 0005 §6): the headless test
         # proves the calls; here a click goes through the real TkAgg canvas's own
         # callback registry, the path a user's click actually takes.
-        if not dp.MATPLOTLIB_AVAILABLE:
+        if not dp._load_matplotlib():
             self.skipTest("matplotlib is not installed")
         from matplotlib.backend_bases import MouseEvent
 
@@ -1065,7 +1092,7 @@ class LiveDistributionWiringTests(LiveWindowCase):
         # 6. The refresh push is covered by test_refresh_reaches_show_rows.
 
         # 7. The chart click: the handler registered on the canvas is the component's.
-        if dp.MATPLOTLIB_AVAILABLE:
+        if dp._load_matplotlib():
             application.refresh_table()
             self.assertIsNotNone(panel.dist_canvas)
             handlers = [ref() for ref in
