@@ -86,7 +86,12 @@ standing guideline: state the one-sentence description of the
 component that a standalone reader needs first — what it does and
 what it is given. If that sentence cannot be written, or the
 component cannot be understood from it without holding the rest of
-the file in mind, the boundary is wrong, however small the diff.>
+the file in mind, the boundary is wrong, however small the diff.
+If this change does not touch a component boundary or constructor
+(a constants move, a settings key), say so in one sentence and
+describe the design in whatever shape fits; the legibility test
+then applies to whatever new function or format the change
+introduces.>
 
 ## 5. What Does Not Change
 

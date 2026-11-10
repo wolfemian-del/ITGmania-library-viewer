@@ -20,7 +20,7 @@ labels: bug
 ## Environment
 
 - Windows version:
-- Python version (the app shows it in Help → About):
+- Python version (run `python --version` in a Command Prompt):
 - App version (also in Help → About):
 
 ## Anything else
