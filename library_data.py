@@ -51,11 +51,16 @@ __all__ = [
     "SEARCH_FIELD_ALIASES",
     "TAP_FIELDS",
     "TECH_FIELDS",
+    "ChartBar",
     "aggregate_bpm_distribution",
     "aggregate_difficulty_distribution",
     "aggregate_meter_distribution",
     "bpm_sort_key",
     "build_dialog_query",
+    "chart_bar_at",
+    "chart_bars",
+    "chart_clear_decision",
+    "chart_click_decision",
     "course_append_bytes",
     "course_song_line",
     "course_song_lines",
@@ -1098,13 +1103,16 @@ def chart_bar_at(bars, x, y):
     """The bar a chart click at data coordinates (x, y) lands on, or None.
 
     x and y are None when the click is outside the plot area (for example on a row label).
-    A bar with no token (an empty row, including the "?" row, whose token is empty) is not clickable.
+    A bar with no token (an empty row) is not clickable, and neither is a bar labelled "?",
+    whatever its token: the Meter and BPM "?" rows (missing values) carry empty tokens anyway,
+    but an unrecognised difficulty text passes through as its own token, so a difficulty
+    literally named "?" would otherwise be clickable — the window's handler never allowed that.
     """
     if x is None or y is None:
         return None
     for bar in bars:
         if bar.y_min <= y <= bar.y_max and 0 <= x <= bar.click_width:
-            return bar if bar.token else None
+            return bar if bar.token and bar.label != "?" else None
     return None
 
 

@@ -380,6 +380,17 @@ class ChartClickLogicTests(unittest.TestCase):
         self.assertIsNone(data.chart_bar_at(empty, 0.1, 0.0))
         self.assertIsNone(data.chart_bar_at([data.ChartBar(-0.34, 0.34, "?", "")], 0.1, 0.0))
 
+    def test_hit_test_question_mark_difficulty_bar_is_not_clickable(self):
+        # A difficulty literally named "?" passes through the aggregate as its own token,
+        # so the token check alone would let it be clicked; the hit test keeps the window
+        # handler's rule that a bar labelled "?" is never clickable.
+        self.assertIsNone(data.chart_bar_at([data.ChartBar(-0.34, 0.34, "?", "?")], 0.1, 0.0))
+        items = data.aggregate_difficulty_distribution([{"Difficulty": "?"}])
+        bars, _axis_max = data.chart_bars(items, **self.ZONE)
+        question_index = next(i for i, bar in enumerate(bars) if bar.label == "?")
+        self.assertEqual(bars[question_index].token, "?")
+        self.assertIsNone(data.chart_bar_at(bars, 0.1, float(question_index)))
+
     def test_click_decision_meter_set_and_toggle_off(self):
         self.assertEqual(
             data.chart_click_decision("Meter", "11", "All difficulties", "Smiley"),
