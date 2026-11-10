@@ -495,6 +495,12 @@ class LibraryApp:
 
     def _load_initial_snapshot(self):
         """Load the saved snapshot (scheduled from __init__ so the window paints first)."""
+        if self._load_generation:
+            # A Load / refresh pressed inside the deferral window supersedes
+            # the startup restore: the scan owns the progress bar, the Load
+            # button, and the status line until it delivers, and its result
+            # replaces whatever the restore would have shown.
+            return
         try:
             self.load_cached_data()
         finally:
@@ -508,7 +514,7 @@ class LibraryApp:
             self.status.set("No saved library snapshot yet. Choose your paths, then click Load / refresh.")
             self.refresh_table()
             return
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             self.status.set(f"Saved library snapshot could not be read ({exc}). Click Load / refresh to rebuild it.")
             self.refresh_table()
             return

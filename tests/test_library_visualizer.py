@@ -234,6 +234,18 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance.refresh_table.assert_called_once()
         self.assertIn("different data paths", instance.status.set.call_args.args[0])
 
+    def test_snapshot_with_invalid_utf8_reports_could_not_be_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = self.make_app(root / "settings.json", root / "Cache" / "Songs", root / "Stats.xml")
+            instance.library_cache_path.write_bytes(b"\xff\xfe not utf-8")
+
+            instance.load_cached_data()
+
+        instance._loaded.assert_not_called()
+        instance.refresh_table.assert_called_once()
+        self.assertIn("could not be read", instance.status.set.call_args.args[0])
+
     def test_snapshot_is_not_restored_with_an_unsupported_schema(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -488,6 +500,7 @@ class InitialSnapshotTests(unittest.TestCase):
         instance = object.__new__(app.LibraryApp)
         instance.progress = Mock()
         instance.load_cached_data = Mock()
+        instance._load_generation = 0
         return instance
 
     def test_it_loads_and_stops_the_progress_bar(self):
@@ -495,6 +508,13 @@ class InitialSnapshotTests(unittest.TestCase):
         instance._load_initial_snapshot()
         instance.load_cached_data.assert_called_once_with()
         instance.progress.stop.assert_called_once_with()
+
+    def test_it_does_nothing_when_a_user_scan_has_already_started(self):
+        instance = self.make_instance()
+        instance._load_generation = 1
+        instance._load_initial_snapshot()
+        instance.load_cached_data.assert_not_called()
+        instance.progress.stop.assert_not_called()
 
     def test_it_stops_the_progress_bar_even_when_loading_fails(self):
         instance = self.make_instance()
