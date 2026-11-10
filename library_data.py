@@ -198,7 +198,7 @@ def tag_map(text: str) -> dict[str, str]:
     # one way keeps the alternatives disjoint and parsing linear-time.
     for m in re.finditer(r"(?m)^#([^:;\r\n]+):((?:\\.|[^;\\\r\n]|(?:\r\n(?!#)|\r(?!\n)(?!#)|\n(?!#)))*);", text):
         raw_val = m.group(2).strip()
-        decoded_val = re.sub(r"\\(.)", r"\1", raw_val)
+        decoded_val = re.sub(r"\\(.)", r"\1", raw_val) if "\\" in raw_val else raw_val
         tags[m.group(1).upper()] = decoded_val
     return tags
 

@@ -64,6 +64,12 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(tags["TAG_WITH_ESCAPED_COLON"], "Key:Value")
         self.assertEqual(tags["NORMAL"], "NormalValue")
 
+    def test_tag_map_decodes_a_value_of_only_backslashes(self):
+        # An escaped backslash pair decodes to one backslash; the value
+        # contains a backslash, so the unescape pass runs on it.
+        tags = data.tag_map("#ONLY:" + "\\" * 2 + ";\n")
+        self.assertEqual(tags["ONLY"], "\\")
+
     def test_cache_chart_matches_stats_by_normalized_key(self):
         with tempfile.TemporaryDirectory() as directory:
             cache_file = Path(directory) / "song.cache"
@@ -277,6 +283,27 @@ class ParsingTests(unittest.TestCase):
         # ITGmania writes "//" in text as "\/\/" so it is not read as a comment.
         tags = data.tag_map("#SONGFILENAME:Songs/Pack/My\\/\\/Song/audio.ogg;\n")
         self.assertEqual(tags["SONGFILENAME"], "Songs/Pack/My//Song/audio.ogg")
+
+    def test_cache_file_normalizes_crlf_in_multiline_values(self):
+        # parse_cache_file reads in text mode, whose universal-newline
+        # handling turns CRLF into \n before tag_map sees the text, so a
+        # multiline value reaches the row with \n endings. (A byte read
+        # would skip that translation and change the row.)
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "crlf.cache"
+            cache_file.write_bytes(
+                b"#TITLE:Song;\r\n"
+                b"#ARTIST:First\r\nSecond;\r\n"
+                b"#SONGFILENAME:Songs/Pack/Song/audio.ogg;\r\n"
+                b"#NOTEDATA:;\r\n"
+                b"#STEPSTYPE:dance-single;\r\n"
+                b"#DIFFICULTY:Hard;\r\n"
+                b"#METER:9;\r\n"
+            )
+            rows = data.parse_cache_file(cache_file, {})
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["Artist"], "First\nSecond")
 
     def test_tag_map_supports_multiline_values_and_hash_in_text(self):
         text = (
