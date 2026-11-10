@@ -294,7 +294,7 @@ def _merged_edit_fallback(scores: dict, base_key: tuple[str, str, str]) -> dict:
 
 def parse_cache_file(path: Path, scores: dict) -> list[dict]:
     # Cache files are UTF-8 Simfile text; split away the song metadata before chart parsing.
-    text = path.read_bytes().decode("utf-8-sig", errors="replace")
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
     chunks = re.split(r"(?m)^#NOTEDATA:;\s*\r?\n", text)
     song_tags = tag_map(chunks[0])
     song_file = song_tags.get("SONGFILENAME", "")
