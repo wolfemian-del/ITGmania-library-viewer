@@ -738,7 +738,7 @@ class BpmTests(unittest.TestCase):
         self.assertEqual(data.format_bpm_display(None, min3, max3), "150–999999")
 
     def test_split_timing_fixture_overrides_and_falls_back(self):
-        fixture = Path("tests/fixtures/split_timing.fixture")
+        fixture = Path(__file__).parent / "fixtures" / "split_timing.fixture"
         rows, _skipped = data.parse_cache_file(fixture, {})
         self.assertEqual(len(rows), 2)
         easy = next(r for r in rows if r["Difficulty"] == "Easy")

@@ -137,6 +137,8 @@ def parse_bpms(value: str | None) -> tuple[float, float] | None:
             val = float(part)
         except ValueError:
             continue
+        # Only positive tempos count: negative values are warp markers,
+        # 0 is unplayable, and NaN fails the > 0 comparison.
         if val > 0:
             values.append(val)
     if not values:
