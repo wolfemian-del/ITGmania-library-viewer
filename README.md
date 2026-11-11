@@ -28,7 +28,7 @@ On Linux and macOS, choose the cache and profile paths with **Browse…**; the a
 - Search by title, artist, pack, chart name, type, or difficulty. Free text can be combined with structured field directives in the search bar or configured visually via **Advanced…** (or **Edit → Advanced search…**, `Ctrl+Shift+F`):
   - Free-text terms are ANDed: every term must appear somewhere in the chart's searchable text. Use double quotes to keep a phrase together, and quote multiword field values (for example, `pack:"In The Groove"`). Apostrophes are ordinary characters, so titles can be typed exactly as written (for example, `don't` or `rock 'n' roll`). A backslash escapes the next character, so wrap a value that contains backslashes in double quotes to search for it literally.
   - **Meter**: `meter:11`, `meter:10-12`, `meter:>=10`, `meter:<8` (alias: `m:`)
-  - **BPM**: `bpm:200-300`, `bpm:>240`, `bpm:180` (matches tempo range overlap)
+  - **BPM**: `bpm:200-300`, `bpm:>240`, `bpm:180` (matches tempo range overlap). The BPM column shows what the game shows, including `#DISPLAYBPM`; `bpm:`, sorting and the chart always use the real `#BPMS` range.
   - **Length / Time**: `time:>2:00`, `time:>120`, `length:1:30-2:15`, `time:<90` (accepts both `mm:ss` and raw seconds)
   - **Metadata**: `artist:Smiley`, `title:Delirium`, `pack:"In The Groove"`, `diff:Challenge`
   - **Radar counts**: `jumps:>10`, `holds:>=5`, `rolls:>0`, `mines:0`, `hands:0`, `lifts:0`, `taps:>500` (exact counts, `>=`/`>`/`<=`/`<` comparisons, and ranges like `jumps:10-20` and `mines:1..5`). `taps:` counts taps and hold notes together, matching the Taps/Holds column.

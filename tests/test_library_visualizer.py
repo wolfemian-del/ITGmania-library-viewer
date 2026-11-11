@@ -277,6 +277,24 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance._loaded.assert_not_called()
         self.assertIn("invalid or outdated", instance.status.set.call_args.args[0])
 
+    def test_snapshot_schema_version_2_is_rejected_as_outdated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = root / "Cache", root / "Stats.xml"
+            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
+            instance._save_library_cache(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
+            with instance.library_cache_path.open("r+", encoding="utf-8") as handle:
+                payload = app.json.load(handle)
+                payload["schema_version"] = 2
+                handle.seek(0)
+                app.json.dump(payload, handle)
+                handle.truncate()
+
+            instance.load_cached_data()
+
+        instance._loaded.assert_not_called()
+        self.assertIn("invalid or outdated", instance.status.set.call_args.args[0])
+
     def test_distribution_settings_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

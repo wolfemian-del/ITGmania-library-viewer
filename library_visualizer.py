@@ -53,7 +53,7 @@ SEARCH_DEBOUNCE_MS = 200
 # loop (see _insert_batch): long enough to fill quickly, short enough that the
 # window stays responsive while a big library streams in.
 ROW_INSERT_BUDGET_SECONDS = 0.012
-LIBRARY_CACHE_SCHEMA_VERSION = 2
+LIBRARY_CACHE_SCHEMA_VERSION = 3
 HEADERS = ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart", "Score",
            "Grade", "Best %", "Plays", "Last played", "Peak NPS", "Taps/Holds", "Jumps",
            "Holds", "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4", "W5",
