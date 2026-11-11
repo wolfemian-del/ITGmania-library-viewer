@@ -25,7 +25,7 @@ On Linux and macOS, choose the cache and profile paths with **Browse…**; the a
 
 ## Browse
 
-- Search by title, artist, pack, chart name, type, or difficulty. Free text can be combined with structured field directives in the search bar or configured visually via **Advanced…** (or **Edit → Advanced search…**, `Ctrl+Shift+F`):
+- Search by title, subtitle, artist, pack, chart name, type, or difficulty. Free text can be combined with structured field directives in the search bar or configured visually via **Advanced…** (or **Edit → Advanced search…**, `Ctrl+Shift+F`):
   - Free-text terms are ANDed: every term must appear somewhere in the chart's searchable text, including the subtitle. Use double quotes to keep a phrase together, and quote multiword field values (for example, `pack:"In The Groove"`). Apostrophes are ordinary characters, so titles can be typed exactly as written (for example, `don't` or `rock 'n' roll`). A backslash escapes the next character, so wrap a value that contains backslashes in double quotes to search for it literally.
   - **Meter**: `meter:11`, `meter:10-12`, `meter:>=10`, `meter:<8` (alias: `m:`)
   - **BPM**: `bpm:200-300`, `bpm:>240`, `bpm:180` (matches tempo range overlap). The BPM column shows what the game shows, including `#DISPLAYBPM`; `bpm:`, sorting and the distribution chart always use the real `#BPMS` range.

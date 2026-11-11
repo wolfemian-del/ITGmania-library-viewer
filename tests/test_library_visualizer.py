@@ -368,7 +368,6 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance._loaded.assert_not_called()
         self.assertIn("invalid or outdated", instance.status.set.call_args.args[0])
 
-
     def test_distribution_settings_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -506,6 +505,7 @@ class ColumnGroupTests(unittest.TestCase):
         expected = {*app.COLUMN_GROUPS["Song & chart"], *app.COLUMN_GROUPS["Score"]} - {"Subtitle"}
         self.assertEqual(set(app.DEFAULT_VISIBLE_COLUMNS), expected)
         self.assertNotIn("Subtitle", app.DEFAULT_VISIBLE_COLUMNS)
+        self.assertIn("Subtitle", app.COLUMN_GROUPS["Song & chart"])
         self.assertTrue({"Title", "Artist", "Pack"} <= set(app.DEFAULT_VISIBLE_COLUMNS))
 
     def test_group_check_is_on_only_when_the_whole_group_is_shown(self):
