@@ -836,6 +836,68 @@ class BpmTests(unittest.TestCase):
             self.assertEqual(row["bpm_max"], 180.0)
             self.assertEqual(row["BPM"], "180")
 
+            # Pin 6: Chart has its own #BPMS but no #DISPLAYBPM, song has
+            # #DISPLAYBPM:140 => the cell shows the song's display text
+            # while the bounds are the chart's own (per-tag independence).
+            cache_file.write_text(
+                "#TITLE:Test;\n"
+                "#SONGFILENAME:Songs/P/S/a.ogg;\n"
+                "#BPMS:0.000=140.000;\n"
+                "#DISPLAYBPM:140;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Easy;\n"
+                "#BPMS:0.000=180.000;\n",
+                encoding="utf-8",
+            )
+            row = data.parse_cache_file(cache_file, {})[0][0]
+            self.assertEqual(row["bpm_min"], 180.0)
+            self.assertEqual(row["bpm_max"], 180.0)
+            self.assertEqual(row["BPM"], "140")
+
+            # Pin 7: Chart has #DISPLAYBPM only (90:95), song has
+            # #BPMS:0=140 and no #DISPLAYBPM => the cell shows the
+            # chart's display text while the bounds are the song's.
+            cache_file.write_text(
+                "#TITLE:Test;\n"
+                "#SONGFILENAME:Songs/P/S/a.ogg;\n"
+                "#BPMS:0.000=140.000;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Easy;\n"
+                "#DISPLAYBPM:90:95;\n",
+                encoding="utf-8",
+            )
+            row = data.parse_cache_file(cache_file, {})[0][0]
+            self.assertEqual(row["bpm_min"], 140.0)
+            self.assertEqual(row["bpm_max"], 140.0)
+            # A lo:hi display range renders with an en dash, as elsewhere.
+            self.assertEqual(row["BPM"], "90–95")
+
+    def test_display_text_differs_from_real_bounds(self):
+        # Q1-B: the cell shows #DISPLAYBPM while the filter and the sort
+        # follow the real #BPMS bounds. A song with #DISPLAYBPM:150 and
+        # #BPMS:0=100,32=300 shows cell "150" with bounds 100/300;
+        # bpm:>250 matches it and the sort key follows the 300.
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "song.cache"
+            cache_file.write_text(
+                "#TITLE:Test;\n"
+                "#SONGFILENAME:Songs/P/S/a.ogg;\n"
+                "#BPMS:0.000=100.000,32.000=300.000;\n"
+                "#DISPLAYBPM:150;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Easy;\n",
+                encoding="utf-8",
+            )
+            row = data.parse_cache_file(cache_file, {})[0][0]
+            self.assertEqual(row["bpm_min"], 100.0)
+            self.assertEqual(row["bpm_max"], 300.0)
+            self.assertEqual(row["BPM"], "150")
+            self.assertTrue(data.match_chart_query(row, data.parse_search_query("bpm:>250")))
+            self.assertEqual(data.bpm_sort_key(row), (300.0, 100.0))
+
     def test_missing_bpm_downstream_consumers(self):
         with tempfile.TemporaryDirectory() as directory:
             cache_file = Path(directory) / "song.cache"
