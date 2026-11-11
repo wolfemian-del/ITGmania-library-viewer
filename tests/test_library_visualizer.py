@@ -1,3 +1,4 @@
+import contextlib
 import json
 import queue
 import re
@@ -42,6 +43,9 @@ class CourseGeometryAppTests(unittest.TestCase):
         instance.sort_keys = [("Pack", False)]
         instance.show_distribution_panel = Mock(get=Mock(return_value=False))
         instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
+        instance.pack_var = Mock(get=Mock(return_value="All packs"))
+        instance.type_var = Mock(get=Mock(return_value="All types"))
+        instance.diff_var = Mock(get=Mock(return_value="All difficulties"))
         instance.course_geometry = course_geometry
         instance.advanced_search_geometry = None
         instance._last_saved_settings = None
@@ -157,6 +161,9 @@ class AdvancedSearchGeometryAppTests(unittest.TestCase):
         instance.sort_keys = [("Pack", False)]
         instance.show_distribution_panel = Mock(get=Mock(return_value=False))
         instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
+        instance.pack_var = Mock(get=Mock(return_value="All packs"))
+        instance.type_var = Mock(get=Mock(return_value="All types"))
+        instance.diff_var = Mock(get=Mock(return_value="All difficulties"))
         instance.course_geometry = None
         instance.advanced_search_geometry = advanced_search_geometry
         instance._last_saved_settings = None
@@ -192,6 +199,12 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance.cache_var.get.return_value = str(cache_dir)
         instance.stats_var = Mock()
         instance.stats_var.get.return_value = str(stats_file)
+        instance.pack_var = Mock()
+        instance.pack_var.get.return_value = "All packs"
+        instance.type_var = Mock()
+        instance.type_var.get.return_value = "All types"
+        instance.diff_var = Mock()
+        instance.diff_var.get.return_value = "All difficulties"
         instance.status = Mock()
         instance.refresh_table = Mock()
         instance._loaded = Mock()
@@ -491,6 +504,173 @@ class InsertBatchProgressTests(unittest.TestCase):
         instance.root.after.assert_not_called()
 
 
+class _ValueVar:
+    """A minimal value-carrying stand-in for a Tk variable: get/set over a
+    stored string, so tests can preset a value and observe the result."""
+
+    def __init__(self, value, on_set=None):
+        self.value = value
+        self.on_set = on_set
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
+        if self.on_set is not None:
+            self.on_set()
+
+
+class FilterPersistenceTests(unittest.TestCase):
+    """Persisting the Pack/Type/Difficulty dropdowns (proposal 0006):
+    the restore rule in _loaded, the saved keys, and the capture of a
+    chart-clicked Difficulty by the next save."""
+
+    @staticmethod
+    def make_loaded_instance(pack="All packs", type_="All types", difficulty="All difficulties"):
+        instance = object.__new__(app.LibraryApp)
+        instance.load_button = Mock()
+        instance.progress = Mock()
+        instance.status = Mock()
+        instance.refresh_table = Mock()
+        instance.pack_filter = Mock()
+        instance.type_filter = Mock()
+        instance.diff_filter = Mock()
+        instance._batched_filter_changes = app.LibraryApp._batched_filter_changes.__get__(instance)
+        instance._batching_filter_changes = False
+        instance._refresh_unless_batching = app.LibraryApp._refresh_unless_batching.__get__(instance)
+        # Tk would run the write traces on each set; simulate them the way
+        # the long-standing _loaded pinning test does.
+        instance.pack_var = _ValueVar(pack, on_set=instance._refresh_unless_batching)
+        instance.type_var = _ValueVar(type_, on_set=instance._refresh_unless_batching)
+        instance.diff_var = _ValueVar(difficulty, on_set=instance._refresh_unless_batching)
+        instance.course_builder = None
+        return instance
+
+    @staticmethod
+    def rows(*specs):
+        return [{"Pack": pack, "Type": type_, "Difficulty": difficulty, "Title": "Song"}
+                for pack, type_, difficulty in specs]
+
+    @staticmethod
+    def add_save_machinery(instance, settings_path):
+        instance.settings_path = settings_path
+        instance.cache_var = Mock(get=Mock(return_value="cache"))
+        instance.stats_var = Mock(get=Mock(return_value="stats"))
+        instance.search_var = _ValueVar("distinctive-search-text")
+        instance.tree = Mock()
+        instance.tree.column.return_value = 100
+        instance.column_order = list(app.HEADERS)
+        instance.column_visibility = {column: Mock(get=Mock(return_value=True)) for column in app.HEADERS}
+        instance.sort_keys = [("Pack", False)]
+        instance.show_distribution_panel = Mock(get=Mock(return_value=False))
+        instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
+        instance.course_geometry = None
+        instance.advanced_search_geometry = None
+        instance._last_saved_settings = None
+
+    def test_loaded_keeps_values_that_are_in_the_new_library(self):
+        instance = self.make_loaded_instance(pack="Pack2", type_="dance-single", difficulty="Challenge")
+        rows = self.rows(("Pack1", "dance-single", "Hard"), ("Pack2", "dance-double", "Challenge"))
+
+        instance._loaded(rows, len(rows), from_cache=True, refreshed_at="2026-01-01T00:00:00")
+
+        self.assertEqual(instance.pack_var.get(), "Pack2")
+        self.assertEqual(instance.type_var.get(), "dance-single")
+        self.assertEqual(instance.diff_var.get(), "Challenge")
+        instance.refresh_table.assert_called_once()
+
+    def test_loaded_falls_back_for_values_missing_from_the_new_library(self):
+        instance = self.make_loaded_instance(pack="Gone", type_="gone-type", difficulty="Gone")
+        rows = self.rows(("Pack1", "dance-single", "Hard"))
+
+        instance._loaded(rows, len(rows), from_cache=True, refreshed_at="2026-01-01T00:00:00")
+
+        self.assertEqual(instance.pack_var.get(), "All packs")
+        self.assertEqual(instance.type_var.get(), "All types")
+        self.assertEqual(instance.diff_var.get(), "All difficulties")
+        instance.refresh_table.assert_called_once()
+
+    def test_successive_loads_keep_a_selection_then_fall_back(self):
+        instance = self.make_loaded_instance()
+        first = self.rows(("Pack1", "dance-single", "Hard"), ("Pack2", "dance-single", "Hard"))
+        instance._loaded(first, len(first), from_cache=True, refreshed_at="2026-01-01T00:00:00")
+        instance.pack_var.set("Pack2")
+
+        second = self.rows(("Pack2", "dance-single", "Hard"), ("Pack3", "dance-single", "Hard"))
+        instance._loaded(second, len(second), from_cache=True, refreshed_at="2026-01-01T00:00:00")
+        self.assertEqual(instance.pack_var.get(), "Pack2")
+
+        third = self.rows(("Pack3", "dance-single", "Hard"))
+        instance._loaded(third, len(third), from_cache=True, refreshed_at="2026-01-01T00:00:00")
+        self.assertEqual(instance.pack_var.get(), "All packs")
+
+    def test_save_settings_writes_the_filter_keys_and_never_search_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            instance = self.make_loaded_instance(pack="Pack2", type_="dance-double", difficulty="Hard")
+            self.add_save_machinery(instance, settings_path)
+
+            instance._save_settings()
+
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["filter_pack"], "Pack2")
+        self.assertEqual(saved["filter_type"], "dance-double")
+        self.assertEqual(saved["filter_difficulty"], "Hard")
+        self.assertFalse(any("search" in key for key in saved))
+        self.assertNotIn("distinctive-search-text", saved.values())
+
+    def test_a_chart_clicked_difficulty_is_captured_by_the_next_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            instance = self.make_loaded_instance()
+            self.add_save_machinery(instance, settings_path)
+            instance.search_entry = Mock()
+
+            instance.apply_chart_filter(difficulty="Hard")
+            self.assertEqual(instance.diff_var.get(), "Hard")
+            # The click alone writes nothing (proposal §3): the value
+            # reaches disk only at the next save, here the unrelated one.
+            self.assertFalse(settings_path.exists())
+            instance._save_settings()
+
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["filter_difficulty"], "Hard")
+
+    def test_fallback_replaces_the_stored_value_on_the_next_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            settings_path.write_text(json.dumps({"filter_pack": "Gone Pack"}), encoding="utf-8")
+            instance = self.make_loaded_instance()
+            # Seed the variable from the real settings file through the
+            # real reader, the way __init__ seeds it at startup.
+            instance.settings_path = settings_path
+            seeded = instance._read_settings()
+            instance.pack_var = _ValueVar(seeded.get("filter_pack", "All packs"),
+                                          on_set=instance._refresh_unless_batching)
+            rows = self.rows(("Pack1", "dance-single", "Hard"))
+            instance._loaded(rows, len(rows), from_cache=True, refreshed_at="2026-01-01T00:00:00")
+            self.assertEqual(instance.pack_var.get(), "All packs")
+            self.add_save_machinery(instance, settings_path)
+
+            instance._save_settings()
+
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["filter_pack"], "All packs")
+
+    def test_seeded_value_survives_a_startup_that_never_loads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.make_loaded_instance(type_="dance-double")
+            instance.settings_path = Path(directory) / "settings.json"
+            instance._loaded = Mock()
+
+            instance.load_cached_data()
+
+            instance._loaded.assert_not_called()
+            self.assertEqual(instance.type_var.get(), "dance-double")
+            instance.refresh_table.assert_called_once()
+
+
 class InitialSnapshotTests(unittest.TestCase):
     """The deferred startup load (startup polish): _load_initial_snapshot is
     the after() callback __init__ schedules so the window paints first."""
@@ -570,6 +750,174 @@ class LiveStartupSnapshotTests(unittest.TestCase):
         self.assertEqual(len(application.rows), 3)
         self.assertTrue(application.status.get().startswith("Showing saved library snapshot"))
         self.assertEqual(len(application.tree.get_children()), 3)
+
+
+class LiveFilterPersistenceTests(unittest.TestCase):
+    """The persisted filter dropdowns in a real window (proposal 0006):
+    seeding at construction, restore on the first load, picks — including
+    keyboard picks — saving at once, and the fallback's lazy correction
+    surviving a real exit and relaunch. Snapshots are built with the
+    app's own snapshot writer, as §6 specifies."""
+
+    def make_root(self):
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+
+        def destroy_quietly():
+            with contextlib.suppress(Exception):
+                root.destroy()
+
+        self.addCleanup(destroy_quietly)
+        return root
+
+    @staticmethod
+    def pump_until(root, condition, timeout=10):
+        deadline = time.monotonic() + timeout
+        while not condition() and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.02)
+
+    def prepare_library(self, settings_extra, row_specs):
+        """A temp settings directory plus its settings path, with the
+        snapshot written by the app's own snapshot writer: a throwaway
+        application pointed at the same settings file, never pumped, so
+        its own deferred snapshot load never runs."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        settings_dir = Path(tmp.name)
+        settings_path = settings_dir / "settings.json"
+        cache_dir = settings_dir / "Cache"
+        stats_file = settings_dir / "Stats.xml"
+        stats_file.write_text("<Stats/>")
+        settings = {"cache_dir": str(cache_dir), "stats_file": str(stats_file)}
+        settings.update(settings_extra)
+        settings_path.write_text(json.dumps(settings))
+        rows = []
+        for title, pack, type_, difficulty in row_specs:
+            row = {header: "" for header in app.HEADERS}
+            row.update({"Title": title, "Pack": pack, "Type": type_,
+                        "Difficulty": difficulty, "Meter": 10,
+                        "Course path": f"{pack}/{title}"})
+            rows.append(row)
+        root = self.make_root()
+        with patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path)):
+            writer = app.LibraryApp(root)
+            writer._save_library_cache(cache_dir, stats_file, rows, len(rows), 0, 0, False)
+        root.destroy()
+        return settings_path
+
+    def construct(self, root, settings_path):
+        patcher = patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return app.LibraryApp(root)
+
+    def test_saved_filters_are_seeded_restored_and_applied(self):
+        settings_path = self.prepare_library(
+            {"filter_pack": "P2", "filter_type": "dance-single", "filter_difficulty": "Challenge"},
+            [("One", "P2", "dance-single", "Challenge"),
+             ("Two", "P2", "dance-single", "Hard"),
+             ("Three", "P1", "dance-single", "Challenge"),
+             ("Four", "P2", "dance-double", "Challenge")],
+        )
+        root = self.make_root()
+        application = self.construct(root, settings_path)
+        # Seeded at construction, before any load runs.
+        self.assertEqual(application.pack_var.get(), "P2")
+        self.assertEqual(application.type_var.get(), "dance-single")
+        self.assertEqual(application.diff_var.get(), "Challenge")
+
+        self.pump_until(root, lambda: len(application.rows) == 4)
+        self.pump_until(root, lambda: len(application.tree.get_children()) >= 1)
+        for _ in range(10):
+            root.update()
+
+        # All three survived the load, and together they filter the
+        # table down to the one row that matches all three.
+        self.assertEqual(application.pack_var.get(), "P2")
+        self.assertEqual(application.type_var.get(), "dance-single")
+        self.assertEqual(application.diff_var.get(), "Challenge")
+        self.assertEqual(len(application.tree.get_children()), 1)
+
+    def test_non_string_saved_filters_fall_back_at_startup(self):
+        settings_path = self.prepare_library(
+            {"filter_pack": 42, "filter_difficulty": ["Hard"]},
+            [("One", "P1", "dance-single", "Hard")],
+        )
+        root = self.make_root()
+        application = self.construct(root, settings_path)
+
+        self.assertEqual(application.pack_var.get(), "All packs")
+        self.assertEqual(application.diff_var.get(), "All difficulties")
+
+    def test_keyboard_picks_in_each_dropdown_save_at_once(self):
+        settings_path = self.prepare_library(
+            {},
+            [("One", "P1", "dance-single", "Hard"),
+             ("Two", "P2", "dance-double", "Challenge")],
+        )
+        root = self.make_root()
+        application = self.construct(root, settings_path)
+        self.pump_until(root, lambda: len(application.tree.get_children()) >= 2)
+
+        def pump(turns=5):
+            for _ in range(turns):
+                root.update()
+
+        for combo, var, key in ((application.pack_filter, application.pack_var, "filter_pack"),
+                                (application.type_filter, application.type_var, "filter_type"),
+                                (application.diff_filter, application.diff_var, "filter_difficulty")):
+            expected = combo.cget("values")[1]
+            combo.focus_force()
+            root.update()
+            # A keyboard selection: Down opens the dropdown (on builds
+            # where it instead steps the value directly, the variable
+            # has already changed and the remaining keys are unneeded),
+            # Down highlights the next value, Return commits it — which
+            # is what fires <<ComboboxSelected>>. Each key needs a few
+            # event-loop turns for the dropdown's own machinery to
+            # settle before the next one lands.
+            combo.event_generate("<Down>", when="now")
+            pump()
+            if var.get() != expected:
+                root.event_generate("<Down>", when="now")
+                pump()
+                root.event_generate("<Return>", when="now")
+                pump()
+            self.assertEqual(var.get(), expected)
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved.get(key), expected)
+
+    def test_a_fallback_survives_exit_and_relaunch_uncorrected(self):
+        settings_path = self.prepare_library(
+            {"filter_pack": "Ghost Pack"},
+            [("One", "P1", "dance-single", "Hard"),
+             ("Two", "P1", "dance-double", "Challenge")],
+        )
+        root = self.make_root()
+        application = self.construct(root, settings_path)
+        self.pump_until(root, lambda: len(application.rows) == 2)
+        # The saved Pack is not in this library: the load falls back.
+        self.assertEqual(application.pack_var.get(), "All packs")
+
+        # Exit through the app's real close path with neither dialog
+        # ever opened: no save fires, so the stale value stays on disk,
+        # exactly as proposal §3 accepted.
+        application._close_app()
+        saved = json.loads(settings_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved.get("filter_pack"), "Ghost Pack")
+
+        # Relaunch on the same settings: the stale value seeds, the
+        # load falls back again, and nothing errors.
+        root2 = self.make_root()
+        relaunched = self.construct(root2, settings_path)
+        self.pump_until(root2, lambda: len(relaunched.rows) == 2)
+        self.assertEqual(relaunched.pack_var.get(), "All packs")
+        self.assertTrue(relaunched.status.get().startswith("Showing saved library snapshot"))
 
 
 class CourseReloadNotificationTests(unittest.TestCase):
@@ -972,6 +1320,9 @@ class PerformanceAndExportTests(unittest.TestCase):
             instance.sort_keys = [("Pack", False)]
             instance.show_distribution_panel = Mock(get=Mock(return_value=False))
             instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
+            instance.pack_var = Mock(get=Mock(return_value="All packs"))
+            instance.type_var = Mock(get=Mock(return_value="All types"))
+            instance.diff_var = Mock(get=Mock(return_value="All difficulties"))
             instance.course_geometry = None
             instance.advanced_search_geometry = None
             instance._last_saved_settings = None
@@ -1007,6 +1358,9 @@ class PerformanceAndExportTests(unittest.TestCase):
             instance.sort_keys = [("Pack", False)]
             instance.show_distribution_panel = Mock(get=Mock(return_value=False))
             instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
+            instance.pack_var = Mock(get=Mock(return_value="All packs"))
+            instance.type_var = Mock(get=Mock(return_value="All types"))
+            instance.diff_var = Mock(get=Mock(return_value="All difficulties"))
             instance.course_geometry = None
             instance.advanced_search_geometry = None
             instance._last_saved_settings = None
