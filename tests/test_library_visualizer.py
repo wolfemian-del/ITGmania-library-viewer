@@ -1,3 +1,4 @@
+import contextlib
 import json
 import queue
 import re
@@ -628,6 +629,9 @@ class FilterPersistenceTests(unittest.TestCase):
 
             instance.apply_chart_filter(difficulty="Hard")
             self.assertEqual(instance.diff_var.get(), "Hard")
+            # The click alone writes nothing (proposal §3): the value
+            # reaches disk only at the next save, here the unrelated one.
+            self.assertFalse(settings_path.exists())
             instance._save_settings()
 
             saved = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -636,7 +640,14 @@ class FilterPersistenceTests(unittest.TestCase):
     def test_fallback_replaces_the_stored_value_on_the_next_save(self):
         with tempfile.TemporaryDirectory() as directory:
             settings_path = Path(directory) / "settings.json"
-            instance = self.make_loaded_instance(pack="Gone Pack")
+            settings_path.write_text(json.dumps({"filter_pack": "Gone Pack"}), encoding="utf-8")
+            instance = self.make_loaded_instance()
+            # Seed the variable from the real settings file through the
+            # real reader, the way __init__ seeds it at startup.
+            instance.settings_path = settings_path
+            seeded = instance._read_settings()
+            instance.pack_var = _ValueVar(seeded.get("filter_pack", "All packs"),
+                                          on_set=instance._refresh_unless_batching)
             rows = self.rows(("Pack1", "dance-single", "Hard"))
             instance._loaded(rows, len(rows), from_cache=True, refreshed_at="2026-01-01T00:00:00")
             self.assertEqual(instance.pack_var.get(), "All packs")
@@ -743,10 +754,38 @@ class LiveStartupSnapshotTests(unittest.TestCase):
 
 class LiveFilterPersistenceTests(unittest.TestCase):
     """The persisted filter dropdowns in a real window (proposal 0006):
-    seeding at construction, restore on the first load, and a pick —
-    including a keyboard pick — saving at once."""
+    seeding at construction, restore on the first load, picks — including
+    keyboard picks — saving at once, and the fallback's lazy correction
+    surviving a real exit and relaunch. Snapshots are built with the
+    app's own snapshot writer, as §6 specifies."""
 
-    def make_application(self, root, settings_extra, row_specs):
+    def make_root(self):
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+
+        def destroy_quietly():
+            with contextlib.suppress(Exception):
+                root.destroy()
+
+        self.addCleanup(destroy_quietly)
+        return root
+
+    @staticmethod
+    def pump_until(root, condition, timeout=10):
+        deadline = time.monotonic() + timeout
+        while not condition() and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.02)
+
+    def prepare_library(self, settings_extra, row_specs):
+        """A temp settings directory plus its settings path, with the
+        snapshot written by the app's own snapshot writer: a throwaway
+        application pointed at the same settings file, never pumped, so
+        its own deferred snapshot load never runs."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         settings_dir = Path(tmp.name)
@@ -758,88 +797,127 @@ class LiveFilterPersistenceTests(unittest.TestCase):
         settings.update(settings_extra)
         settings_path.write_text(json.dumps(settings))
         rows = []
-        for title, type_ in row_specs:
+        for title, pack, type_, difficulty in row_specs:
             row = {header: "" for header in app.HEADERS}
-            row.update({"Title": title, "Pack": "P", "Type": type_,
-                        "Difficulty": "Hard", "Meter": 10, "Course path": f"P/{title}"})
+            row.update({"Title": title, "Pack": pack, "Type": type_,
+                        "Difficulty": difficulty, "Meter": 10,
+                        "Course path": f"{pack}/{title}"})
             rows.append(row)
-        payload = {"schema_version": app.LIBRARY_CACHE_SCHEMA_VERSION,
-                   "cache_dir": str(cache_dir), "stats_file": str(stats_file),
-                   "refreshed_at": "2026-11-10T08:00:00-05:00", "files": 1,
-                   "skipped_files": 0, "files_without_charts": 0,
-                   "nested_song_tree": False, "rows": rows}
-        (settings_dir / "library_cache.json").write_text(json.dumps(payload))
+        root = self.make_root()
+        with patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path)):
+            writer = app.LibraryApp(root)
+            writer._save_library_cache(cache_dir, stats_file, rows, len(rows), 0, 0, False)
+        root.destroy()
+        return settings_path
+
+    def construct(self, root, settings_path):
         patcher = patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path))
         patcher.start()
         self.addCleanup(patcher.stop)
-        return app.LibraryApp(root), settings_path
+        return app.LibraryApp(root)
 
-    def make_root(self):
-        if app.tk is None:
-            self.skipTest("Tkinter is not installed")
-        try:
-            root = app.tk.Tk()
-        except app.tk.TclError:
-            self.skipTest("No display available for Tk")
-        self.addCleanup(root.destroy)
-        return root
+    def test_saved_filters_are_seeded_restored_and_applied(self):
+        settings_path = self.prepare_library(
+            {"filter_pack": "P2", "filter_type": "dance-single", "filter_difficulty": "Challenge"},
+            [("One", "P2", "dance-single", "Challenge"),
+             ("Two", "P2", "dance-single", "Hard"),
+             ("Three", "P1", "dance-single", "Challenge"),
+             ("Four", "P2", "dance-double", "Challenge")],
+        )
+        root = self.make_root()
+        application = self.construct(root, settings_path)
+        # Seeded at construction, before any load runs.
+        self.assertEqual(application.pack_var.get(), "P2")
+        self.assertEqual(application.type_var.get(), "dance-single")
+        self.assertEqual(application.diff_var.get(), "Challenge")
 
-    @staticmethod
-    def pump_until(root, condition, timeout=10):
-        deadline = time.monotonic() + timeout
-        while not condition() and time.monotonic() < deadline:
+        self.pump_until(root, lambda: len(application.rows) == 4)
+        self.pump_until(root, lambda: len(application.tree.get_children()) >= 1)
+        for _ in range(10):
             root.update()
-            time.sleep(0.02)
 
-    def test_saved_type_is_seeded_restored_and_applied(self):
-        root = self.make_root()
-        application, _ = self.make_application(
-            root,
-            {"filter_type": "dance-single", "filter_pack": 42},
-            [("One", "dance-single"), ("Two", "dance-single"), ("Three", "dance-double")],
-        )
-        # Seeded at construction, before any load: the saved Type is in
-        # place, and a non-string saved Pack fell back to the label.
+        # All three survived the load, and together they filter the
+        # table down to the one row that matches all three.
+        self.assertEqual(application.pack_var.get(), "P2")
         self.assertEqual(application.type_var.get(), "dance-single")
+        self.assertEqual(application.diff_var.get(), "Challenge")
+        self.assertEqual(len(application.tree.get_children()), 1)
+
+    def test_non_string_saved_filters_fall_back_at_startup(self):
+        settings_path = self.prepare_library(
+            {"filter_pack": 42, "filter_difficulty": ["Hard"]},
+            [("One", "P1", "dance-single", "Hard")],
+        )
+        root = self.make_root()
+        application = self.construct(root, settings_path)
+
         self.assertEqual(application.pack_var.get(), "All packs")
+        self.assertEqual(application.diff_var.get(), "All difficulties")
 
-        self.pump_until(root, lambda: len(application.tree.get_children()) >= 2)
-
-        self.assertEqual(application.type_var.get(), "dance-single")
-        self.assertEqual(len(application.tree.get_children()), 2)
-
-    def test_a_keyboard_pick_in_a_dropdown_saves_at_once(self):
-        root = self.make_root()
-        application, settings_path = self.make_application(
-            root, {}, [("One", "dance-single"), ("Two", "dance-double")],
+    def test_keyboard_picks_in_each_dropdown_save_at_once(self):
+        settings_path = self.prepare_library(
+            {},
+            [("One", "P1", "dance-single", "Hard"),
+             ("Two", "P2", "dance-double", "Challenge")],
         )
+        root = self.make_root()
+        application = self.construct(root, settings_path)
         self.pump_until(root, lambda: len(application.tree.get_children()) >= 2)
-        self.assertEqual(application.type_var.get(), "All types")
 
-        application.type_filter.focus_force()
-        root.update()
-        # A keyboard selection: Down opens the dropdown (on builds where it
-        # instead steps the value directly, the variable has already changed
-        # and the remaining keys are unneeded), Down highlights the next
-        # value, Return commits it — which is what fires <<ComboboxSelected>>.
-        # Each key needs a few event-loop turns for the dropdown's own
-        # machinery to settle before the next one lands.
         def pump(turns=5):
             for _ in range(turns):
                 root.update()
 
-        application.type_filter.event_generate("<Down>", when="now")
-        pump()
-        if application.type_var.get() == "All types":
-            root.event_generate("<Down>", when="now")
+        for combo, var, key in ((application.pack_filter, application.pack_var, "filter_pack"),
+                                (application.type_filter, application.type_var, "filter_type"),
+                                (application.diff_filter, application.diff_var, "filter_difficulty")):
+            expected = combo.cget("values")[1]
+            combo.focus_force()
+            root.update()
+            # A keyboard selection: Down opens the dropdown (on builds
+            # where it instead steps the value directly, the variable
+            # has already changed and the remaining keys are unneeded),
+            # Down highlights the next value, Return commits it — which
+            # is what fires <<ComboboxSelected>>. Each key needs a few
+            # event-loop turns for the dropdown's own machinery to
+            # settle before the next one lands.
+            combo.event_generate("<Down>", when="now")
             pump()
-            root.event_generate("<Return>", when="now")
-            pump()
-        self.pump_until(root, lambda: application.type_var.get() != "All types", timeout=3)
+            if var.get() != expected:
+                root.event_generate("<Down>", when="now")
+                pump()
+                root.event_generate("<Return>", when="now")
+                pump()
+            self.assertEqual(var.get(), expected)
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved.get(key), expected)
 
-        self.assertEqual(application.type_var.get(), "dance-double")
+    def test_a_fallback_survives_exit_and_relaunch_uncorrected(self):
+        settings_path = self.prepare_library(
+            {"filter_pack": "Ghost Pack"},
+            [("One", "P1", "dance-single", "Hard"),
+             ("Two", "P1", "dance-double", "Challenge")],
+        )
+        root = self.make_root()
+        application = self.construct(root, settings_path)
+        self.pump_until(root, lambda: len(application.rows) == 2)
+        # The saved Pack is not in this library: the load falls back.
+        self.assertEqual(application.pack_var.get(), "All packs")
+
+        # Exit through the app's real close path with neither dialog
+        # ever opened: no save fires, so the stale value stays on disk,
+        # exactly as proposal §3 accepted.
+        application._close_app()
         saved = json.loads(settings_path.read_text(encoding="utf-8"))
-        self.assertEqual(saved.get("filter_type"), "dance-double")
+        self.assertEqual(saved.get("filter_pack"), "Ghost Pack")
+
+        # Relaunch on the same settings: the stale value seeds, the
+        # load falls back again, and nothing errors.
+        root2 = self.make_root()
+        relaunched = self.construct(root2, settings_path)
+        self.pump_until(root2, lambda: len(relaunched.rows) == 2)
+        self.assertEqual(relaunched.pack_var.get(), "All packs")
+        self.assertTrue(relaunched.status.get().startswith("Showing saved library snapshot"))
 
 
 class CourseReloadNotificationTests(unittest.TestCase):
