@@ -525,7 +525,9 @@ class LibraryApp:
             self.status.set("No saved library snapshot yet. Choose your paths, then click Load / refresh.")
             self.refresh_table()
             return
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, RecursionError) as exc:
+            # ValueError covers UnicodeDecodeError and JSONDecodeError;
+            # RecursionError covers a deeply nested file.
             self.status.set(f"Saved library snapshot could not be read ({exc}). Click Load / refresh to rebuild it.")
             self.refresh_table()
             return
@@ -628,7 +630,9 @@ class LibraryApp:
             with self.settings_path.open("r", encoding="utf-8-sig") as handle:
                 data = json.load(handle)
             return data if isinstance(data, dict) else {}
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        except (OSError, ValueError, RecursionError):
+            # ValueError covers UnicodeDecodeError and JSONDecodeError;
+            # RecursionError covers a deeply nested file.
             return {}
 
     def _save_settings(self, _event=None):
