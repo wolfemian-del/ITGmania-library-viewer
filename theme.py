@@ -49,7 +49,7 @@ DIFFICULTY_COLORS = {
     "Easy": "#facc15",
     "Medium": "#f43f5e",
     "Hard": "#34d399",
-    "Challenge": "#a855f7",
+    "Challenge": "#c084fc",
     "Edit": "#94a3b8",
 }
 DIFFICULTY_COLOR_UNKNOWN = "#94a3b8"  # a difficulty name not listed above
