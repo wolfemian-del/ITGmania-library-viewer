@@ -217,6 +217,23 @@ class LibrarySnapshotTests(unittest.TestCase):
     def sample_row():
         return {key: "" for key in (*app.HEADERS, "Course path")}
 
+    def test_snapshot_round_trip_preserves_skipped_blocks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache" / "Songs"
+            stats_file = root / "Stats.xml"
+            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
+            rows = [self.sample_row()]
+            instance._save_library_cache(cache_dir, stats_file, rows, 1, 0, 0, False, skipped_blocks=3)
+
+            instance.load_cached_data()
+
+        instance._loaded.assert_called_once()
+        args, kwargs = instance._loaded.call_args
+        # _loaded's positional args: rows, files, skipped_files,
+        # files_without_charts, skipped_blocks, nested_song_tree.
+        self.assertEqual(args[4], 3)
+
     def test_snapshot_restores_when_source_paths_match(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -621,6 +638,24 @@ class FilterPersistenceTests(unittest.TestCase):
         self.assertEqual(instance.type_var.get(), "dance-single")
         self.assertEqual(instance.diff_var.get(), "Challenge")
         instance.refresh_table.assert_called_once()
+
+    def test_loaded_reports_skipped_chart_blocks_in_the_summary(self):
+        instance = self.make_loaded_instance()
+        rows = self.rows(("Pack1", "dance-single", "Hard"), ("Pack2", "dance-single", "Hard"))
+
+        instance._loaded(rows, len(rows), skipped_blocks=2)
+
+        status = instance.status.set.call_args.args[0]
+        self.assertTrue(status.startswith("Scanned 2 files · parsed 2 charts"))
+        self.assertIn(" · 2 chart blocks skipped (missing metadata)", status)
+
+    def test_loaded_omits_the_skipped_blocks_fragment_when_zero(self):
+        instance = self.make_loaded_instance()
+        rows = self.rows(("Pack1", "dance-single", "Hard"))
+
+        instance._loaded(rows, len(rows))
+
+        self.assertNotIn("chart blocks skipped", instance.status.set.call_args.args[0])
 
     def test_loaded_falls_back_for_values_missing_from_the_new_library(self):
         instance = self.make_loaded_instance(pack="Gone", type_="gone-type", difficulty="Gone")
@@ -1104,7 +1139,7 @@ class RefreshGenerationTests(unittest.TestCase):
 
             def newer_refresh_starts_while_parsing(path, scores):
                 instance._load_generation = 2  # the only file is parsed, so the scan loop will not notice
-                return []
+                return [], 0
 
             with patch.object(app, "parse_cache_file", newer_refresh_starts_while_parsing):
                 instance._load_worker(cache_dir, stats_file, generation=1)

@@ -30,7 +30,7 @@ def load_fixture_rows():
     scores = data.stats_index(FIXTURES / "Stats.xml")
     rows = []
     for cache_file in sorted(FIXTURES.glob("*.cache")):
-        rows.extend(data.parse_cache_file(cache_file, scores))
+        rows.extend(data.parse_cache_file(cache_file, scores)[0])
     return rows
 
 

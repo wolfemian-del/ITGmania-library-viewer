@@ -88,13 +88,52 @@ class ParsingTests(unittest.TestCase):
                     "Score": "987654", "Grade": "Tier05", "PercentDP": "0.98", "plays": "4",
                 }
             }
-            rows = data.parse_cache_file(cache_file, scores)
+            rows, _ = data.parse_cache_file(cache_file, scores)
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["Course path"], "Pack/Song")
         self.assertEqual(rows[0]["Score"], 987654)
         self.assertEqual(rows[0]["Best %"], 98.0)
         self.assertEqual(rows[0]["Plays"], 4)
+
+    def test_cache_file_reports_blocks_skipped_for_missing_metadata(self):
+        # Issue #18: a chart block without #STEPSTYPE or #DIFFICULTY is
+        # dropped; the parse returns the count alongside the rows so the
+        # load summary can report it.
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "song.cache"
+            cache_file.write_text(
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Hard;\n"
+                "#METER:10;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#METER:12;\n"
+                "#NOTEDATA:;\n"
+                "#DIFFICULTY:Challenge;\n"
+                "#METER:13;\n",
+                encoding="utf-8",
+            )
+            rows, skipped_blocks = data.parse_cache_file(cache_file, {})
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["Meter"], 10)
+        self.assertEqual(skipped_blocks, 2)
+
+    def test_cache_file_with_no_chart_blocks_skips_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "song.cache"
+            cache_file.write_text(
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#TITLE:No Charts;\n",
+                encoding="utf-8",
+            )
+            rows, skipped_blocks = data.parse_cache_file(cache_file, {})
+
+        self.assertEqual(rows, [])
+        self.assertEqual(skipped_blocks, 0)
 
     def test_cache_radar_and_tech_counts_use_their_named_positions(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -110,7 +149,7 @@ class ParsingTests(unittest.TestCase):
                 f"#TECHCOUNTS:{','.join(map(str, tech))};\n",
                 encoding="utf-8",
             )
-            row = data.parse_cache_file(cache_file, {})[0]
+            row = data.parse_cache_file(cache_file, {})[0][0]
 
         self.assertEqual(row["Taps/Holds"], 6)
         self.assertEqual(row["Jumps"], 7)
@@ -134,7 +173,7 @@ class ParsingTests(unittest.TestCase):
                 "#TECHCOUNTS:1,2;\n",
                 encoding="utf-8",
             )
-            row = data.parse_cache_file(cache_file, {})[0]
+            row = data.parse_cache_file(cache_file, {})[0][0]
 
         self.assertEqual(row["Mines"], 9)
         self.assertEqual(row["Hands"], 10)
@@ -157,7 +196,7 @@ class ParsingTests(unittest.TestCase):
                 "#PEAKNPS:12.5;\n",
                 encoding="utf-8",
             )
-            row = data.parse_cache_file(cache_file, {})[0]
+            row = data.parse_cache_file(cache_file, {})[0][0]
             self.assertEqual(row["Peak NPS"], 12.5)
 
             # Two values, one per player: written only for couples and routine charts
@@ -169,7 +208,7 @@ class ParsingTests(unittest.TestCase):
                 "#PEAKNPS:14.250|14.250;\n",
                 encoding="utf-8",
             )
-            row_piped = data.parse_cache_file(cache_file, {})[0]
+            row_piped = data.parse_cache_file(cache_file, {})[0][0]
             self.assertEqual(row_piped["Peak NPS"], 14.25)
 
             # Different values per player: the first player's value is used
@@ -181,7 +220,7 @@ class ParsingTests(unittest.TestCase):
                 "#PEAKNPS:16.8|10.5;\n",
                 encoding="utf-8",
             )
-            row_asym = data.parse_cache_file(cache_file, {})[0]
+            row_asym = data.parse_cache_file(cache_file, {})[0][0]
             self.assertEqual(row_asym["Peak NPS"], 16.8)
 
     def test_cache_file_handles_escaped_delimiters_in_title_and_path(self):
@@ -202,7 +241,7 @@ class ParsingTests(unittest.TestCase):
                     "Score": "950000", "Grade": "Tier06", "PercentDP": "0.95", "plays": "3",
                 }
             }
-            rows = data.parse_cache_file(cache_file, scores)
+            rows, _ = data.parse_cache_file(cache_file, scores)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["Title"], "Song Title ; Subtitle")
             self.assertEqual(rows[0]["Artist"], "Artist ; Feat")
@@ -248,7 +287,7 @@ class ParsingTests(unittest.TestCase):
                 "#DIFFICULTY:Hard;\n",
                 encoding="utf-8",
             )
-            rows = data.parse_cache_file(cache_file, data.stats_index(stats_file))
+            rows, _ = data.parse_cache_file(cache_file, data.stats_index(stats_file))
 
         self.assertEqual(rows[0]["Score"], 456)
         self.assertEqual(rows[0]["Plays"], 3)
@@ -300,7 +339,7 @@ class ParsingTests(unittest.TestCase):
                 b"#DIFFICULTY:Hard;\r\n"
                 b"#METER:9;\r\n"
             )
-            rows = data.parse_cache_file(cache_file, {})
+            rows, _ = data.parse_cache_file(cache_file, {})
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["Artist"], "First\nSecond")
@@ -342,7 +381,7 @@ class ParsingTests(unittest.TestCase):
                 "#DIFFICULTY:Hard;\n",
                 encoding="utf-8",
             )
-            rows = data.parse_cache_file(cache_file, {})
+            rows, _ = data.parse_cache_file(cache_file, {})
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["BPM"], "100–200")
         self.assertEqual(rows[0]["bpm_min"], 100.0)
@@ -378,7 +417,7 @@ class ParsingTests(unittest.TestCase):
                 "#DESCRIPTION:Beta Edit;\n",
                 encoding="utf-8",
             )
-            rows = data.parse_cache_file(cache_file, scores)
+            rows, _ = data.parse_cache_file(cache_file, scores)
 
         self.assertEqual(len(rows), 2)
         alpha_row = next(r for r in rows if r["Chart"] == "Alpha Edit")
@@ -419,7 +458,7 @@ class ParsingTests(unittest.TestCase):
                 "#DESCRIPTION:Alpha Edit;\n",
                 encoding="utf-8",
             )
-            rows = data.parse_cache_file(cache_file, data.stats_index(stats_file))
+            rows, _ = data.parse_cache_file(cache_file, data.stats_index(stats_file))
 
         self.assertEqual([row["Score"] for row in rows], [950000, 950000])
         self.assertEqual([row["Plays"] for row in rows], [7, 7])
@@ -449,7 +488,7 @@ class ParsingTests(unittest.TestCase):
                 "#CHARTNAME:my edit;\n",
                 encoding="utf-8",
             )
-            rows = data.parse_cache_file(cache_file, scores)
+            rows, _ = data.parse_cache_file(cache_file, scores)
 
         self.assertEqual(rows[0]["Score"], 980000)
 
@@ -477,7 +516,7 @@ class ParsingTests(unittest.TestCase):
                 "#DESCRIPTION:Alpha Edit;\n",
                 encoding="utf-8",
             )
-            rows = data.parse_cache_file(cache_file, data.stats_index(stats_file))
+            rows, _ = data.parse_cache_file(cache_file, data.stats_index(stats_file))
 
         self.assertEqual(rows[0]["Chart"], "Pretty Name")
         self.assertEqual(rows[0]["Score"], 950000)
@@ -508,7 +547,7 @@ class ParsingTests(unittest.TestCase):
                 "#CHARTNAME:Custom Chart;\n",
                 encoding="utf-8",
             )
-            rows = data.parse_cache_file(cache_file, scores)
+            rows, _ = data.parse_cache_file(cache_file, scores)
 
         self.assertEqual(rows[0]["Score"], 920000)
 
@@ -534,7 +573,7 @@ class ParsingTests(unittest.TestCase):
                 "#DIFFICULTY:Edit;\n",
                 encoding="utf-8",
             )
-            rows = data.parse_cache_file(cache_file, data.stats_index(stats_file))
+            rows, _ = data.parse_cache_file(cache_file, data.stats_index(stats_file))
 
         self.assertEqual(rows[0]["Score"], 950000)
         self.assertEqual(rows[0]["Plays"], 7)
@@ -565,7 +604,7 @@ class ParsingTests(unittest.TestCase):
                 "#DIFFICULTY:Edit;\n",
                 encoding="utf-8",
             )
-            rows = data.parse_cache_file(cache_file, data.stats_index(stats_file))
+            rows, _ = data.parse_cache_file(cache_file, data.stats_index(stats_file))
 
         # With no description on the cache side the viewer cannot tell the two
         # Edits apart, so it keeps the pre-isolation merged result: best score,
@@ -673,7 +712,7 @@ class BpmTests(unittest.TestCase):
                 "#METER:10;\n",
                 encoding="utf-8",
             )
-            row = data.parse_cache_file(cache_file, {})[0]
+            row = data.parse_cache_file(cache_file, {})[0][0]
         self.assertEqual(row["BPM"], "100–300")
         self.assertEqual(row["bpm_min"], 100.0)
         self.assertEqual(row["bpm_max"], 300.0)

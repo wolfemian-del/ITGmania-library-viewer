@@ -476,7 +476,7 @@ class LibraryApp:
         return os.path.normcase(os.path.abspath(os.path.expanduser(str(path))))
 
     def _save_library_cache(self, cache_dir, stats_file, rows, files, skipped_files,
-                            files_without_charts, nested_song_tree):
+                            files_without_charts, nested_song_tree, skipped_blocks=0):
         refreshed_at = datetime.now().astimezone().isoformat(timespec="seconds")
         payload = {
             "schema_version": LIBRARY_CACHE_SCHEMA_VERSION,
@@ -486,6 +486,7 @@ class LibraryApp:
             "files": files,
             "skipped_files": skipped_files,
             "files_without_charts": files_without_charts,
+            "skipped_blocks": skipped_blocks,
             "nested_song_tree": nested_song_tree,
             "rows": rows,
         }
@@ -554,6 +555,7 @@ class LibraryApp:
             payload["rows"], self._nonnegative_int(payload.get("files")),
             self._nonnegative_int(payload.get("skipped_files")),
             self._nonnegative_int(payload.get("files_without_charts")),
+            self._nonnegative_int(payload.get("skipped_blocks")),
             payload.get("nested_song_tree") is True,
             refreshed_at=payload.get("refreshed_at", "") if isinstance(payload.get("refreshed_at", ""), str) else "",
             from_cache=True,
@@ -900,11 +902,13 @@ class LibraryApp:
             files = [p for p in cache.iterdir() if p.is_file()]
             skipped_files = 0
             files_without_charts = 0
+            skipped_blocks = 0
             for path in files:
                 if self._load_is_stale(generation):
                     return
                 try:
-                    chart_rows = parse_cache_file(path, scores)
+                    chart_rows, blocks = parse_cache_file(path, scores)
+                    skipped_blocks += blocks
                     if not chart_rows:
                         files_without_charts += 1
                     rows.extend(chart_rows)
@@ -922,7 +926,7 @@ class LibraryApp:
                 try:
                     refreshed_at = self._save_library_cache(
                         cache, stats_file, rows, len(files), skipped_files,
-                        files_without_charts, nested_song_tree)
+                        files_without_charts, nested_song_tree, skipped_blocks)
                 except (OSError, TypeError, ValueError) as exc:
                     refreshed_at = ""
                     cache_error = str(exc)
@@ -932,6 +936,7 @@ class LibraryApp:
             self._load_results.put(("loaded", (rows, len(files)), {
                 "skipped_files": skipped_files,
                 "files_without_charts": files_without_charts,
+                "skipped_blocks": skipped_blocks,
                 "nested_song_tree": nested_song_tree,
                 "refreshed_at": refreshed_at,
                 "cache_error": cache_error,
@@ -978,7 +983,8 @@ class LibraryApp:
         self.status.set("Could not load library.")
         messagebox.showerror("Could not load library", message)
 
-    def _loaded(self, rows, files, skipped_files=0, files_without_charts=0, nested_song_tree=False,
+    def _loaded(self, rows, files, skipped_files=0, files_without_charts=0, skipped_blocks=0,
+                nested_song_tree=False,
                 refreshed_at="", cache_error="", from_cache=False, source_paths=None, generation=None):
         if generation is not None and self._load_is_stale(generation):
             return
@@ -1016,6 +1022,8 @@ class LibraryApp:
                 summary += f" · skipped {skipped_files:,} unreadable"
             if files_without_charts:
                 summary += f" · {files_without_charts:,} with no charts"
+            if skipped_blocks:
+                summary += f" · {skipped_blocks:,} chart blocks skipped (missing metadata)"
             self.status.set(summary + ".")
         if not from_cache and refreshed_at:
             self.status.set(self.status.get() + f" Snapshot refreshed {self._format_refresh_time(refreshed_at)}.")

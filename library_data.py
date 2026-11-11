@@ -294,7 +294,12 @@ def _merged_edit_fallback(scores: dict, base_key: tuple[str, str, str]) -> dict:
     return merged
 
 
-def parse_cache_file(path: Path, scores: dict) -> list[dict]:
+def parse_cache_file(path: Path, scores: dict) -> tuple[list[dict], int]:
+    """Parse a cache file into chart rows, and count skipped chart blocks.
+
+    Returns (rows, skipped_blocks): skipped_blocks counts chart blocks
+    dropped for missing #STEPSTYPE/#DIFFICULTY metadata (issue #18).
+    """
     # Cache files are UTF-8 Simfile text; split away the song metadata before chart parsing.
     text = path.read_text(encoding="utf-8-sig", errors="replace")
     chunks = re.split(r"(?m)^#NOTEDATA:;\s*\r?\n", text)
@@ -308,11 +313,13 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
     bpm_max = bpm_bounds[1] if bpm_bounds else ""
     bpm_display = format_bpm_display(song_tags.get("DISPLAYBPM"), bpm_min, bpm_max)
     rows = []
+    skipped_blocks = 0
     for chunk in chunks[1:]:
         tags = tag_map(chunk)
         chart_type = tags.get("STEPSTYPE", "")
         difficulty = tags.get("DIFFICULTY", "")
         if not chart_type or not difficulty:
+            skipped_blocks += 1
             continue
         radar_values = tags.get("RADARVALUES", "").split(",")
         radar = {name: number(value) for name, value in zip(RADAR_FIELDS, radar_values)}
@@ -357,7 +364,7 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
             **{name: tech[i] if i < len(tech) and tech[i] >= 0 else ""
                for i, name in enumerate(TECH_FIELDS)},
         })
-    return rows
+    return rows, skipped_blocks
 
 
 def looks_like_song_tree(cache: Path) -> bool:
