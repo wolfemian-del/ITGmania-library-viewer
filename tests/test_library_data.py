@@ -739,7 +739,7 @@ class BpmTests(unittest.TestCase):
 
     def test_split_timing_fixture_overrides_and_falls_back(self):
         fixture = Path("tests/fixtures/split_timing.fixture")
-        rows = data.parse_cache_file(fixture, {})
+        rows, _skipped = data.parse_cache_file(fixture, {})
         self.assertEqual(len(rows), 2)
         easy = next(r for r in rows if r["Difficulty"] == "Easy")
         hard = next(r for r in rows if r["Difficulty"] == "Hard")
@@ -766,7 +766,7 @@ class BpmTests(unittest.TestCase):
                 "#BPMS:0.000=-150.000;\n",
                 encoding="utf-8",
             )
-            row = data.parse_cache_file(cache_file, {})[0]
+            row = data.parse_cache_file(cache_file, {})[0][0]
             self.assertEqual(row["bpm_min"], 140.0)
             self.assertEqual(row["bpm_max"], 140.0)
             self.assertEqual(row["BPM"], "140")
@@ -782,7 +782,7 @@ class BpmTests(unittest.TestCase):
                 "#BPMS:0.000=-150.000;\n",
                 encoding="utf-8",
             )
-            row = data.parse_cache_file(cache_file, {})[0]
+            row = data.parse_cache_file(cache_file, {})[0][0]
             self.assertEqual(row["bpm_min"], "")
             self.assertEqual(row["bpm_max"], "")
             self.assertEqual(row["BPM"], "")
@@ -799,7 +799,7 @@ class BpmTests(unittest.TestCase):
                 "#DISPLAYBPM:150;\n",
                 encoding="utf-8",
             )
-            row = data.parse_cache_file(cache_file, {})[0]
+            row = data.parse_cache_file(cache_file, {})[0][0]
             self.assertEqual(row["bpm_min"], "")
             self.assertEqual(row["bpm_max"], "")
             self.assertEqual(row["BPM"], "150")
@@ -815,7 +815,7 @@ class BpmTests(unittest.TestCase):
                 "#DIFFICULTY:Easy;\n",
                 encoding="utf-8",
             )
-            row = data.parse_cache_file(cache_file, {})[0]
+            row = data.parse_cache_file(cache_file, {})[0][0]
             self.assertEqual(row["bpm_min"], "")
             self.assertEqual(row["bpm_max"], "")
             self.assertEqual(row["BPM"], "*")
@@ -831,7 +831,7 @@ class BpmTests(unittest.TestCase):
                 "#BPMS:0.000=180.000;\n",
                 encoding="utf-8",
             )
-            row = data.parse_cache_file(cache_file, {})[0]
+            row = data.parse_cache_file(cache_file, {})[0][0]
             self.assertEqual(row["bpm_min"], 180.0)
             self.assertEqual(row["bpm_max"], 180.0)
             self.assertEqual(row["BPM"], "180")
@@ -849,7 +849,7 @@ class BpmTests(unittest.TestCase):
                 "#DIFFICULTY:Challenge;\n",
                 encoding="utf-8",
             )
-            row = data.parse_cache_file(cache_file, {})[0]
+            row = data.parse_cache_file(cache_file, {})[0][0]
             self.assertEqual(row["bpm_min"], "")
             self.assertEqual(row["bpm_max"], "")
             self.assertEqual(row["BPM"], "")
