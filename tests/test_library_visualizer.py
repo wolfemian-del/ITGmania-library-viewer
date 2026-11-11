@@ -2,6 +2,7 @@ import contextlib
 import json
 import queue
 import re
+import sys
 import tempfile
 import threading
 import time
@@ -264,6 +265,41 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance.refresh_table.assert_called_once()
         self.assertIn("different data paths", instance.status.set.call_args.args[0])
 
+    def test_snapshot_with_deeply_nested_json_reports_could_not_be_read(self):
+        # Issue #122: a snapshot nested far past the recursion limit raises
+        # RecursionError out of json.load; it must be reported like any
+        # other unreadable snapshot instead of escaping the callback.
+        # The depth is 1,000,000 because the limit is version-dependent:
+        # 10,000 levels raise on 3.12 but parse on 3.14 (whose C recursion
+        # limit is higher), so the depth must exceed every supported
+        # version's limit. json.load fails fast at the limit.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = self.make_app(root / "settings.json", root / "Cache" / "Songs", root / "Stats.xml")
+            instance.library_cache_path.write_text("[" * 1000000 + "]" * 1000000, encoding="utf-8")
+
+            instance.load_cached_data()
+
+        instance._loaded.assert_not_called()
+        instance.refresh_table.assert_called_once()
+        self.assertIn("could not be read", instance.status.set.call_args.args[0])
+
+    @unittest.skipIf(sys.version_info < (3, 11),
+                     "the int-string conversion limit is 3.11+")
+    def test_snapshot_with_oversized_integer_reports_could_not_be_read(self):
+        # Issue #122: an integer past the 4,300-digit conversion limit
+        # raises ValueError out of json.load; same handling as above.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = self.make_app(root / "settings.json", root / "Cache" / "Songs", root / "Stats.xml")
+            instance.library_cache_path.write_text("[" + "9" * 5000 + "]", encoding="utf-8")
+
+            instance.load_cached_data()
+
+        instance._loaded.assert_not_called()
+        instance.refresh_table.assert_called_once()
+        self.assertIn("could not be read", instance.status.set.call_args.args[0])
+
     def test_snapshot_with_invalid_utf8_reports_could_not_be_read(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -311,6 +347,32 @@ class LibrarySnapshotTests(unittest.TestCase):
             saved = instance._read_settings()
             self.assertTrue(saved.get("show_distribution"))
             self.assertEqual(saved.get("distribution_metric"), "Difficulty")
+
+    def test_settings_with_deeply_nested_json_returns_empty_dict(self):
+        # Issue #122: a settings file nested far past the recursion limit
+        # raises RecursionError out of json.load; it must fall back to
+        # defaults instead of killing startup before the window appears.
+        # Depth 1,000,000 for the same version-dependent reason as the
+        # snapshot test above: 10,000 levels raise on 3.12 but parse on
+        # 3.14, so the depth must exceed every supported version's limit.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = self.make_app(root / "settings.json", root / "Cache", root / "Stats.xml")
+            instance.settings_path.write_text("[" * 1000000 + "]" * 1000000, encoding="utf-8")
+
+            self.assertEqual(instance._read_settings(), {})
+
+    @unittest.skipIf(sys.version_info < (3, 11),
+                     "the int-string conversion limit is 3.11+")
+    def test_settings_with_oversized_integer_returns_empty_dict(self):
+        # Issue #122: an integer past the 4,300-digit conversion limit
+        # raises ValueError out of json.load; same fallback as above.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = self.make_app(root / "settings.json", root / "Cache", root / "Stats.xml")
+            instance.settings_path.write_text("[" + "9" * 5000 + "]", encoding="utf-8")
+
+            self.assertEqual(instance._read_settings(), {})
 
     def test_settings_with_invalid_utf8_returns_empty_dict(self):
         # A mis-encoded hand-edited settings.json must not crash startup:
