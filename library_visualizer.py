@@ -95,9 +95,12 @@ class LibraryApp:
         self.stats_var = tk.StringVar(value=self.saved_settings.get(
             "stats_file", str(default_stats) if default_stats.is_file() else ""))
         self.search_var = tk.StringVar()
-        self.pack_var = tk.StringVar(value="All packs")
-        self.type_var = tk.StringVar(value="All types")
-        self.diff_var = tk.StringVar(value="All difficulties")
+        saved_pack = self.saved_settings.get("filter_pack")
+        self.pack_var = tk.StringVar(value=saved_pack if isinstance(saved_pack, str) else "All packs")
+        saved_type = self.saved_settings.get("filter_type")
+        self.type_var = tk.StringVar(value=saved_type if isinstance(saved_type, str) else "All types")
+        saved_difficulty = self.saved_settings.get("filter_difficulty")
+        self.diff_var = tk.StringVar(value=saved_difficulty if isinstance(saved_difficulty, str) else "All difficulties")
         self.scored_var = tk.BooleanVar(value=False)
         self._search_refresh_after_id = None
         saved_order = self.saved_settings.get("column_order", [])
@@ -302,6 +305,10 @@ class LibraryApp:
         self.type_filter.pack(side="left", padx=4)
         self.diff_filter = self._combo(bar, self.diff_var, ["All difficulties"])
         self.diff_filter.pack(side="left", padx=4)
+        # A pick in any filter dropdown saves the settings at once (proposal
+        # 0006); _save_settings accepts the event the binding passes.
+        for combo in (self.pack_filter, self.type_filter, self.diff_filter):
+            combo.bind("<<ComboboxSelected>>", self._save_settings)
         tk.Checkbutton(bar, text="Scored only", variable=self.scored_var, bg=theme.BG_WINDOW, fg=theme.TEXT_LABEL,
                        activebackground=theme.BG_WINDOW, activeforeground=theme.TEXT_ON_ACCENT, selectcolor=theme.BG_INPUT,
                        font=theme.FONT_BODY).pack(side="left", padx=9)
@@ -631,6 +638,9 @@ class LibraryApp:
             "sort_keys": [[column, descending] for column, descending in self.sort_keys],
             "show_distribution": self.show_distribution_panel.get(),
             "distribution_metric": self.distribution_metric.get(),
+            "filter_pack": self.pack_var.get(),
+            "filter_type": self.type_var.get(),
+            "filter_difficulty": self.diff_var.get(),
         }
         # The course window's geometry joins the file only once the user has
         # actually placed the window (issue #25); a settings file that predates
@@ -980,13 +990,16 @@ class LibraryApp:
                                            (self.type_filter, self.type_var, "All types", "Type")):
                 values = [label] + sorted({str(r[key]) for r in rows if r[key]}, key=str.casefold)
                 combo.configure(values=values)
-                var.set(label)
+                if var.get() not in values:
+                    var.set(label)
             difficulties = sorted(
                 {str(row["Difficulty"]) for row in rows if row["Difficulty"]},
                 key=difficulty_sort_key,
             )
-            self.diff_filter.configure(values=["All difficulties"] + difficulties)
-            self.diff_var.set("All difficulties")
+            difficulty_values = ["All difficulties"] + difficulties
+            self.diff_filter.configure(values=difficulty_values)
+            if self.diff_var.get() not in difficulty_values:
+                self.diff_var.set("All difficulties")
         if from_cache:
             stamp = self._format_refresh_time(refreshed_at)
             self.status.set(f"Showing saved library snapshot · {len(rows):,} charts · last refreshed {stamp}.")
