@@ -253,7 +253,7 @@ class LibraryApp:
         top.pack(fill="x")
         tk.Label(top, text="ITGmania Library Visualizer", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
                  font=theme.FONT_APP_TITLE).pack(side="left")
-        self.status = tk.StringVar(value="Choose your cache's Songs folder and player Stats.xml to get started.")
+        self.status = tk.StringVar(value="Choose your cache's Songs folder and player Stats.xml, then click Load / refresh.")
         tk.Label(top, textvariable=self.status, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW,
                  font=theme.FONT_BODY).pack(side="right", padx=8)
         # The course builder component (course_builder.py): created here because it needs the
