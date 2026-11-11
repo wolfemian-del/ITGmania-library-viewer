@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft — for review |
+| **Status** | Accepted (owner, 2026-11-11) |
 | **Author** | Muse (Muse Spark 1.3) |
 | **Date** | 2026-11-11 |
 | **Base** | main `aa1668a` (PRs #118, #120, #124, #125, #126 merged) |
@@ -20,6 +20,22 @@ stays hidden unless a user asks for it, and covers both with a single
 snapshot-schema bump so saved libraries rebuild exactly once. The owner
 would notice: nothing on screen by default, one "snapshot is invalid or
 outdated" rebuild after upgrading, and BPM values that stop lying.
+
+## Revision 1 (2026-11-11, from Grok's review)
+
+Grok reviewed the draft as the sole lane, per the owner's process
+decision for this proposal. It verified §2 claim by claim against main
+`aa1668a` — every load-bearing measurement ratified — found §3, §4
+and §5 consistent with no dropped decisions, and answered §7's three
+questions concurring with the proposal's recommendation on each. No
+design text changes: §7 is retitled Resolved and records the outcomes.
+The review also left two implementation notes that need no text change
+because the draft already carries them — the chart-timing fallback
+keeps the `parse_bpms(...) or song_bounds` shape (§4), so a warp-only
+chart falls back to the song's bounds rather than blanking them; and
+§6's pins include the Q2+Q3 composition and the
+`DEFAULT_VISIBLE_COLUMNS` exception. Both notes are carried into the
+implementation assignments.
 
 ## 1. Background and Goal
 
@@ -241,20 +257,31 @@ plus its own function.
   library has a warp song, its BPM cell no longer shows a negative
   bound [UNVERIFIED whether it has one].
 
-## 7. Open Questions for Reviewers
+## 7. Open Questions — Resolved
 
 - **Q1.** Is "no positive tempo ⇒ treated as no BPM" the right single
   missing-data treatment, or does any consumer (chart "?" bar, sort
   group) need to distinguish a warp-only song from an absent `#BPMS`?
   Recommendation: the single path — the consumers were audited in §2
   and none distinguishes today.
+  **Resolution (2026-11-11): the single path, as recommended.** The
+  reviewer confirmed every consumer already treats missing bounds
+  uniformly; a distinct warp-only signal is revisited only if a real
+  library shows authors relying on one.
 - **Q2.** Should the `title:` directive also match Subtitle, or is
   free-text coverage the right scope for this change? The design says
   free-text only (§5); argue it if you disagree.
+  **Resolution (2026-11-11): free-text only, as designed.** Widening
+  `title:` would silently change the meaning of existing saved
+  searches; if a combined directive is ever wanted, it gets its own
+  name rather than a widened `title:`.
 - **Q3.** The bump's placement: invariant-based (first implementation
   PR to merge carries it) versus fixed to one named PR. Recommendation:
   the invariant as stated in §4 — it is the release, not the branch
   moment, that users upgrade across.
+  **Resolution (2026-11-11): invariant-based, as recommended.** The
+  implementation PR that does not carry the bump states that the
+  schema is already 3.
 
 ---
 
