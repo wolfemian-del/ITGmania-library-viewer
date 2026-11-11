@@ -96,6 +96,20 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(rows[0]["Best %"], 98.0)
         self.assertEqual(rows[0]["Plays"], 4)
 
+    def test_subtitle_parsed_with_and_without(self):
+        # Issue #49: #SUBTITLE rides along as a row key; a song without
+        # one gets an empty string, not a missing key.
+        fixture = Path(__file__).parent / "fixtures" / "routine_subtitle.cache"
+        rows, _skipped = data.parse_cache_file(fixture, {})
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["Title"], "Neon Skyline")
+        self.assertEqual(rows[0]["Subtitle"], "(Sunset Mix)")
+        plain = Path(__file__).parent / "fixtures" / "plain_tune.cache"
+        plain_rows, _ = data.parse_cache_file(plain, {})
+        self.assertTrue(plain_rows)
+        for row in plain_rows:
+            self.assertEqual(row["Subtitle"], "")
+
     def test_cache_file_reports_blocks_skipped_for_missing_metadata(self):
         # Issue #18: a chart block without #STEPSTYPE or #DIFFICULTY is
         # dropped; the parse returns the count alongside the rows so the
@@ -1435,6 +1449,26 @@ class SearchQueryTests(unittest.TestCase):
         self.assertTrue(data.match_chart_query(row, 'pack:"in the groove" grade:>=S'))
         self.assertFalse(data.match_chart_query(row, "Smiley meter:10"))
         self.assertFalse(data.match_chart_query(row, "Vertex"))
+
+    def test_free_text_matches_subtitle_but_title_directive_does_not(self):
+        # Issue #49, proposal 0007 Q2: free-text search covers the subtitle;
+        # title: keeps matching only the title, so saved searches keep
+        # their meaning.
+        row = {
+            "Title": "Neon Skyline",
+            "Subtitle": "(Sunset Mix)",
+            "Artist": "Vector Coast",
+            "Pack": "Fixture Pack",
+            "Chart": "",
+            "Type": "dance-routine",
+            "Difficulty": "Hard",
+        }
+        self.assertTrue(data.match_chart_query(row, "sunset"))
+        self.assertTrue(data.match_chart_query(row, '"sunset mix"'))
+        self.assertTrue(data.match_chart_query(row, "neon"))
+        self.assertFalse(data.match_chart_query(row, "title:sunset"))
+        self.assertTrue(data.match_chart_query(row, "title:neon"))
+        self.assertFalse(data.match_chart_query(row, "zebra"))
 
     def test_score_and_percent_directives_use_their_own_columns(self):
         row = {"Score": 950000, "Best %": 95.0}

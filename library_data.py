@@ -350,7 +350,8 @@ def parse_cache_file(path: Path, scores: dict) -> tuple[list[dict], int]:
             score = scores.get(base_key, {})
         percent = number(score.get("PercentDP")) * 100
         rows.append({
-            "Title": song_tags.get("TITLE", path.stem), "Artist": song_tags.get("ARTIST", ""),
+            "Title": song_tags.get("TITLE", path.stem),
+            "Subtitle": song_tags.get("SUBTITLE", ""), "Artist": song_tags.get("ARTIST", ""),
             "Pack": pack, "Type": chart_type, "Difficulty": difficulty, "Course path": song_dir,
             "Meter": number(tags.get("METER")),
             "Time": number(song_tags.get("MUSICLENGTH")) if song_tags.get("MUSICLENGTH") else "",
@@ -844,7 +845,7 @@ def match_chart_query(row: dict, query: str | dict) -> bool:
     # 1. Free terms match anywhere across main textual fields
     if criteria.get("free_terms"):
         text_corpus = " ".join(
-            str(row.get(k, "")) for k in ("Title", "Artist", "Pack", "Chart", "Type", "Difficulty")
+            str(row.get(k, "")) for k in ("Title", "Subtitle", "Artist", "Pack", "Chart", "Type", "Difficulty")
         ).casefold()
         for term in criteria["free_terms"]:
             if term not in text_corpus:

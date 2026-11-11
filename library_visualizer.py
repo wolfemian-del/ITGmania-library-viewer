@@ -55,7 +55,7 @@ SEARCH_DEBOUNCE_MS = 200
 # window stays responsive while a big library streams in.
 ROW_INSERT_BUDGET_SECONDS = 0.012
 LIBRARY_CACHE_SCHEMA_VERSION = 3
-HEADERS = ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart", "Score",
+HEADERS = ("Title", "Subtitle", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart", "Score",
            "Grade", "Best %", "Plays", "Last played", "Peak NPS", "Taps/Holds", "Jumps",
            "Holds", "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4", "W5",
            "Miss", "Max combo", *TECH_FIELDS)
@@ -64,7 +64,7 @@ NUMERIC_COLUMNS = {"Meter", "Time", "Score", "Best %", "Plays", "Peak NPS", "Tap
                    "W5", "Miss", "Max combo", *TECH_FIELDS}
 # The groups shown under View > Columns, in menu order. Every column in HEADERS belongs to exactly one group.
 COLUMN_GROUPS = {
-    "Song & chart": ("Title", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart"),
+    "Song & chart": ("Title", "Subtitle", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart"),
     "Score": ("Score", "Grade", "Best %", "Plays", "Last played", "Max combo"),
     "Tap judgments": TAP_FIELDS,
     "Chart counts": ("Peak NPS", "Taps/Holds", "Jumps", "Holds", "Rolls", "Mines", "Hands", "Lifts"),
@@ -72,8 +72,11 @@ COLUMN_GROUPS = {
 }
 # Groups whose columns are shown on a fresh install and after "Reset column layout".
 DEFAULT_VISIBLE_GROUPS = ("Song & chart", "Score")
+# Subtitle is the one exception to the rule that every column of a default
+# group starts shown: it belongs to "Song & chart" but starts hidden
+# (issue #49, option B), opt-in via View -> Columns.
 DEFAULT_VISIBLE_COLUMNS = frozenset(
-    column for group in DEFAULT_VISIBLE_GROUPS for column in COLUMN_GROUPS[group])
+    column for group in DEFAULT_VISIBLE_GROUPS for column in COLUMN_GROUPS[group]) - {"Subtitle"}
 
 class LibraryApp:
     # Defaults for state that is only set later, so every instance has these attributes.
@@ -330,7 +333,7 @@ class LibraryApp:
         self.tree = ttk.Treeview(self.table_frame, columns=HEADERS, show="headings", selectmode="extended")
         for col in HEADERS:
             self.tree.heading(col, text=col, command=lambda c=col: self.sort_by(c))
-            width = 130 if col in ("Title", "Artist", "Pack") else 92
+            width = 130 if col in ("Title", "Subtitle", "Artist", "Pack") else 92
             if col in ("Type", "Difficulty", "Meter", "Time", "BPM", "Score", "Grade", "Best %", "Plays", "Jumps", "Holds",
                        "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4", "W5", "Miss"):
                 width = 76
@@ -341,7 +344,7 @@ class LibraryApp:
             self.default_column_widths[col] = width
             width = self.column_widths[col] or width
             self.tree.column(col, width=width, minwidth=55, stretch=False, anchor="w" if col in
-                             ("Title", "Artist", "Pack", "Chart") else "center")
+                             ("Title", "Subtitle", "Artist", "Pack", "Chart") else "center")
         vs = ttk.Scrollbar(self.table_frame, orient="vertical", command=self.tree.yview)
         hs = ttk.Scrollbar(self.table_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
