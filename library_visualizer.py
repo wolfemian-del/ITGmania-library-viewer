@@ -622,7 +622,7 @@ class LibraryApp:
 
     def _read_settings(self):
         try:
-            with self.settings_path.open("r", encoding="utf-8") as handle:
+            with self.settings_path.open("r", encoding="utf-8-sig") as handle:
                 data = json.load(handle)
             return data if isinstance(data, dict) else {}
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):

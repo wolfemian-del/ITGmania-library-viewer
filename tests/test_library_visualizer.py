@@ -307,6 +307,19 @@ class LibrarySnapshotTests(unittest.TestCase):
 
             self.assertEqual(instance._read_settings(), {})
 
+    def test_settings_with_utf8_bom_are_honoured(self):
+        # Issue #119: a settings.json saved with a UTF-8 BOM (an option
+        # in several Windows editors) must be read, not treated as
+        # corrupt. _read_settings opens with utf-8-sig, which strips a
+        # BOM when present and decodes plain UTF-8 identically.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = self.make_app(root / "settings.json", root / "Cache", root / "Stats.xml")
+            payload = json.dumps({"cache_dir": "/cache"}).encode("utf-8")
+            instance.settings_path.write_bytes(b"\xef\xbb\xbf" + payload)
+
+            self.assertEqual(instance._read_settings(), {"cache_dir": "/cache"})
+
     def test_clear_chart_filter_resets_diff_and_search_directives(self):
         instance = object.__new__(app.LibraryApp)
         instance.diff_var = Mock()
