@@ -625,7 +625,7 @@ class LibraryApp:
             with self.settings_path.open("r", encoding="utf-8") as handle:
                 data = json.load(handle)
             return data if isinstance(data, dict) else {}
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return {}
 
     def _save_settings(self, _event=None):

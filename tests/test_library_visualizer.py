@@ -295,6 +295,18 @@ class LibrarySnapshotTests(unittest.TestCase):
             self.assertTrue(saved.get("show_distribution"))
             self.assertEqual(saved.get("distribution_metric"), "Difficulty")
 
+    def test_settings_with_invalid_utf8_returns_empty_dict(self):
+        # A mis-encoded hand-edited settings.json must not crash startup:
+        # _read_settings runs in __init__, so an uncaught decode error
+        # would kill the app before the window appears. Same gap PR #116
+        # closed for the snapshot reader (load_cached_data).
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = self.make_app(root / "settings.json", root / "Cache", root / "Stats.xml")
+            instance.settings_path.write_bytes(b"\xff\xfe not utf-8")
+
+            self.assertEqual(instance._read_settings(), {})
+
     def test_clear_chart_filter_resets_diff_and_search_directives(self):
         instance = object.__new__(app.LibraryApp)
         instance.diff_var = Mock()
