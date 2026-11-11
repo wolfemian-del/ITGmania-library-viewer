@@ -539,6 +539,51 @@ class ColumnGroupTests(unittest.TestCase):
         instance.tree.configure.assert_not_called()
         instance._save_settings.assert_not_called()
 
+    def test_saved_order_without_subtitle_places_it_after_title(self):
+        """Issue #49, Finding A: a saved column order from before Subtitle
+        existed puts the new column right after Title (mirroring the
+        Time/BPM placement), instead of appending it at the far right."""
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                settings_path = Path(directory) / "settings.json"
+                saved = [col for col in app.HEADERS if col != "Subtitle"]
+                settings_path.write_text(json.dumps({"column_order": saved}), encoding="utf-8")
+                with patch.object(app.LibraryApp, "_settings_file_path",
+                                 staticmethod(lambda: settings_path)):
+                    application = app.LibraryApp(root)
+                self.assertEqual(application.column_order[0], "Title")
+                self.assertEqual(application.column_order[1], "Subtitle")
+                self.assertEqual(application.column_order[2:], saved[1:])
+        finally:
+            root.destroy()
+
+    def test_saved_order_with_subtitle_keeps_its_place(self):
+        """A saved order that already places Subtitle is left alone: the
+        placement only fills in orders from before the column existed."""
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                settings_path = Path(directory) / "settings.json"
+                saved = [col for col in app.HEADERS if col != "Subtitle"] + ["Subtitle"]
+                settings_path.write_text(json.dumps({"column_order": saved}), encoding="utf-8")
+                with patch.object(app.LibraryApp, "_settings_file_path",
+                                 staticmethod(lambda: settings_path)):
+                    application = app.LibraryApp(root)
+                self.assertEqual(application.column_order, saved)
+        finally:
+            root.destroy()
+
     def test_reset_column_layout_restores_the_default_columns(self):
         instance = self.make_app(app.HEADERS)
         instance.column_order = list(reversed(app.HEADERS))

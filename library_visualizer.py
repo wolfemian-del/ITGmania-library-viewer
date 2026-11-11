@@ -123,6 +123,12 @@ class LibraryApp:
             self.column_order.remove("BPM")
             time_index = self.column_order.index("Time")
             self.column_order.insert(time_index + 1, "BPM")
+        if "Subtitle" not in valid_order:
+            # A saved order from before Subtitle existed appends it at the
+            # far right; put it beside Title instead, like Time/BPM above.
+            self.column_order.remove("Subtitle")
+            title_index = self.column_order.index("Title")
+            self.column_order.insert(title_index + 1, "Subtitle")
         saved_visibility = self.saved_settings.get("column_visibility", {})
         if not isinstance(saved_visibility, dict):
             saved_visibility = {}
