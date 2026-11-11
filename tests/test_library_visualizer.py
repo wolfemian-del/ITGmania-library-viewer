@@ -348,6 +348,26 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance._loaded.assert_not_called()
         self.assertIn("invalid or outdated", instance.status.set.call_args.args[0])
 
+    def test_snapshot_row_missing_a_column_is_rejected_as_outdated(self):
+        # Issue #49: the HEADERS check independently invalidates a snapshot
+        # whose rows predate a new column, even at the current schema version.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = root / "Cache", root / "Stats.xml"
+            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
+            instance._save_library_cache(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
+            with instance.library_cache_path.open("r+", encoding="utf-8") as handle:
+                payload = app.json.load(handle)
+                del payload["rows"][0]["Subtitle"]
+                handle.seek(0)
+                app.json.dump(payload, handle)
+                handle.truncate()
+
+            instance.load_cached_data()
+
+        instance._loaded.assert_not_called()
+        self.assertIn("invalid or outdated", instance.status.set.call_args.args[0])
+
     def test_distribution_settings_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -480,8 +500,13 @@ class ColumnGroupTests(unittest.TestCase):
                          ["Song & chart", "Score", "Tap judgments", "Chart counts", "Tech counts"])
 
     def test_default_columns_are_song_and_chart_plus_score(self):
-        expected = {*app.COLUMN_GROUPS["Song & chart"], *app.COLUMN_GROUPS["Score"]}
+        # Issue #49: Subtitle is the one exception — in "Song & chart" but
+        # hidden by default, while its group-mates default to shown.
+        expected = {*app.COLUMN_GROUPS["Song & chart"], *app.COLUMN_GROUPS["Score"]} - {"Subtitle"}
         self.assertEqual(set(app.DEFAULT_VISIBLE_COLUMNS), expected)
+        self.assertNotIn("Subtitle", app.DEFAULT_VISIBLE_COLUMNS)
+        self.assertIn("Subtitle", app.COLUMN_GROUPS["Song & chart"])
+        self.assertTrue({"Title", "Artist", "Pack"} <= set(app.DEFAULT_VISIBLE_COLUMNS))
 
     def test_group_check_is_on_only_when_the_whole_group_is_shown(self):
         instance = self.make_app(app.DEFAULT_VISIBLE_COLUMNS)
@@ -514,6 +539,51 @@ class ColumnGroupTests(unittest.TestCase):
         instance.tree.configure.assert_not_called()
         instance._save_settings.assert_not_called()
 
+    def test_saved_order_without_subtitle_places_it_after_title(self):
+        """Issue #49, Finding A: a saved column order from before Subtitle
+        existed puts the new column right after Title (mirroring the
+        Time/BPM placement), instead of appending it at the far right."""
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                settings_path = Path(directory) / "settings.json"
+                saved = [col for col in app.HEADERS if col != "Subtitle"]
+                settings_path.write_text(json.dumps({"column_order": saved}), encoding="utf-8")
+                with patch.object(app.LibraryApp, "_settings_file_path",
+                                 staticmethod(lambda: settings_path)):
+                    application = app.LibraryApp(root)
+                self.assertEqual(application.column_order[0], "Title")
+                self.assertEqual(application.column_order[1], "Subtitle")
+                self.assertEqual(application.column_order[2:], saved[1:])
+        finally:
+            root.destroy()
+
+    def test_saved_order_with_subtitle_keeps_its_place(self):
+        """A saved order that already places Subtitle is left alone: the
+        placement only fills in orders from before the column existed."""
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                settings_path = Path(directory) / "settings.json"
+                saved = [col for col in app.HEADERS if col != "Subtitle"] + ["Subtitle"]
+                settings_path.write_text(json.dumps({"column_order": saved}), encoding="utf-8")
+                with patch.object(app.LibraryApp, "_settings_file_path",
+                                 staticmethod(lambda: settings_path)):
+                    application = app.LibraryApp(root)
+                self.assertEqual(application.column_order, saved)
+        finally:
+            root.destroy()
+
     def test_reset_column_layout_restores_the_default_columns(self):
         instance = self.make_app(app.HEADERS)
         instance.column_order = list(reversed(app.HEADERS))
@@ -523,7 +593,10 @@ class ColumnGroupTests(unittest.TestCase):
         self.assertEqual(instance.tree.configure.call_args.kwargs["displaycolumns"],
                          [col for col in app.HEADERS if col in app.DEFAULT_VISIBLE_COLUMNS])
         self.assertFalse(instance.group_visibility["Tech counts"].get())
-        self.assertTrue(instance.group_visibility["Song & chart"].get())
+        # "Song & chart" reads unchecked after a reset: Subtitle belongs to
+        # the group but starts hidden (issue #49), so the group is never
+        # fully shown by default.
+        self.assertFalse(instance.group_visibility["Song & chart"].get())
 
 
 class RowTintTests(unittest.TestCase):
@@ -1652,7 +1725,7 @@ class PerformanceAndExportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             out_file = Path(directory) / "export.csv"
             instance = object.__new__(app.LibraryApp)
-            instance.rows = [{"Title": "My Song", "Pack": "My Pack"}]
+            instance.rows = [{"Title": "My Song", "Pack": "My Pack", "Subtitle": "(Sunset Mix)"}]
             instance.status = Mock()
 
             mock_filedialog = Mock(asksaveasfilename=Mock(return_value=str(out_file)))
@@ -1667,6 +1740,8 @@ class PerformanceAndExportTests(unittest.TestCase):
             content = out_file.read_text(encoding="utf-8-sig")
             self.assertIn("My Song", content)
             self.assertIn("My Pack", content)
+            self.assertIn("Subtitle", content)
+            self.assertIn("(Sunset Mix)", content)
             self.assertIn("Exported 1 charts", instance.status.set.call_args[0][0])
 
 
