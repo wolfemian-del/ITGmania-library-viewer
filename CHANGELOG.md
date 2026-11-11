@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.2.0 - 2026-11-11
+
+### Library table
+- New Subtitle column: shows each song's subtitle, searchable by free text, hidden by default (turn it on under View → Columns).
+- BPM now uses real tempos for filtering, sorting and the distribution chart; the BPM column shows `#DISPLAYBPM`, and a chart's own `#BPMS`/`#DISPLAYBPM` win over the song's when present. Tempos of zero or below are ignored.
+- Ctrl+A selects all rows in the results table.
+- The Pack, Type and Difficulty filter dropdowns are remembered across restarts, and fall back to "All …" when a saved value no longer exists.
+- The count line now says when a search filter value cannot be read (for example `meter:abc`), and reports cache chart blocks skipped for missing metadata.
+
+### Startup and loading
+- The window paints before the saved library loads, and large libraries insert rows in time-boxed batches, so startup feels faster.
+- Cache parsing is faster (about 11% of the parse loop).
+- A mis-encoded or BOM-saved `settings.json` no longer crashes startup or silently loses settings, and deeply nested or oversized-number JSON no longer crashes the readers.
+
+### Other
+- Challenge difficulty tint lightened to meet contrast (`#c084fc`).
+- First-run welcome text names the Load button.
+- The distribution panel now lives in its own component; this move was not intended to change behavior.
+- Proposal, PR and issue templates added for contributors.
+
 ## 1.1.0 - 2026-11-09
 
 ### Search
