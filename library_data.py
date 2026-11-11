@@ -932,20 +932,40 @@ def match_chart_query(row: dict, query: str | dict) -> bool:
     return True
 
 
+def _readable_grade(value: str) -> bool:
+    """Whether a grade directive value can match a chart (issue #130).
+
+    Mirrors the grade branch of match_chart_query, form by form: an
+    operator value is readable when its target is a known grade (a display
+    label or a Tier key); a bare value is readable only when it is a display
+    label, which is what the matcher compares it against. A bare Tier key
+    (grade:Tier06) is therefore unreadable — the table would be blank with
+    no hint otherwise.
+    """
+    if value.startswith((">=", "<=", ">", "<")):
+        target = value[2:] if value[:2] in (">=", "<=") else value[1:]
+        return target.strip().casefold() in GRADE_RANK
+    return value.strip().casefold() in {label.casefold() for label in GRADE_NAMES.values()}
+
+
 def find_unreadable_directives(query: str | dict) -> list[str]:
-    """Texts of numeric directives whose non-empty value cannot be read.
+    """Texts of directives whose non-empty value cannot be read.
 
     "meter:abc" is unreadable; "meter:" is not (an empty value is
     unfinished typing, skipped by match_chart_query). Replays the same
-    parse_numeric_bound checks the matcher uses, including durations
-    for time:. Text directives are never unreadable.
+    checks the matcher uses: parse_numeric_bound for numeric fields
+    (including durations for time:) and the grade reading above for
+    grade:. Other text directives are never unreadable.
     """
     criteria = query if isinstance(query, dict) else parse_search_query(query)
     unreadable = []
     for field, raw_val in criteria.get("directives", []):
-        if field not in NUMERIC_SEARCH_FIELDS or not raw_val.strip():
+        if not raw_val.strip():
             continue
-        if parse_numeric_bound(raw_val, is_duration=field == "time") is None:
+        if field in NUMERIC_SEARCH_FIELDS:
+            if parse_numeric_bound(raw_val, is_duration=field == "time") is None:
+                unreadable.append(f"{field}:{raw_val}")
+        elif field == "grade" and not _readable_grade(raw_val):
             unreadable.append(f"{field}:{raw_val}")
     return unreadable
 
