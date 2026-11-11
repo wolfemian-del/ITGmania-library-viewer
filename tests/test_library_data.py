@@ -1101,6 +1101,34 @@ class SearchQueryTests(unittest.TestCase):
         self.assertFalse(data.match_chart_query(row, "time:<2:00"))
         self.assertFalse(data.match_chart_query(row, "time:>150"))
 
+    def test_empty_numeric_directive_is_skipped_while_typing(self):
+        row = {"Meter": 11, "Title": "Summer", "Artist": "Smiley", "Pack": "ITG"}
+        self.assertTrue(data.match_chart_query(row, "meter:"))
+        self.assertTrue(data.match_chart_query(row, "m:"))
+        self.assertTrue(data.match_chart_query(row, "meter: pack:ITG"))
+        self.assertFalse(data.match_chart_query(row, "meter: pack:Other"))
+        self.assertTrue(data.match_chart_query({"Time": 135.0}, "time:"))
+        self.assertTrue(data.match_chart_query({"bpm_min": 180.0, "bpm_max": 240.0}, "bpm:"))
+
+    def test_unreadable_numeric_directive_matches_nothing(self):
+        row = {"Meter": 11, "Title": "Summer"}
+        self.assertFalse(data.match_chart_query(row, "meter:abc"))
+        self.assertFalse(data.match_chart_query({"bpm_min": 180.0, "bpm_max": 240.0}, "bpm:abc"))
+        row_time = {"Time": 135.0, "Title": "Song"}
+        self.assertFalse(data.match_chart_query(row_time, "time:abc"))
+        self.assertTrue(data.match_chart_query(row_time, "time:>2:00"))
+
+    def test_find_unreadable_directives_names_the_filter(self):
+        self.assertEqual(data.find_unreadable_directives("meter:abc"), ["meter:abc"])
+        self.assertEqual(data.find_unreadable_directives("meter:11 bpm:abc time:1:30"), ["bpm:abc"])
+        self.assertEqual(data.find_unreadable_directives("meter:abc bpm:xyz"), ["meter:abc", "bpm:xyz"])
+        self.assertEqual(data.find_unreadable_directives("meter:"), [])
+        self.assertEqual(data.find_unreadable_directives("meter:11"), [])
+        self.assertEqual(data.find_unreadable_directives("time:abc"), ["time:abc"])
+        self.assertEqual(data.find_unreadable_directives("nps:abc"), ["peak_nps:abc"])
+        self.assertEqual(data.find_unreadable_directives("time:1:30"), [])
+        self.assertEqual(data.find_unreadable_directives("title:abc"), [])
+
     def test_match_chart_query_free_text_and_combined(self):
         row = {
             "Title": "Delirium",
@@ -1231,7 +1259,8 @@ class SearchQueryTests(unittest.TestCase):
         # Invalid bounds do not match
         row = {"Jumps": 10}
         self.assertFalse(data.match_chart_query(row, "jumps:abc"))
-        self.assertFalse(data.match_chart_query(row, "jumps:"))
+        # An empty bound is unfinished typing, not a filter (issue #46)
+        self.assertTrue(data.match_chart_query(row, "jumps:"))
 
     def test_replace_search_directive_radar_counts(self):
         query = "jumps:>10 mines:0"
