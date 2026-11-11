@@ -717,6 +717,223 @@ class BpmTests(unittest.TestCase):
         self.assertEqual(row["bpm_min"], 100.0)
         self.assertEqual(row["bpm_max"], 300.0)
 
+    def test_parse_bpms_positive_values_only(self):
+        # Synthetic cases from issue #48 with post-fix expectations
+        self.assertEqual(data.parse_bpms("0=150,64=-150"), (150.0, 150.0))
+        self.assertEqual(data.parse_bpms("0=0,4=150"), (150.0, 150.0))
+        self.assertEqual(data.parse_bpms("0=150,10=999999"), (150.0, 999999.0))
+        # NaN handling (fold-in): keep-filter on v > 0 drops NaN without poisoning min/max
+        self.assertEqual(data.parse_bpms("0=nan,4=150"), (150.0, 150.0))
+        self.assertIsNone(data.parse_bpms("0=nan"))
+        # All-nonpositive returns None (treated as no BPM)
+        self.assertIsNone(data.parse_bpms("0=-150,64=0"))
+
+    def test_format_bpm_display_post_fix_synthetic_values(self):
+        # Post-fix display expectations for synthetic cases
+        min1, max1 = data.parse_bpms("0=150,64=-150")
+        self.assertEqual(data.format_bpm_display(None, min1, max1), "150")
+        min2, max2 = data.parse_bpms("0=0,4=150")
+        self.assertEqual(data.format_bpm_display(None, min2, max2), "150")
+        min3, max3 = data.parse_bpms("0=150,10=999999")
+        self.assertEqual(data.format_bpm_display(None, min3, max3), "150–999999")
+
+    def test_split_timing_fixture_overrides_and_falls_back(self):
+        fixture = Path(__file__).parent / "fixtures" / "split_timing.fixture"
+        rows, _skipped = data.parse_cache_file(fixture, {})
+        self.assertEqual(len(rows), 2)
+        easy = next(r for r in rows if r["Difficulty"] == "Easy")
+        hard = next(r for r in rows if r["Difficulty"] == "Hard")
+        # Easy chart has no chart timing: falls back to song-level timing
+        self.assertEqual(easy["bpm_min"], 140.0)
+        self.assertEqual(easy["bpm_max"], 140.0)
+        self.assertEqual(easy["BPM"], "140")
+        # Hard chart has split timing: overrides with chart-level timing
+        self.assertEqual(hard["bpm_min"], 180.0)
+        self.assertEqual(hard["bpm_max"], 200.0)
+        self.assertEqual(hard["BPM"], "180–200")
+
+    def test_chart_timing_composition_pins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "song.cache"
+            # Pin 1: Chart warp-only + song normal => song bounds
+            cache_file.write_text(
+                "#TITLE:Test;\n"
+                "#SONGFILENAME:Songs/P/S/a.ogg;\n"
+                "#BPMS:0.000=140.000;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Easy;\n"
+                "#BPMS:0.000=-150.000;\n",
+                encoding="utf-8",
+            )
+            row = data.parse_cache_file(cache_file, {})[0][0]
+            self.assertEqual(row["bpm_min"], 140.0)
+            self.assertEqual(row["bpm_max"], 140.0)
+            self.assertEqual(row["BPM"], "140")
+
+            # Pin 2: Bounds None without #DISPLAYBPM => cell is blank
+            cache_file.write_text(
+                "#TITLE:Test;\n"
+                "#SONGFILENAME:Songs/P/S/a.ogg;\n"
+                "#BPMS:0.000=-140.000;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Easy;\n"
+                "#BPMS:0.000=-150.000;\n",
+                encoding="utf-8",
+            )
+            row = data.parse_cache_file(cache_file, {})[0][0]
+            self.assertEqual(row["bpm_min"], "")
+            self.assertEqual(row["bpm_max"], "")
+            self.assertEqual(row["BPM"], "")
+
+            # Pin 3: Bounds None with #DISPLAYBPM => cell shows display text
+            cache_file.write_text(
+                "#TITLE:Test;\n"
+                "#SONGFILENAME:Songs/P/S/a.ogg;\n"
+                "#BPMS:0.000=-140.000;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Easy;\n"
+                "#BPMS:0.000=-150.000;\n"
+                "#DISPLAYBPM:150;\n",
+                encoding="utf-8",
+            )
+            row = data.parse_cache_file(cache_file, {})[0][0]
+            self.assertEqual(row["bpm_min"], "")
+            self.assertEqual(row["bpm_max"], "")
+            self.assertEqual(row["BPM"], "150")
+
+            # Pin 4: Bounds None with #DISPLAYBPM:* => cell shows *
+            cache_file.write_text(
+                "#TITLE:Test;\n"
+                "#SONGFILENAME:Songs/P/S/a.ogg;\n"
+                "#BPMS:0.000=-140.000;\n"
+                "#DISPLAYBPM:*;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Easy;\n",
+                encoding="utf-8",
+            )
+            row = data.parse_cache_file(cache_file, {})[0][0]
+            self.assertEqual(row["bpm_min"], "")
+            self.assertEqual(row["bpm_max"], "")
+            self.assertEqual(row["BPM"], "*")
+
+            # Pin 5: Chart normal + song warp-only => chart bounds override
+            cache_file.write_text(
+                "#TITLE:Test;\n"
+                "#SONGFILENAME:Songs/P/S/a.ogg;\n"
+                "#BPMS:0.000=-140.000;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Easy;\n"
+                "#BPMS:0.000=180.000;\n",
+                encoding="utf-8",
+            )
+            row = data.parse_cache_file(cache_file, {})[0][0]
+            self.assertEqual(row["bpm_min"], 180.0)
+            self.assertEqual(row["bpm_max"], 180.0)
+            self.assertEqual(row["BPM"], "180")
+
+            # Pin 6: Chart has its own #BPMS but no #DISPLAYBPM, song has
+            # #DISPLAYBPM:140 => the cell shows the song's display text
+            # while the bounds are the chart's own (per-tag independence).
+            cache_file.write_text(
+                "#TITLE:Test;\n"
+                "#SONGFILENAME:Songs/P/S/a.ogg;\n"
+                "#BPMS:0.000=140.000;\n"
+                "#DISPLAYBPM:140;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Easy;\n"
+                "#BPMS:0.000=180.000;\n",
+                encoding="utf-8",
+            )
+            row = data.parse_cache_file(cache_file, {})[0][0]
+            self.assertEqual(row["bpm_min"], 180.0)
+            self.assertEqual(row["bpm_max"], 180.0)
+            self.assertEqual(row["BPM"], "140")
+
+            # Pin 7: Chart has #DISPLAYBPM only (90:95), song has
+            # #BPMS:0=140 and no #DISPLAYBPM => the cell shows the
+            # chart's display text while the bounds are the song's.
+            cache_file.write_text(
+                "#TITLE:Test;\n"
+                "#SONGFILENAME:Songs/P/S/a.ogg;\n"
+                "#BPMS:0.000=140.000;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Easy;\n"
+                "#DISPLAYBPM:90:95;\n",
+                encoding="utf-8",
+            )
+            row = data.parse_cache_file(cache_file, {})[0][0]
+            self.assertEqual(row["bpm_min"], 140.0)
+            self.assertEqual(row["bpm_max"], 140.0)
+            # A lo:hi display range renders with an en dash, as elsewhere.
+            self.assertEqual(row["BPM"], "90–95")
+
+    def test_display_text_differs_from_real_bounds(self):
+        # Q1-B: the cell shows #DISPLAYBPM while the filter and the sort
+        # follow the real #BPMS bounds. A song with #DISPLAYBPM:150 and
+        # #BPMS:0=100,32=300 shows cell "150" with bounds 100/300;
+        # bpm:>250 matches it and the sort key follows the 300.
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "song.cache"
+            cache_file.write_text(
+                "#TITLE:Test;\n"
+                "#SONGFILENAME:Songs/P/S/a.ogg;\n"
+                "#BPMS:0.000=100.000,32.000=300.000;\n"
+                "#DISPLAYBPM:150;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Easy;\n",
+                encoding="utf-8",
+            )
+            row = data.parse_cache_file(cache_file, {})[0][0]
+            self.assertEqual(row["bpm_min"], 100.0)
+            self.assertEqual(row["bpm_max"], 300.0)
+            self.assertEqual(row["BPM"], "150")
+            self.assertTrue(data.match_chart_query(row, data.parse_search_query("bpm:>250")))
+            self.assertEqual(data.bpm_sort_key(row), (300.0, 100.0))
+
+    def test_missing_bpm_downstream_consumers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "song.cache"
+            # An all-nonpositive/warp-only song produces empty bounds
+            cache_file.write_text(
+                "#TITLE:Warp Only;\n"
+                "#SONGFILENAME:Songs/P/S/a.ogg;\n"
+                "#BPMS:0.000=-150.000,64.000=0.000;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Challenge;\n",
+                encoding="utf-8",
+            )
+            row = data.parse_cache_file(cache_file, {})[0][0]
+            self.assertEqual(row["bpm_min"], "")
+            self.assertEqual(row["bpm_max"], "")
+            self.assertEqual(row["BPM"], "")
+
+            # 1. bpm_sort_key places it in the missing-BPM group (ranks after numeric BPMs)
+            normal_row = {"bpm_min": 100.0, "bpm_max": 200.0}
+            self.assertEqual(data.bpm_sort_key(row), (float("inf"), float("inf")))
+            self.assertEqual(sorted([row, normal_row], key=data.bpm_sort_key), [normal_row, row])
+
+            # 2. match_chart_query: does not match bpm: queries
+            self.assertFalse(data.match_chart_query(row, data.parse_search_query("bpm:150")))
+            self.assertFalse(data.match_chart_query(row, data.parse_search_query("bpm:>0")))
+            self.assertFalse(data.match_chart_query(row, data.parse_search_query("bpm:0")))
+            self.assertFalse(data.match_chart_query(row, data.parse_search_query("bpm:100-200")))
+
+            # 3. Distribution aggregation counts it in the missing/("?") category, not numeric bins
+            bins = data.aggregate_bpm_distribution([row])
+            q_bin = next(b for b in bins if b[0] == "?")
+            self.assertEqual(q_bin[1], 1)
+            # Numeric bins have count 0
+            self.assertTrue(all(count == 0 for label, count, _, _ in bins if label != "?"))
+
 
 class GradeSortTests(unittest.TestCase):
     def test_grade_filter_options_are_defined_labels(self):

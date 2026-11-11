@@ -28,7 +28,7 @@ On Linux and macOS, choose the cache and profile paths with **Browse…**; the a
 - Search by title, artist, pack, chart name, type, or difficulty. Free text can be combined with structured field directives in the search bar or configured visually via **Advanced…** (or **Edit → Advanced search…**, `Ctrl+Shift+F`):
   - Free-text terms are ANDed: every term must appear somewhere in the chart's searchable text. Use double quotes to keep a phrase together, and quote multiword field values (for example, `pack:"In The Groove"`). Apostrophes are ordinary characters, so titles can be typed exactly as written (for example, `don't` or `rock 'n' roll`). A backslash escapes the next character, so wrap a value that contains backslashes in double quotes to search for it literally.
   - **Meter**: `meter:11`, `meter:10-12`, `meter:>=10`, `meter:<8` (alias: `m:`)
-  - **BPM**: `bpm:200-300`, `bpm:>240`, `bpm:180` (matches tempo range overlap)
+  - **BPM**: `bpm:200-300`, `bpm:>240`, `bpm:180` (matches tempo range overlap). The BPM column shows what the game shows, including `#DISPLAYBPM`; `bpm:`, sorting and the distribution chart always use the real `#BPMS` range.
   - A numeric directive with an empty value (for example `meter:` while typing) is ignored; a value that cannot be read (for example `meter:abc`) matches nothing, and the count line says so — "Can't read the value in `meter:abc`". The same hint holds for `grade:`: an unknown grade (for example `grade:banana`, or an operator with an empty target, `grade:>=`) matches nothing with the same hint. An empty `grade:` is different — it matches only unscored charts, the unplayed set.
   - **Length / Time**: `time:>2:00`, `time:>120`, `length:1:30-2:15`, `time:<90` (accepts both `mm:ss` and raw seconds)
   - **Metadata**: `artist:Smiley`, `title:Delirium`, `pack:"In The Groove"`, `diff:Challenge`
@@ -53,7 +53,7 @@ New courses contain a `#COURSE:title;` line followed by one `#SONG:path:difficul
 
 The table includes chart meter, peak NPS, radar note counts, the player's highest `PercentDP` score for the chart, grade, play count, last played date, best-score tap judgments and combo, and cached tech counts. `Stats.xml` scores are matched to cached charts by song directory, steps type, and difficulty (Edit charts also by description).
 
-The **Time** column shows cached song music length as `minutes:seconds`; CSV exports retain that value in seconds. The **BPM** column shows the song's tempo range from the cache (`#BPMS`, with `#DISPLAYBPM` when set). Sorting by BPM uses maximum then minimum tempo so a mostly-fast chart with a brief slow section ranks with other fast charts. Grade sorts in ITGmania tier order (S+ before S before S−, and so on), not alphabetically. The course builder shows each queued song's time and the summed course length.
+The **Time** column shows cached song music length as `minutes:seconds`; CSV exports retain that value in seconds. The **BPM** column shows each chart's tempo range from the cache (`#BPMS`, with `#DISPLAYBPM` when set). A chart's own `#BPMS` and `#DISPLAYBPM` are used when present, otherwise the song's; zero and negative tempos are ignored, so a warp-only `#BPMS` counts as no tempo. Sorting by BPM uses maximum then minimum tempo so a mostly-fast chart with a brief slow section ranks with other fast charts. Grade sorts in ITGmania tier order (S+ before S before S−, and so on), not alphabetically. The course builder shows each queued song's time and the summed course length.
 
 ## Data paths
 

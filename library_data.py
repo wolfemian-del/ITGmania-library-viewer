@@ -134,9 +134,13 @@ def parse_bpms(value: str | None) -> tuple[float, float] | None:
         if "=" in part:
             part = part.split("=", 1)[1].strip()
         try:
-            values.append(float(part))
+            val = float(part)
         except ValueError:
             continue
+        # Only positive tempos count: negative values are warp markers,
+        # 0 is unplayable, and NaN fails the > 0 comparison.
+        if val > 0:
+            values.append(val)
     if not values:
         return None
     return min(values), max(values)
@@ -308,10 +312,8 @@ def parse_cache_file(path: Path, scores: dict) -> tuple[list[dict], int]:
     song_dir = split_path(song_file)
     song_dir = song_dir.rsplit("/", 1)[0] if "/" in song_dir else ""
     pack = song_dir.split("/", 1)[0] if song_dir else ""
-    bpm_bounds = parse_bpms(song_tags.get("BPMS"))
-    bpm_min = bpm_bounds[0] if bpm_bounds else ""
-    bpm_max = bpm_bounds[1] if bpm_bounds else ""
-    bpm_display = format_bpm_display(song_tags.get("DISPLAYBPM"), bpm_min, bpm_max)
+    song_bpm_bounds = parse_bpms(song_tags.get("BPMS"))
+    song_display_tag = song_tags.get("DISPLAYBPM")
     rows = []
     skipped_blocks = 0
     for chunk in chunks[1:]:
@@ -321,6 +323,11 @@ def parse_cache_file(path: Path, scores: dict) -> tuple[list[dict], int]:
         if not chart_type or not difficulty:
             skipped_blocks += 1
             continue
+        chart_bounds = parse_bpms(tags.get("BPMS")) or song_bpm_bounds
+        chart_min = chart_bounds[0] if chart_bounds else ""
+        chart_max = chart_bounds[1] if chart_bounds else ""
+        display_tag = tags.get("DISPLAYBPM") or song_display_tag
+        bpm_display = format_bpm_display(display_tag, chart_min, chart_max)
         radar_values = tags.get("RADARVALUES", "").split(",")
         radar = {name: number(value) for name, value in zip(RADAR_FIELDS, radar_values)}
         tech = [number(v, -1) for v in tags.get("TECHCOUNTS", "").split(",")]
@@ -347,7 +354,7 @@ def parse_cache_file(path: Path, scores: dict) -> tuple[list[dict], int]:
             "Pack": pack, "Type": chart_type, "Difficulty": difficulty, "Course path": song_dir,
             "Meter": number(tags.get("METER")),
             "Time": number(song_tags.get("MUSICLENGTH")) if song_tags.get("MUSICLENGTH") else "",
-            "BPM": bpm_display, "bpm_min": bpm_min, "bpm_max": bpm_max,
+            "BPM": bpm_display, "bpm_min": chart_min, "bpm_max": chart_max,
             "Chart": display_name,
             "Score": number(score.get("Score")) if score else "",
             "Grade": GRADE_NAMES.get(score.get("Grade", ""), score.get("Grade", "")),
