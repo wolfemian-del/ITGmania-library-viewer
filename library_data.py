@@ -632,6 +632,19 @@ SEARCH_FIELD_ALIASES = {
 }
 
 
+# Fields whose directives take a numeric bound (meter, bpm, time, score,
+# percent, plays, peak_nps, the radar counts and the tech counts). An
+# empty value for one of these is unfinished typing, not a filter; a
+# non-empty value that will not parse is unreadable (see
+# find_unreadable_directives). Text fields are not in this set: an empty
+# title: is a substring of everything, so it already matches.
+NUMERIC_SEARCH_FIELDS = frozenset({
+    "meter", "bpm", "time", "score", "percent", "plays", "peak_nps",
+    *RADAR_COUNT_FIELDS,
+    *(f.casefold() for f in TECH_FIELDS),
+})
+
+
 def parse_duration_seconds(value: str) -> float | None:
     """Parse a duration string in seconds (e.g. '120', '90.5') or mm:ss / hh:mm:ss."""
     value = str(value or "").strip()
@@ -823,6 +836,8 @@ def match_chart_query(row: dict, query: str | dict) -> bool:
 
     # 2. Field directives
     for field, raw_val in criteria.get("directives", []):
+        if field in NUMERIC_SEARCH_FIELDS and not raw_val.strip():
+            continue  # Empty numeric value: unfinished typing, not a filter
         if field == "meter":
             b = parse_numeric_bound(raw_val)
             if not b or not _compare_bound(b, row.get("Meter")):
@@ -906,6 +921,24 @@ def match_chart_query(row: dict, query: str | dict) -> bool:
                 return False
 
     return True
+
+
+def find_unreadable_directives(query: str | dict) -> list[str]:
+    """Texts of numeric directives whose non-empty value cannot be read.
+
+    "meter:abc" is unreadable; "meter:" is not (an empty value is
+    unfinished typing, skipped by match_chart_query). Replays the same
+    parse_numeric_bound checks the matcher uses, including durations
+    for time:. Text directives are never unreadable.
+    """
+    criteria = query if isinstance(query, dict) else parse_search_query(query)
+    unreadable = []
+    for field, raw_val in criteria.get("directives", []):
+        if field not in NUMERIC_SEARCH_FIELDS or not raw_val.strip():
+            continue
+        if parse_numeric_bound(raw_val, is_duration=field == "time") is None:
+            unreadable.append(f"{field}:{raw_val}")
+    return unreadable
 
 
 def filter_token_text(token) -> str:

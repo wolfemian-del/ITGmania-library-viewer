@@ -37,6 +37,7 @@ from library_data import (
     CHART_FILTER_FIELDS,
     bpm_sort_key,
     difficulty_sort_key,
+    find_unreadable_directives,
     format_duration,
     grade_sort_key,
     looks_like_song_tree,
@@ -1141,7 +1142,22 @@ class LibraryApp:
             self.count_label.set(f"Loading {stop:,} of {len(rows):,} charts…")
             self.root.after(1, lambda: self._insert_batch(rows, stop, generation, selected_rows))
         else:
-            self.count_label.set(f"{len(rows):,} charts shown · {len(self.rows):,} total")
+            count_text = f"{len(rows):,} charts shown · {len(self.rows):,} total"
+            hint = self._unreadable_search_hint()
+            if hint:
+                count_text += f" — {hint}"
+            self.count_label.set(count_text)
+
+    def _unreadable_search_hint(self) -> str:
+        """Hint naming the first unreadable search directive, or "" when none.
+
+        Bare instances in tests have no search_var; the real app always does.
+        """
+        search_var = getattr(self, "search_var", None)
+        if search_var is None:
+            return ""
+        unreadable = find_unreadable_directives(search_var.get())
+        return f"Can't read the value in {unreadable[0]}" if unreadable else ""
 
     def apply_chart_filter(self, difficulty=None, query=None):
         """Apply a distribution chart's filter change as one batched update (proposal 0005).
