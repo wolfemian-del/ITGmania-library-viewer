@@ -353,6 +353,8 @@ class LibraryApp:
         self.tree.bind("<ButtonRelease-1>", self._column_drag_end, add="+")
         self.tree.bind("<ButtonRelease-1>", self._shift_sort_click, add="+")
         self.tree.bind("<ButtonRelease-1>", self._save_settings, add="+")
+        self.tree.bind("<Control-a>", self._select_all_rows, add="+")
+        self.tree.bind("<Control-A>", self._select_all_rows, add="+")
         visible_columns = [column for column in self.column_order if self.column_visibility[column].get()]
         if visible_columns:
             self.tree.configure(displaycolumns=visible_columns)
@@ -1158,6 +1160,16 @@ class LibraryApp:
             if query is not None:
                 self.search_var.set(query)
         self.search_entry.icursor("end")
+
+    def _select_all_rows(self, _event=None):
+        """Ctrl+A in the table (issue #36): select every displayed row.
+
+        The tree's contents are the filtered set, so selecting all of
+        get_children() selects exactly what is shown. The selection
+        event then updates the selected-row tint like any other
+        selection change. Bound on the tree, not the root, so Ctrl+A
+        in the search box or a path entry keeps its text meaning."""
+        self.tree.selection_set(self.tree.get_children())
 
     def _shift_sort_click(self, event):
         if not event.state & 0x0001 or self.tree.identify_region(event.x, event.y) != "heading":

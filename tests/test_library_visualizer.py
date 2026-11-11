@@ -920,6 +920,81 @@ class LiveFilterPersistenceTests(unittest.TestCase):
         self.assertTrue(relaunched.status.get().startswith("Showing saved library snapshot"))
 
 
+class LiveSelectAllTests(unittest.TestCase):
+    """Ctrl+A in the results table in a real window (issue #36): the key
+    event on the focused tree selects every displayed row, and the
+    selection tint follows through the <<TreeviewSelect>> binding."""
+
+    def make_root(self):
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+
+        def destroy_quietly():
+            with contextlib.suppress(Exception):
+                root.destroy()
+
+        self.addCleanup(destroy_quietly)
+        return root
+
+    @staticmethod
+    def pump_until(root, condition, timeout=10):
+        deadline = time.monotonic() + timeout
+        while not condition() and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.02)
+
+    def test_ctrl_a_selects_all_displayed_rows_and_tints_them(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        settings_dir = Path(tmp.name)
+        settings_path = settings_dir / "settings.json"
+        cache_dir = settings_dir / "Cache"
+        stats_file = settings_dir / "Stats.xml"
+        stats_file.write_text("<Stats/>")
+        settings_path.write_text(json.dumps(
+            {"cache_dir": str(cache_dir), "stats_file": str(stats_file)}))
+        rows = []
+        for title in ("One", "Two", "Three"):
+            row = {header: "" for header in app.HEADERS}
+            row.update({"Title": title, "Pack": "P", "Type": "dance-single",
+                        "Difficulty": "Hard", "Meter": 10,
+                        "Course path": f"P/{title}"})
+            rows.append(row)
+        # The snapshot is written by the app's own writer, from a
+        # throwaway application that is never pumped.
+        writer_root = self.make_root()
+        with patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path)):
+            writer = app.LibraryApp(writer_root)
+            writer._save_library_cache(cache_dir, stats_file, rows, len(rows), 0, 0, False)
+        writer_root.destroy()
+
+        root = self.make_root()
+        patcher = patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        application = app.LibraryApp(root)
+        self.pump_until(root, lambda: len(application.tree.get_children()) == 3)
+        children = application.tree.get_children()
+        self.assertEqual(len(children), 3)
+        self.assertEqual(application.tree.selection(), ())
+
+        application.tree.focus_force()
+        for _ in range(5):
+            root.update()
+        application.tree.event_generate("<Control-a>", when="now")
+        # The selection itself lands synchronously in the handler; the
+        # tint follows through the <<TreeviewSelect>> event, so pump
+        # until the tracker has caught up.
+        self.pump_until(root, lambda: application._tree_tint.items == set(children))
+
+        self.assertEqual(set(application.tree.selection()), set(children))
+        self.assertEqual(application._tree_tint.items, set(children))
+
+
 class CourseReloadNotificationTests(unittest.TestCase):
     def _run_loaded(self, course_builder):
         """Run the real _loaded for an empty library on a fake window."""
@@ -1189,6 +1264,15 @@ class DialogKeyBindingTests(unittest.TestCase):
         instance.about_window = open_window
         instance._on_main_escape()
         instance.clear_search.assert_not_called()  # About open
+
+    def test_select_all_rows_selects_exactly_the_displayed_rows(self):
+        # Issue #36's headless pin: the handler selects the tree's
+        # current children — the filtered set — in one selection_set.
+        instance = object.__new__(app.LibraryApp)
+        instance.tree = Mock()
+        instance.tree.get_children.return_value = ("row1", "row2", "row3")
+        instance._select_all_rows()
+        instance.tree.selection_set.assert_called_once_with(("row1", "row2", "row3"))
 
     def test_live_app_constructs_the_advanced_search_component_with_its_search_variable(self):
         # Proposal 0004's wiring guard: all five constructor inputs are required, so a
