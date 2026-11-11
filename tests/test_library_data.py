@@ -1149,6 +1149,37 @@ class SearchQueryTests(unittest.TestCase):
         self.assertTrue(data.match_chart_query({"Time": 135.0}, "time:"))
         self.assertTrue(data.match_chart_query({"bpm_min": 180.0, "bpm_max": 240.0}, "bpm:"))
 
+    def test_empty_grade_directive_still_means_unplayed(self):
+        # Issue #130: unlike the numeric fields, an empty grade: is NOT
+        # skipped — grade:"" is the pinned unplayed query (see
+        # test_search_filters_compose_over_fixture_rows): it matches only
+        # unscored charts. The alias form behaves the same.
+        scored = {"Grade": "S", "Title": "Summer", "Artist": "Smiley", "Pack": "ITG"}
+        self.assertFalse(data.match_chart_query(scored, "grade:"))
+        self.assertFalse(data.match_chart_query(scored, "g:"))
+        self.assertTrue(data.match_chart_query({"Grade": ""}, "grade:"))
+        self.assertTrue(data.match_chart_query({"Grade": ""}, 'grade:""'))
+
+    def test_unreadable_grade_directive_matches_nothing(self):
+        row = {"Grade": "S", "Title": "Summer"}
+        self.assertFalse(data.match_chart_query(row, "grade:banana"))
+        self.assertFalse(data.match_chart_query(row, "grade:>="))
+        self.assertFalse(data.match_chart_query(row, "grade:>=banana"))
+        self.assertTrue(data.match_chart_query(row, "grade:>=S"))
+        self.assertFalse(data.match_chart_query({"Grade": "B"}, "grade:>=S"))
+
+    def test_find_unreadable_directives_grades(self):
+        self.assertEqual(data.find_unreadable_directives("grade:banana"), ["grade:banana"])
+        self.assertEqual(data.find_unreadable_directives("grade:>="), ["grade:>="])
+        self.assertEqual(data.find_unreadable_directives("grade:>=banana"), ["grade:>=banana"])
+        self.assertEqual(data.find_unreadable_directives("grade:B"), [])
+        self.assertEqual(data.find_unreadable_directives("grade:>=S"), [])
+        self.assertEqual(data.find_unreadable_directives("grade:Tier05"), ["grade:Tier05"])
+        self.assertEqual(data.find_unreadable_directives("grade:>=Tier05"), [])
+        self.assertEqual(data.find_unreadable_directives("grade:"), [])
+        self.assertEqual(data.find_unreadable_directives("g:banana"), ["grade:banana"])
+        self.assertEqual(data.find_unreadable_directives("grade:banana meter:abc"), ["grade:banana", "meter:abc"])
+
     def test_unreadable_numeric_directive_matches_nothing(self):
         row = {"Meter": 11, "Title": "Summer"}
         self.assertFalse(data.match_chart_query(row, "meter:abc"))

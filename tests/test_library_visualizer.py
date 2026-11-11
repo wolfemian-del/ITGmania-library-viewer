@@ -554,6 +554,15 @@ class InsertBatchProgressTests(unittest.TestCase):
         instance.count_label.set.assert_called_once_with(
             "3 charts shown · 3 total — Can't read the value in meter:abc")
 
+    def test_count_line_names_an_unreadable_grade_value(self):
+        instance, rows = self.make_instance()
+        instance.search_var = Mock()
+        instance.search_var.get.return_value = "grade:banana"
+        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
+            instance._insert_batch(rows, 0, 1)
+        instance.count_label.set.assert_called_once_with(
+            "3 charts shown · 3 total — Can't read the value in grade:banana")
+
     def test_count_line_stays_plain_for_a_readable_filter(self):
         instance, rows = self.make_instance()
         instance.search_var = Mock()
