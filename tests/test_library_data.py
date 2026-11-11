@@ -1104,6 +1104,7 @@ class SearchQueryTests(unittest.TestCase):
     def test_empty_numeric_directive_is_skipped_while_typing(self):
         row = {"Meter": 11, "Title": "Summer", "Artist": "Smiley", "Pack": "ITG"}
         self.assertTrue(data.match_chart_query(row, "meter:"))
+        self.assertTrue(data.match_chart_query(row, "m:"))
         self.assertTrue(data.match_chart_query(row, "meter: pack:ITG"))
         self.assertFalse(data.match_chart_query(row, "meter: pack:Other"))
         self.assertTrue(data.match_chart_query({"Time": 135.0}, "time:"))
@@ -1124,6 +1125,7 @@ class SearchQueryTests(unittest.TestCase):
         self.assertEqual(data.find_unreadable_directives("meter:"), [])
         self.assertEqual(data.find_unreadable_directives("meter:11"), [])
         self.assertEqual(data.find_unreadable_directives("time:abc"), ["time:abc"])
+        self.assertEqual(data.find_unreadable_directives("nps:abc"), ["peak_nps:abc"])
         self.assertEqual(data.find_unreadable_directives("time:1:30"), [])
         self.assertEqual(data.find_unreadable_directives("title:abc"), [])
 
