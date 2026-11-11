@@ -2,6 +2,7 @@ import contextlib
 import json
 import queue
 import re
+import sys
 import tempfile
 import threading
 import time
@@ -217,6 +218,23 @@ class LibrarySnapshotTests(unittest.TestCase):
     def sample_row():
         return {key: "" for key in (*app.HEADERS, "Course path")}
 
+    def test_snapshot_round_trip_preserves_skipped_blocks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache" / "Songs"
+            stats_file = root / "Stats.xml"
+            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
+            rows = [self.sample_row()]
+            instance._save_library_cache(cache_dir, stats_file, rows, 1, 0, 0, False, skipped_blocks=3)
+
+            instance.load_cached_data()
+
+        instance._loaded.assert_called_once()
+        args, kwargs = instance._loaded.call_args
+        # _loaded's positional args: rows, files, skipped_files,
+        # files_without_charts, skipped_blocks, nested_song_tree.
+        self.assertEqual(args[4], 3)
+
     def test_snapshot_restores_when_source_paths_match(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -246,6 +264,41 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance._loaded.assert_not_called()
         instance.refresh_table.assert_called_once()
         self.assertIn("different data paths", instance.status.set.call_args.args[0])
+
+    def test_snapshot_with_deeply_nested_json_reports_could_not_be_read(self):
+        # Issue #122: a snapshot nested far past the recursion limit raises
+        # RecursionError out of json.load; it must be reported like any
+        # other unreadable snapshot instead of escaping the callback.
+        # The depth is 1,000,000 because the limit is version-dependent:
+        # 10,000 levels raise on 3.12 but parse on 3.14 (whose C recursion
+        # limit is higher), so the depth must exceed every supported
+        # version's limit. json.load fails fast at the limit.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = self.make_app(root / "settings.json", root / "Cache" / "Songs", root / "Stats.xml")
+            instance.library_cache_path.write_text("[" * 1000000 + "]" * 1000000, encoding="utf-8")
+
+            instance.load_cached_data()
+
+        instance._loaded.assert_not_called()
+        instance.refresh_table.assert_called_once()
+        self.assertIn("could not be read", instance.status.set.call_args.args[0])
+
+    @unittest.skipIf(sys.version_info < (3, 11),
+                     "the int-string conversion limit is 3.11+")
+    def test_snapshot_with_oversized_integer_reports_could_not_be_read(self):
+        # Issue #122: an integer past the 4,300-digit conversion limit
+        # raises ValueError out of json.load; same handling as above.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = self.make_app(root / "settings.json", root / "Cache" / "Songs", root / "Stats.xml")
+            instance.library_cache_path.write_text("[" + "9" * 5000 + "]", encoding="utf-8")
+
+            instance.load_cached_data()
+
+        instance._loaded.assert_not_called()
+        instance.refresh_table.assert_called_once()
+        self.assertIn("could not be read", instance.status.set.call_args.args[0])
 
     def test_snapshot_with_invalid_utf8_reports_could_not_be_read(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -312,6 +365,32 @@ class LibrarySnapshotTests(unittest.TestCase):
             saved = instance._read_settings()
             self.assertTrue(saved.get("show_distribution"))
             self.assertEqual(saved.get("distribution_metric"), "Difficulty")
+
+    def test_settings_with_deeply_nested_json_returns_empty_dict(self):
+        # Issue #122: a settings file nested far past the recursion limit
+        # raises RecursionError out of json.load; it must fall back to
+        # defaults instead of killing startup before the window appears.
+        # Depth 1,000,000 for the same version-dependent reason as the
+        # snapshot test above: 10,000 levels raise on 3.12 but parse on
+        # 3.14, so the depth must exceed every supported version's limit.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = self.make_app(root / "settings.json", root / "Cache", root / "Stats.xml")
+            instance.settings_path.write_text("[" * 1000000 + "]" * 1000000, encoding="utf-8")
+
+            self.assertEqual(instance._read_settings(), {})
+
+    @unittest.skipIf(sys.version_info < (3, 11),
+                     "the int-string conversion limit is 3.11+")
+    def test_settings_with_oversized_integer_returns_empty_dict(self):
+        # Issue #122: an integer past the 4,300-digit conversion limit
+        # raises ValueError out of json.load; same fallback as above.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = self.make_app(root / "settings.json", root / "Cache", root / "Stats.xml")
+            instance.settings_path.write_text("[" + "9" * 5000 + "]", encoding="utf-8")
+
+            self.assertEqual(instance._read_settings(), {})
 
     def test_settings_with_invalid_utf8_returns_empty_dict(self):
         # A mis-encoded hand-edited settings.json must not crash startup:
@@ -546,6 +625,32 @@ class InsertBatchProgressTests(unittest.TestCase):
         instance.count_label.set.assert_called_once_with("3 charts shown · 3 total")
         instance.root.after.assert_not_called()
 
+    def test_count_line_names_an_unreadable_filter_value(self):
+        instance, rows = self.make_instance()
+        instance.search_var = Mock()
+        instance.search_var.get.return_value = "meter:abc"
+        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
+            instance._insert_batch(rows, 0, 1)
+        instance.count_label.set.assert_called_once_with(
+            "3 charts shown · 3 total — Can't read the value in meter:abc")
+
+    def test_count_line_names_an_unreadable_grade_value(self):
+        instance, rows = self.make_instance()
+        instance.search_var = Mock()
+        instance.search_var.get.return_value = "grade:banana"
+        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
+            instance._insert_batch(rows, 0, 1)
+        instance.count_label.set.assert_called_once_with(
+            "3 charts shown · 3 total — Can't read the value in grade:banana")
+
+    def test_count_line_stays_plain_for_a_readable_filter(self):
+        instance, rows = self.make_instance()
+        instance.search_var = Mock()
+        instance.search_var.get.return_value = "meter:11"
+        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
+            instance._insert_batch(rows, 0, 1)
+        instance.count_label.set.assert_called_once_with("3 charts shown · 3 total")
+
 
 class _ValueVar:
     """A minimal value-carrying stand-in for a Tk variable: get/set over a
@@ -622,6 +727,24 @@ class FilterPersistenceTests(unittest.TestCase):
         self.assertEqual(instance.type_var.get(), "dance-single")
         self.assertEqual(instance.diff_var.get(), "Challenge")
         instance.refresh_table.assert_called_once()
+
+    def test_loaded_reports_skipped_chart_blocks_in_the_summary(self):
+        instance = self.make_loaded_instance()
+        rows = self.rows(("Pack1", "dance-single", "Hard"), ("Pack2", "dance-single", "Hard"))
+
+        instance._loaded(rows, len(rows), skipped_blocks=2)
+
+        status = instance.status.set.call_args.args[0]
+        self.assertTrue(status.startswith("Scanned 2 files · parsed 2 charts"))
+        self.assertIn(" · 2 chart blocks skipped (missing metadata)", status)
+
+    def test_loaded_omits_the_skipped_blocks_fragment_when_zero(self):
+        instance = self.make_loaded_instance()
+        rows = self.rows(("Pack1", "dance-single", "Hard"))
+
+        instance._loaded(rows, len(rows))
+
+        self.assertNotIn("chart blocks skipped", instance.status.set.call_args.args[0])
 
     def test_loaded_falls_back_for_values_missing_from_the_new_library(self):
         instance = self.make_loaded_instance(pack="Gone", type_="gone-type", difficulty="Gone")
@@ -1105,7 +1228,7 @@ class RefreshGenerationTests(unittest.TestCase):
 
             def newer_refresh_starts_while_parsing(path, scores):
                 instance._load_generation = 2  # the only file is parsed, so the scan loop will not notice
-                return []
+                return [], 0
 
             with patch.object(app, "parse_cache_file", newer_refresh_starts_while_parsing):
                 instance._load_worker(cache_dir, stats_file, generation=1)

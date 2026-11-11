@@ -46,6 +46,7 @@ __all__ = [
     "DIFFICULTY_ORDER",
     "GRADE_OPTIONS",
     "GRADE_NAMES",
+    "NUMERIC_SEARCH_FIELDS",
     "RADAR_COUNT_FIELDS",
     "RADAR_FIELDS",
     "SEARCH_FIELD_ALIASES",
@@ -69,6 +70,7 @@ __all__ = [
     "distribution_summary_stats",
     "filter_texts_match",
     "filter_token_text",
+    "find_unreadable_directives",
     "format_bpm_display",
     "format_duration",
     "format_new_course",
@@ -294,7 +296,12 @@ def _merged_edit_fallback(scores: dict, base_key: tuple[str, str, str]) -> dict:
     return merged
 
 
-def parse_cache_file(path: Path, scores: dict) -> list[dict]:
+def parse_cache_file(path: Path, scores: dict) -> tuple[list[dict], int]:
+    """Parse a cache file into chart rows, and count skipped chart blocks.
+
+    Returns (rows, skipped_blocks): skipped_blocks counts chart blocks
+    dropped for missing #STEPSTYPE/#DIFFICULTY metadata (issue #18).
+    """
     # Cache files are UTF-8 Simfile text; split away the song metadata before chart parsing.
     text = path.read_text(encoding="utf-8-sig", errors="replace")
     chunks = re.split(r"(?m)^#NOTEDATA:;\s*\r?\n", text)
@@ -306,11 +313,13 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
     song_bpm_bounds = parse_bpms(song_tags.get("BPMS"))
     song_display_tag = song_tags.get("DISPLAYBPM")
     rows = []
+    skipped_blocks = 0
     for chunk in chunks[1:]:
         tags = tag_map(chunk)
         chart_type = tags.get("STEPSTYPE", "")
         difficulty = tags.get("DIFFICULTY", "")
         if not chart_type or not difficulty:
+            skipped_blocks += 1
             continue
         chart_bounds = parse_bpms(tags.get("BPMS")) or song_bpm_bounds
         chart_min = chart_bounds[0] if chart_bounds else ""
@@ -360,7 +369,7 @@ def parse_cache_file(path: Path, scores: dict) -> list[dict]:
             **{name: tech[i] if i < len(tech) and tech[i] >= 0 else ""
                for i, name in enumerate(TECH_FIELDS)},
         })
-    return rows
+    return rows, skipped_blocks
 
 
 def looks_like_song_tree(cache: Path) -> bool:
@@ -637,6 +646,19 @@ SEARCH_FIELD_ALIASES = {
 }
 
 
+# Fields whose directives take a numeric bound (meter, bpm, time, score,
+# percent, plays, peak_nps, the radar counts and the tech counts). An
+# empty value for one of these is unfinished typing, not a filter; a
+# non-empty value that will not parse is unreadable (see
+# find_unreadable_directives). Text fields are not in this set: an empty
+# title: is a substring of everything, so it already matches.
+NUMERIC_SEARCH_FIELDS = frozenset({
+    "meter", "bpm", "time", "score", "percent", "plays", "peak_nps",
+    *RADAR_COUNT_FIELDS,
+    *(f.casefold() for f in TECH_FIELDS),
+})
+
+
 def parse_duration_seconds(value: str) -> float | None:
     """Parse a duration string in seconds (e.g. '120', '90.5') or mm:ss / hh:mm:ss."""
     value = str(value or "").strip()
@@ -828,6 +850,8 @@ def match_chart_query(row: dict, query: str | dict) -> bool:
 
     # 2. Field directives
     for field, raw_val in criteria.get("directives", []):
+        if field in NUMERIC_SEARCH_FIELDS and not raw_val.strip():
+            continue  # Empty numeric value: unfinished typing, not a filter
         if field == "meter":
             b = parse_numeric_bound(raw_val)
             if not b or not _compare_bound(b, row.get("Meter")):
@@ -911,6 +935,44 @@ def match_chart_query(row: dict, query: str | dict) -> bool:
                 return False
 
     return True
+
+
+def _readable_grade(value: str) -> bool:
+    """Whether a grade directive value can match a chart (issue #130).
+
+    Mirrors the grade branch of match_chart_query, form by form: an
+    operator value is readable when its target is a known grade (a display
+    label or a Tier key); a bare value is readable only when it is a display
+    label, which is what the matcher compares it against. A bare Tier key
+    (grade:Tier06) is therefore unreadable — the table would be blank with
+    no hint otherwise.
+    """
+    if value.startswith((">=", "<=", ">", "<")):
+        target = value[2:] if value[:2] in (">=", "<=") else value[1:]
+        return target.strip().casefold() in GRADE_RANK
+    return value.strip().casefold() in {label.casefold() for label in GRADE_NAMES.values()}
+
+
+def find_unreadable_directives(query: str | dict) -> list[str]:
+    """Texts of directives whose non-empty value cannot be read.
+
+    "meter:abc" is unreadable; "meter:" is not (an empty value is
+    unfinished typing, skipped by match_chart_query). Replays the same
+    checks the matcher uses: parse_numeric_bound for numeric fields
+    (including durations for time:) and the grade reading above for
+    grade:. Other text directives are never unreadable.
+    """
+    criteria = query if isinstance(query, dict) else parse_search_query(query)
+    unreadable = []
+    for field, raw_val in criteria.get("directives", []):
+        if not raw_val.strip():
+            continue
+        if field in NUMERIC_SEARCH_FIELDS:
+            if parse_numeric_bound(raw_val, is_duration=field == "time") is None:
+                unreadable.append(f"{field}:{raw_val}")
+        elif field == "grade" and not _readable_grade(raw_val):
+            unreadable.append(f"{field}:{raw_val}")
+    return unreadable
 
 
 def filter_token_text(token) -> str:
