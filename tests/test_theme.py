@@ -26,6 +26,18 @@ def theme_names_used_by_window():
     }
 
 
+def relative_luminance(hex_color):
+    """WCAG relative luminance of a #rrggbb color."""
+    channels = [int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def contrast_ratio(first, second):
+    lighter, darker = sorted((relative_luminance(first), relative_luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
 class WindowUsesThemeTests(unittest.TestCase):
     def test_no_color_literals_in_window_code(self):
         # Strings starting with "#" that are not colors (such as "#1" column ids) do not match HEX_COLOR.
@@ -76,6 +88,16 @@ class ThemeValuesTests(unittest.TestCase):
         from library_data import DIFFICULTY_ORDER
         for difficulty in DIFFICULTY_ORDER:
             self.assertIn(difficulty, theme.DIFFICULTY_COLORS)
+
+    def test_difficulty_colors_meet_minimum_contrast_on_the_table_background(self):
+        # Issue #35: the difficulty colors are row text on BG_TABLE, so
+        # each must meet WCAG AA's 4.5:1 for body text. Challenge sat at
+        # 4.29:1 (#a855f7) before its move to #c084fc (6.42:1); this
+        # guard keeps the next palette edit from reintroducing a
+        # sub-AA color.
+        for difficulty, color in theme.DIFFICULTY_COLORS.items():
+            with self.subTest(difficulty=difficulty):
+                self.assertGreaterEqual(contrast_ratio(color, theme.BG_TABLE), 4.5)
 
     def test_fonts_are_family_size_tuples(self):
         for name in dir(theme):
