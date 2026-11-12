@@ -1010,6 +1010,115 @@ class InitialSnapshotTests(unittest.TestCase):
         instance.progress.stop.assert_called_once_with()
 
 
+class DataPathsPopupTests(unittest.TestCase):
+    """The first-run Data paths popup (UI redesign): _maybe_show_first_run_paths_dialog
+    opens it once at startup only when no snapshot restored and the paths are
+    not both usable, with the note naming the situation."""
+
+    @staticmethod
+    def make_instance(cache_dir, stats_file, saved_settings=None, loaded_source_paths=None):
+        instance = object.__new__(app.LibraryApp)
+        instance._data_paths_popup_shown = False
+        instance.loaded_source_paths = loaded_source_paths
+        instance.cache_var = Mock()
+        instance.cache_var.get.return_value = str(cache_dir)
+        instance.stats_var = Mock()
+        instance.stats_var.get.return_value = str(stats_file)
+        instance.saved_settings = saved_settings if saved_settings is not None else {}
+        instance.open_data_paths_dialog = Mock()
+        return instance
+
+    def test_first_run_opens_with_the_first_run_note(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = self.make_instance(root / "Cache" / "Songs", root / "Stats.xml")
+            instance._maybe_show_first_run_paths_dialog()
+        instance.open_data_paths_dialog.assert_called_once_with(
+            note=app.LibraryApp._DATA_PATHS_FIRST_RUN_NOTE)
+
+    def test_dead_saved_paths_get_the_dead_note(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = root / "Cache" / "Songs", root / "Stats.xml"
+            instance = self.make_instance(
+                cache_dir, stats_file, saved_settings={"cache_dir": str(cache_dir)})
+            instance._maybe_show_first_run_paths_dialog()
+        instance.open_data_paths_dialog.assert_called_once_with(
+            note=app.LibraryApp._DATA_PATHS_DEAD_NOTE)
+
+    def test_no_popup_when_a_snapshot_restored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = root / "Cache" / "Songs", root / "Stats.xml"
+            instance = self.make_instance(
+                cache_dir, stats_file,
+                saved_settings={"cache_dir": str(cache_dir)},
+                loaded_source_paths=(str(cache_dir), str(stats_file)))
+            instance._maybe_show_first_run_paths_dialog()
+        instance.open_data_paths_dialog.assert_not_called()
+
+    def test_no_popup_when_both_paths_are_usable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache" / "Songs"
+            cache_dir.mkdir(parents=True)
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>")
+            instance = self.make_instance(cache_dir, stats_file)
+            instance._maybe_show_first_run_paths_dialog()
+        instance.open_data_paths_dialog.assert_not_called()
+
+    def test_popup_shows_only_once_per_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instance = self.make_instance(root / "Cache" / "Songs", root / "Stats.xml")
+            instance._maybe_show_first_run_paths_dialog()
+            instance._maybe_show_first_run_paths_dialog()
+        instance.open_data_paths_dialog.assert_called_once()
+
+    def test_bare_instance_without_path_state_returns_silently(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._maybe_show_first_run_paths_dialog()  # no error, no dialog
+
+
+class InvalidPathsNoteTests(unittest.TestCase):
+    """The Data paths note naming whichever path cannot be used."""
+
+    def test_both_usable_is_empty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache" / "Songs"
+            cache_dir.mkdir(parents=True)
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>")
+            self.assertEqual(app.LibraryApp._invalid_paths_note(cache_dir, stats_file), "")
+
+    def test_cache_only_names_the_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>")
+            note = app.LibraryApp._invalid_paths_note(root / "Cache" / "Songs", stats_file)
+            self.assertIn("cache folder", note)
+            self.assertNotIn("Stats.xml", note)
+
+    def test_stats_only_names_stats(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache" / "Songs"
+            cache_dir.mkdir(parents=True)
+            note = app.LibraryApp._invalid_paths_note(cache_dir, root / "Stats.xml")
+            self.assertIn("Stats.xml", note)
+            self.assertNotIn("cache folder", note)
+
+    def test_both_missing_names_both(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            note = app.LibraryApp._invalid_paths_note(root / "Cache" / "Songs", root / "Stats.xml")
+            self.assertIn("cache folder", note)
+            self.assertIn("Stats.xml", note)
+
+
 class _StubStatus:
     """A status line without a window: a str behind get/set, like StringVar."""
 
@@ -1186,7 +1295,7 @@ class LiveDiscardedSettingsTests(unittest.TestCase):
         self.assertIn("using defaults.", application.status.get())
         # And still there once the deferred snapshot load has rewritten the
         # status line (no snapshot file here, so it reports that instead).
-        self.pump_until(root, lambda: "No saved library snapshot yet." in application.status.get())
+        self.pump_until(root, lambda: "No saved library yet." in application.status.get())
         self.assertIn("Settings file could not be read", application.status.get())
 
     def test_live_window_with_readable_settings_shows_no_notice(self):
@@ -1194,7 +1303,7 @@ class LiveDiscardedSettingsTests(unittest.TestCase):
         self.make_settings(json.dumps({"cache_dir": "/cache"}))
 
         application = app.LibraryApp(root)
-        self.pump_until(root, lambda: "No saved library snapshot yet." in application.status.get())
+        self.pump_until(root, lambda: "No saved library yet." in application.status.get())
         self.assertNotIn("Settings file could not be read", application.status.get())
 
     def test_live_window_with_a_snapshot_still_reports_discarded_settings(self):
@@ -1271,6 +1380,231 @@ class LiveStartupSnapshotTests(unittest.TestCase):
         self.assertEqual(len(application.rows), 3)
         self.assertTrue(application.status.get().startswith("Showing saved library snapshot"))
         self.assertEqual(len(application.tree.get_children()), 3)
+
+
+class LiveDataPathsDialogTests(unittest.TestCase):
+    """The Data paths dialog in a real window (UI redesign): the paths panel
+    is gone from the main window, the dialog is modal and dismissible, the
+    first-run popup appears once at startup, Load with invalid paths opens
+    the dialog, and the dialog's note tracks paths differing from the snapshot."""
+
+    def make_root(self):
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+
+        def destroy_quietly():
+            with contextlib.suppress(Exception):
+                root.destroy()
+
+        self.addCleanup(destroy_quietly)
+        return root
+
+    @staticmethod
+    def pump_until(root, condition, timeout=10):
+        deadline = time.monotonic() + timeout
+        while not condition() and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.02)
+        assert condition(), "timed out waiting for the condition"
+
+    def make_settings(self, write_settings=True, snapshot_rows=None):
+        """A temp settings directory. write_settings writes settings.json
+        pointing at its cache and stats paths (nonexistent unless the caller
+        creates them); snapshot_rows writes a snapshot payload when given."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        settings_dir = Path(tmp.name)
+        settings_path = settings_dir / "settings.json"
+        cache_dir = settings_dir / "Cache"
+        stats_file = settings_dir / "Stats.xml"
+        stats_file.write_text("<Stats/>")
+        if write_settings:
+            settings_path.write_text(json.dumps(
+                {"cache_dir": str(cache_dir), "stats_file": str(stats_file)}))
+        if snapshot_rows is not None:
+            payload = {"schema_version": app.LIBRARY_CACHE_SCHEMA_VERSION,
+                       "cache_dir": str(cache_dir), "stats_file": str(stats_file),
+                       "refreshed_at": "2026-11-10T08:00:00-05:00", "files": 1,
+                       "skipped_files": 0, "files_without_charts": 0,
+                       "nested_song_tree": False, "rows": snapshot_rows}
+            (settings_dir / "library_cache.json").write_text(json.dumps(payload))
+        patcher = patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return settings_dir, cache_dir, stats_file
+
+    @staticmethod
+    def sample_row(**overrides):
+        row = {header: "" for header in app.HEADERS}
+        row.update({"Title": "Song", "Pack": "P", "Type": "dance-single",
+                    "Difficulty": "Hard", "Meter": 10, "Course path": "P/Song"})
+        row.update(overrides)
+        return row
+
+    @staticmethod
+    def find_button(widget, text):
+        for child in widget.winfo_children():
+            if isinstance(child, app.tk.Button) and child.cget("text") == text:
+                return child
+            found = LiveDataPathsDialogTests.find_button(child, text)
+            if found is not None:
+                return found
+        return None
+
+    @staticmethod
+    def all_label_texts(widget):
+        texts = []
+        for child in widget.winfo_children():
+            if isinstance(child, app.tk.Label):
+                texts.append(child.cget("text"))
+            texts.extend(LiveDataPathsDialogTests.all_label_texts(child))
+        return texts
+
+    def test_paths_panel_is_gone_from_the_main_window(self):
+        root = self.make_root()
+        self.make_settings()
+        app.LibraryApp(root)
+        labels = self.all_label_texts(root)
+        self.assertNotIn("Cache / Songs", labels)
+        self.assertNotIn("Player Stats.xml", labels)
+        self.assertIn("Search", labels)  # the walk itself works
+
+    def test_data_paths_item_is_in_the_file_menu_and_opens_the_dialog(self):
+        root = self.make_root()
+        self.make_settings()
+        application = app.LibraryApp(root)
+        menubar = root.nametowidget(root.cget("menu"))
+        file_menu = menubar.nametowidget(menubar.entrycget(0, "menu"))
+        # Separators have no -label option, so they are skipped.
+        labels = [file_menu.entrycget(i, "label") for i in range(file_menu.index("end") + 1)
+                  if file_menu.type(i) != "separator"]
+        self.assertIn("Data paths…", labels)
+        application.open_data_paths_dialog()
+        window = application._data_paths_window
+        self.assertTrue(window.winfo_exists())
+        self.assertEqual(window.title(), "Where is your library?")
+        self.find_button(window, "Cancel").invoke()
+        self.assertFalse(window.winfo_exists())
+        self.assertIsNone(application._data_paths_window)
+
+    def test_dialog_is_modal_and_dismisses_with_escape(self):
+        root = self.make_root()
+        # Usable paths, so the deferred startup load does not open the
+        # first-run popup of its own accord while this test pumps.
+        _dir, cache_dir, _stats = self.make_settings()
+        cache_dir.mkdir(parents=True)
+        application = app.LibraryApp(root)
+        application.open_data_paths_dialog()
+        window = application._data_paths_window
+        self.assertEqual(window.grab_status(), "local")
+        # A generated key event needs a mapped window: wait until the dialog
+        # is viewable, then send Escape and let it land.
+        self.pump_until(root, lambda: window.winfo_viewable())
+        window.event_generate("<Escape>", when="now")
+        for _ in range(3):
+            root.update()
+            time.sleep(0.02)
+        self.assertFalse(window.winfo_exists())
+        self.assertIsNone(application._data_paths_window)
+
+    def test_first_run_popup_opens_at_startup_and_does_not_reappear(self):
+        root = self.make_root()
+        self.make_settings(write_settings=False)
+        application = app.LibraryApp(root)
+        self.pump_until(root, lambda: application._data_paths_window is not None
+                        and application._data_paths_window.winfo_exists())
+        window = application._data_paths_window
+        self.assertEqual(application._data_paths_note.cget("text"),
+                         app.LibraryApp._DATA_PATHS_FIRST_RUN_NOTE)
+        self.assertIn("No saved library yet.", application.status.get())
+        self.find_button(window, "Cancel").invoke()
+        self.assertFalse(window.winfo_exists())
+        # Pumping on must not bring it back: dismissed once per session.
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.02)
+        self.assertIsNone(application._data_paths_window)
+
+    def test_dead_saved_paths_popup_names_the_dead_paths(self):
+        root = self.make_root()
+        self.make_settings(write_settings=True)  # paths do not exist on disk
+        application = app.LibraryApp(root)
+        self.pump_until(root, lambda: application._data_paths_window is not None
+                        and application._data_paths_window.winfo_exists())
+        self.assertEqual(application._data_paths_note.cget("text"),
+                         app.LibraryApp._DATA_PATHS_DEAD_NOTE)
+        self.find_button(application._data_paths_window, "Cancel").invoke()
+
+    def test_load_with_invalid_paths_opens_the_dialog(self):
+        root = self.make_root()
+        self.make_settings(write_settings=True)  # paths do not exist on disk
+        application = app.LibraryApp(root)
+        # No pumping: the deferred startup load has not run yet, so the
+        # dialog here comes from Load, not from the first-run popup.
+        application.load_data()
+        window = application._data_paths_window
+        self.assertTrue(window.winfo_exists())
+        self.assertIn("cache folder", application._data_paths_note.cget("text"))
+        self.find_button(window, "Cancel").invoke()
+        self.assertFalse(window.winfo_exists())
+
+    def test_dialog_load_button_starts_a_scan_with_valid_paths(self):
+        root = self.make_root()
+        _dir, cache_dir, _stats = self.make_settings(write_settings=True)
+        cache_dir.mkdir(parents=True)
+        application = app.LibraryApp(root)
+        application.open_data_paths_dialog()
+        window = application._data_paths_window
+        self.find_button(window, "Load library").invoke()
+        self.assertFalse(window.winfo_exists())
+        self.assertEqual(application.status.get(), "Reading chart cache and player scores…")
+        self.assertEqual(str(application.load_button["state"]), "disabled")
+        # Wait for the scan to finish before the temp directory is cleaned
+        # up: its thread writes the snapshot into that directory. An empty
+        # cache reports "No files found", so the button state is the signal.
+        self.pump_until(root, lambda: str(application.load_button["state"]) == "normal")
+
+    def test_dialog_note_tracks_paths_differing_from_the_snapshot(self):
+        root = self.make_root()
+        _dir, cache_dir, _stats = self.make_settings(
+            write_settings=True, snapshot_rows=[self.sample_row()])
+        application = app.LibraryApp(root)
+        self.pump_until(root, lambda: application.status.get().startswith(
+            "Showing saved library snapshot"))
+        application.open_data_paths_dialog()
+        self.assertEqual(application._data_paths_note.cget("text"), "")
+        application.cache_var.set("/somewhere/else")
+        self.assertEqual(application._data_paths_note.cget("text"),
+                         app.LibraryApp._DATA_PATHS_DIFFER_NOTE)
+        application.cache_var.set(str(cache_dir))
+        self.assertEqual(application._data_paths_note.cget("text"), "")
+        # And when the dialog opens with the paths already moved, the differ
+        # note is there from the start, not only after a later edit.
+        application.cache_var.set("/somewhere/else")
+        self.find_button(application._data_paths_window, "Cancel").invoke()
+        application.open_data_paths_dialog()
+        self.assertEqual(application._data_paths_note.cget("text"),
+                         app.LibraryApp._DATA_PATHS_DIFFER_NOTE)
+        self.find_button(application._data_paths_window, "Cancel").invoke()
+
+    def test_dialog_load_button_with_invalid_paths_stays_open_and_names_them(self):
+        root = self.make_root()
+        self.make_settings(write_settings=True)  # paths do not exist on disk
+        application = app.LibraryApp(root)
+        application.open_data_paths_dialog()
+        window = application._data_paths_window
+        self.find_button(window, "Load library").invoke()
+        self.assertTrue(window.winfo_exists())
+        # Only the cache is missing here (make_settings writes Stats.xml),
+        # so the note names that side alone.
+        self.assertIn("cache folder", application._data_paths_note.cget("text"))
+        self.assertNotIn("Stats.xml", application._data_paths_note.cget("text"))
+        self.find_button(window, "Cancel").invoke()
 
 
 class LiveFilterPersistenceTests(unittest.TestCase):
