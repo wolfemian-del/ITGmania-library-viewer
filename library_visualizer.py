@@ -602,6 +602,7 @@ class LibraryApp:
             from_cache=True,
             source_paths=(payload["cache_dir"], payload["stats_file"]),
         )
+        self._report_moved_source_paths(payload["cache_dir"], payload["stats_file"])
 
     @staticmethod
     def _nonnegative_int(value):
@@ -722,6 +723,39 @@ class LibraryApp:
             return
         message = f"Settings file could not be read ({reason}); using defaults."
         current = self.status.get()
+        if message in current:
+            return
+        self.status.set(f"{current} {message}" if current else message)
+
+    def _report_moved_source_paths(self, cache_dir: str, stats_file: str) -> None:
+        """Append a note when a restored snapshot's saved paths no longer exist.
+
+        The snapshot restores on a string match only, so a moved ITGmania
+        folder is invisible until the next refresh fails. The note names the
+        missing side and points at File → Data paths…, where replacements
+        are picked.
+        """
+        missing = []
+        if cache_dir and not Path(cache_dir).is_dir():
+            missing.append("cache folder")
+        if stats_file and not Path(stats_file).is_file():
+            missing.append("Stats.xml")
+        if not missing:
+            return
+        if len(missing) == 2:
+            message = ("The saved cache folder and Stats.xml no longer exist. "
+                       "Choose File → Data paths…, then Load / refresh.")
+        elif missing[0] == "cache folder":
+            message = ("The saved cache folder no longer exists. "
+                       "Choose File → Data paths…, then Load / refresh.")
+        else:
+            message = ("The saved Stats.xml no longer exists. "
+                       "Choose File → Data paths…, then Load / refresh.")
+        # A bare instance built for a snapshot test may carry a Mock status
+        # whose get() is not a string; that is "no status line", not an error.
+        current = self.status.get()
+        if not isinstance(current, str):
+            current = ""
         if message in current:
             return
         self.status.set(f"{current} {message}" if current else message)

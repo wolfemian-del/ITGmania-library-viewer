@@ -2,6 +2,7 @@ import contextlib
 import json
 import queue
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -301,6 +302,80 @@ class LibrarySnapshotTests(unittest.TestCase):
         self.assertEqual(args[0], rows)
         self.assertTrue(kwargs["from_cache"])
         self.assertEqual(kwargs["source_paths"], (str(cache_dir), str(stats_file)))
+
+    def test_snapshot_restores_but_notes_a_moved_cache_folder(self):
+        # The snapshot restores on a string match only, so a moved folder is
+        # invisible until the next refresh fails; the status line must say so.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache" / "Songs"
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>")
+            cache_dir.mkdir(parents=True)
+            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
+            instance._save_library_cache(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
+            shutil.rmtree(root / "Cache")
+            instance.status = _StubStatus(
+                "Showing saved library snapshot · 1 charts · last refreshed 2026-11-10 08:00.")
+
+            instance.load_cached_data()
+            instance.load_cached_data()  # a second restore must not duplicate the note
+
+            instance._loaded.assert_called()
+            self.assertTrue(instance.status.get().startswith("Showing saved library snapshot"))
+            self.assertEqual(instance.status.get().count("no longer exists"), 1)
+            self.assertIn("The saved cache folder no longer exists.", instance.status.get())
+            self.assertIn("Choose File → Data paths…, then Load / refresh.", instance.status.get())
+
+    def test_snapshot_restores_but_notes_a_moved_stats_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache" / "Songs"
+            stats_file = root / "Stats.xml"
+            cache_dir.mkdir(parents=True)
+            stats_file.write_text("<Stats/>")
+            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
+            instance._save_library_cache(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
+            stats_file.unlink()
+            instance.status = _StubStatus(
+                "Showing saved library snapshot · 1 charts · last refreshed 2026-11-10 08:00.")
+
+            instance.load_cached_data()
+
+            self.assertIn("The saved Stats.xml no longer exists.", instance.status.get())
+            self.assertIn("Choose File → Data paths…, then Load / refresh.", instance.status.get())
+
+    def test_snapshot_restores_but_notes_both_paths_moved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache" / "Songs"
+            stats_file = root / "Stats.xml"
+            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
+            instance._save_library_cache(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
+            # Neither path was ever created on disk.
+            instance.status = _StubStatus(
+                "Showing saved library snapshot · 1 charts · last refreshed 2026-11-10 08:00.")
+
+            instance.load_cached_data()
+
+            self.assertIn("The saved cache folder and Stats.xml no longer exist.", instance.status.get())
+            self.assertIn("Choose File → Data paths…, then Load / refresh.", instance.status.get())
+
+    def test_snapshot_restores_quietly_when_both_paths_exist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache" / "Songs"
+            stats_file = root / "Stats.xml"
+            cache_dir.mkdir(parents=True)
+            stats_file.write_text("<Stats/>")
+            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
+            instance._save_library_cache(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
+            success = "Showing saved library snapshot · 1 charts · last refreshed 2026-11-10 08:00."
+            instance.status = _StubStatus(success)
+
+            instance.load_cached_data()
+
+            self.assertEqual(instance.status.get(), success)
 
     def test_snapshot_is_not_restored_for_different_source_paths(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1380,6 +1455,47 @@ class LiveStartupSnapshotTests(unittest.TestCase):
         self.assertEqual(len(application.rows), 3)
         self.assertTrue(application.status.get().startswith("Showing saved library snapshot"))
         self.assertEqual(len(application.tree.get_children()), 3)
+
+    def test_moved_cache_folder_is_noted_on_the_status_line(self):
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        self.addCleanup(root.destroy)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        settings_dir = Path(tmp.name)
+        settings_path = settings_dir / "settings.json"
+        # The cache folder is named in settings and in the snapshot but was
+        # never created on disk: ITGmania moved after the snapshot was saved.
+        cache_dir = settings_dir / "Cache"
+        stats_file = settings_dir / "Stats.xml"
+        stats_file.write_text("<Stats/>")
+        settings_path.write_text(json.dumps(
+            {"cache_dir": str(cache_dir), "stats_file": str(stats_file)}))
+        row = {header: "" for header in app.HEADERS}
+        row.update({"Title": "Song", "Pack": "P", "Type": "dance-single",
+                    "Difficulty": "Hard", "Meter": 10, "Course path": "P/Song"})
+        payload = {"schema_version": app.LIBRARY_CACHE_SCHEMA_VERSION,
+                   "cache_dir": str(cache_dir), "stats_file": str(stats_file),
+                   "refreshed_at": "2026-11-10T08:00:00-05:00", "files": 1,
+                   "skipped_files": 0, "files_without_charts": 0,
+                   "nested_song_tree": False, "rows": [dict(row) for _ in range(3)]}
+        (settings_dir / "library_cache.json").write_text(json.dumps(payload))
+        patcher = patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        application = app.LibraryApp(root)
+        deadline = time.monotonic() + 10
+        while len(application.tree.get_children()) < 3 and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.02)
+        self.assertEqual(len(application.rows), 3)
+        self.assertIn("The saved cache folder no longer exists.", application.status.get())
+        self.assertIn("Choose File → Data paths…, then Load / refresh.", application.status.get())
 
 
 class LiveDataPathsDialogTests(unittest.TestCase):
