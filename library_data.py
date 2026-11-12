@@ -1,4 +1,4 @@
-"""Tk-independent parsing and formatting helpers for the ITGmania library, including the snapshot store (SnapshotStore) that owns library_cache.json."""
+"""Tk-independent parsing and formatting helpers for the ITGmania library, including the snapshot store (SnapshotStore) that owns library_cache.json and the settings store (SettingsStore) that owns settings.json."""
 
 from __future__ import annotations
 
