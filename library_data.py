@@ -1045,7 +1045,16 @@ def filter_texts_match(first, second) -> bool:
     """
     def readings(text):
         values = filter_token_text(text).split()
-        keys = [parse_numeric_bound(value) or ("text", value.casefold()) for value in values]
+        keys = []
+        for value in values:
+            parsed = parse_numeric_bound(value)
+            if parsed is None:
+                keys.append(("text", value.casefold()))
+            else:
+                # NaN is not equal to itself, so a ("==", nan) key would
+                # never equal another one; read it as the word "nan" instead.
+                keys.append(tuple("nan" if isinstance(part, float) and math.isnan(part) else part
+                                  for part in parsed))
         return sorted(keys, key=repr)
 
     return bool(filter_token_text(first).strip()) and readings(first) == readings(second)
@@ -1277,12 +1286,14 @@ def aggregate_meter_distribution(rows: list[dict], active_val: str | None = None
     no METER tag as 0, so such charts get an ordinary "0" bar: the table shows 0 for them and meter:0
     finds them, which keeps the bar's number equal to the rows after clicking it. Only rows with no
     value at all or text that is not a number (not produced by parse_cache_file) are grouped into "?"
-    at the end (non-interactive).
+    at the end (non-interactive). NaN meters get one "nan" bar of their own: NaN is not equal to
+    itself, so it cannot be a dict key, and one bar per NaN row would also double-count.
     Returns list of (label, count, filter_token, is_active).
     """
     counts: dict[str, int] = {}
     numeric_keys: dict[float, str] = {}
     missing_count = 0
+    nan_count = 0
 
     for row in rows:
         meter_raw = row.get("Meter")
@@ -1291,11 +1302,15 @@ def aggregate_meter_distribution(rows: list[dict], active_val: str | None = None
             continue
         try:
             m_val = float(meter_raw)
-            label = str(int(m_val)) if m_val.is_integer() else f"{m_val:g}"
-            counts[label] = counts.get(label, 0) + 1
-            numeric_keys[m_val] = label
         except (TypeError, ValueError):
             missing_count += 1
+            continue
+        if math.isnan(m_val):
+            nan_count += 1
+            continue
+        label = str(int(m_val)) if m_val.is_integer() else f"{m_val:g}"
+        counts[label] = counts.get(label, 0) + 1
+        numeric_keys[m_val] = label
 
     result = []
     for m_val in sorted(numeric_keys.keys()):
@@ -1303,6 +1318,10 @@ def aggregate_meter_distribution(rows: list[dict], active_val: str | None = None
         count = counts[label]
         is_active = filter_texts_match(active_val, label) if active_val is not None else False
         result.append((label, count, label, is_active))
+
+    if nan_count > 0:
+        result.append(("nan", nan_count, "nan",
+                       filter_texts_match(active_val, "nan") if active_val is not None else False))
 
     if missing_count > 0:
         result.append(("?", missing_count, "", False))
@@ -1418,7 +1437,10 @@ def distribution_summary_stats(metric: str, rows: list[dict]) -> str:
             if m not in (None, ""):
                 try:
                     v = float(m)
-                    vals.append(int(v) if v.is_integer() else v)
+                    # Non-finite values would make the mean/median read
+                    # "inf"/"nan"; they are excluded, like missing ones.
+                    if math.isfinite(v):
+                        vals.append(int(v) if v.is_integer() else v)
                 except (TypeError, ValueError):
                     pass
         if not vals:
@@ -1449,7 +1471,10 @@ def distribution_summary_stats(metric: str, rows: list[dict]) -> str:
             b = r.get("bpm_max")
             if b not in (None, ""):
                 try:
-                    vals.append(float(b))
+                    v = float(b)
+                    # As for Meter: non-finite tempos would read "inf"/"nan".
+                    if math.isfinite(v):
+                        vals.append(v)
                 except (TypeError, ValueError):
                     pass
         if not vals:
