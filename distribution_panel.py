@@ -153,13 +153,13 @@ class DistributionPanel:
         # Summary line
         self.dist_summary_var = tk.StringVar(value="")
         tk.Label(self.dist_panel, textvariable=self.dist_summary_var, fg=theme.TEXT_MUTED, bg=theme.BG_PANEL,
-                 font=theme.FONT_SMALL, wraplength=panel_width - 24, justify="left").pack(fill="x", pady=(0, scale_pixels(6, self._dpi_scale)))
+                 font=theme.FONT_SMALL, wraplength=panel_width - scale_pixels(24, self._dpi_scale), justify="left").pack(fill="x", pady=(0, scale_pixels(6, self._dpi_scale)))
 
         # Active filter banner: shown just above the chart, only while a chart filter is active.
         # It is built here but not packed; show_rows packs it before the chart container.
         self.dist_banner_frame = tk.Frame(self.dist_panel, bg=theme.BG_INPUT, padx=scale_pixels(8, self._dpi_scale), pady=scale_pixels(5, self._dpi_scale))
         self.dist_banner_label = tk.Label(self.dist_banner_frame, text="", fg=theme.ACCENT, bg=theme.BG_INPUT,
-                                          font=theme.FONT_BODY, wraplength=panel_width - 90,
+                                          font=theme.FONT_BODY, wraplength=panel_width - scale_pixels(90, self._dpi_scale),
                                           justify="left", anchor="w")
         self.dist_banner_label.pack(side="left", fill="x", expand=True)
         self._button(self.dist_banner_frame, "Clear", self.clear_chart_filter).pack(side="right")

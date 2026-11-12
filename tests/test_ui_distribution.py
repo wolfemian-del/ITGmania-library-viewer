@@ -132,8 +132,10 @@ class DistributionUITests(unittest.TestCase):
         finally:
             root.destroy()
 
-    def test_panel_width_scales_with_the_display_factor(self):
-        """The panel frame is built at the theme width scaled by the display factor (issue #51)."""
+    def test_panel_width_and_wraplengths_scale_with_the_display_factor(self):
+        """The panel frame is built at the theme width scaled by the display factor (issue #51),
+        and the label wraplengths keep their proportional margins (Grok's #145 review nit: the
+        fixed 24/90 subtractions would otherwise drift at high DPI)."""
         if app.tk is None:
             self.skipTest("Tkinter is not installed")
         try:
@@ -152,6 +154,12 @@ class DistributionUITests(unittest.TestCase):
                 dpi_scale=1.5)
             panel.build_panel(content, Mock(), lambda: Mock())
             self.assertEqual(int(panel.dist_panel.cget("width")), 480)
+            summary_label = next(
+                child for child in panel.dist_panel.winfo_children()
+                if isinstance(child, app.tk.Label)
+                and str(child.cget("textvariable")) == str(panel.dist_summary_var))
+            self.assertEqual(int(summary_label.cget("wraplength")), 480 - 36)
+            self.assertEqual(int(panel.dist_banner_label.cget("wraplength")), 480 - 135)
         finally:
             root.destroy()
 
