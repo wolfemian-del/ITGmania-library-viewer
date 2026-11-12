@@ -287,14 +287,17 @@ class LibrarySnapshotTests(unittest.TestCase):
     def sample_row():
         return {key: "" for key in (*app.HEADERS, "Course path")}
 
-    def test_snapshot_round_trip_preserves_skipped_blocks(self):
+    def test_snapshot_round_trip_preserves_loaded_fields(self):
+        # One delegate test pins the complete positional mapping from the
+        # snapshot into _loaded: every field gets a distinct value, so a
+        # swap in the delegate's argument order fails.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cache_dir = root / "Cache" / "Songs"
             stats_file = root / "Stats.xml"
             instance = self.make_app(root / "settings.json", cache_dir, stats_file)
             rows = [self.sample_row()]
-            instance._snapshot_store.write(cache_dir, stats_file, rows, 1, 0, 0, False, skipped_blocks=3)
+            instance._snapshot_store.write(cache_dir, stats_file, rows, 2, 1, 3, True, skipped_blocks=4)
 
             instance.load_cached_data()
 
@@ -302,7 +305,7 @@ class LibrarySnapshotTests(unittest.TestCase):
         args, kwargs = instance._loaded.call_args
         # _loaded's positional args: rows, files, skipped_files,
         # files_without_charts, skipped_blocks, nested_song_tree.
-        self.assertEqual(args[4], 3)
+        self.assertEqual(args, (rows, 2, 1, 3, 4, True))
 
     def test_snapshot_restores_when_source_paths_match(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -427,8 +430,13 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance.refresh_table.assert_called_once()
         self.assertIn("could not be read", instance.status.set.call_args.args[0])
         # The detail pin (proposal 0008, Revision 3): the status text
-        # carries the exception, not just the reason kind.
-        self.assertIn("recursion", instance.status.set.call_args.args[0])
+        # carries the exception, not just the reason kind. Python 3.14's
+        # JSON scanner reports the overflow as "Stack overflow ..."; earlier
+        # versions raise RecursionError ("maximum recursion depth exceeded").
+        if sys.version_info >= (3, 14):
+            self.assertIn("Stack overflow", instance.status.set.call_args.args[0])
+        else:
+            self.assertIn("recursion", instance.status.set.call_args.args[0])
 
     @unittest.skipIf(sys.version_info < (3, 11),
                      "the int-string conversion limit is 3.11+")
@@ -480,6 +488,7 @@ class LibrarySnapshotTests(unittest.TestCase):
             instance.load_cached_data()
 
         instance._loaded.assert_not_called()
+        instance.refresh_table.assert_called_once()
         self.assertIn("invalid or outdated", instance.status.set.call_args.args[0])
 
     def test_snapshot_schema_version_2_is_rejected_as_outdated(self):
@@ -2213,6 +2222,42 @@ class RefreshGenerationTests(unittest.TestCase):
             kind, message, generation = instance._load_results.get_nowait()
             self.assertEqual((kind, generation), ("failed", 1))
             self.assertIn("malformed", message)
+
+    def test_load_worker_passes_scan_results_to_store_write_in_order(self):
+        # The worker calls store.write with eight positional arguments; the
+        # store's own field-order pin calls write directly, so this test pins
+        # the call site. skipped_blocks=3 and nested_song_tree=False are
+        # distinguishable only by identity (0 == False), so the bool is
+        # asserted with assertIs: a swap of the last two arguments fails.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache"
+            cache_dir.mkdir()
+            (cache_dir / "test.cache").write_text("#SONGFILENAME:Songs/P/S/a.ogg;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n", encoding="utf-8")
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>", encoding="utf-8")
+
+            instance = object.__new__(app.LibraryApp)
+            instance._load_generation = 1
+            instance._snapshot_lock = threading.Lock()
+            instance._load_results = queue.Queue()
+            instance._snapshot_store = Mock()
+            instance._snapshot_store.write.return_value = "2026-01-01T00:00:00"
+            instance.root = Mock()
+
+            row = {"Title": "a"}
+            with patch.object(app, "parse_cache_file", return_value=([row], 3)):
+                instance._load_worker(cache_dir, stats_file, generation=1)
+
+            args = instance._snapshot_store.write.call_args.args
+            self.assertEqual(args[0], cache_dir)
+            self.assertEqual(args[1], stats_file)
+            self.assertEqual(args[2], [row])
+            self.assertEqual(args[3], 1)  # one cache file scanned
+            self.assertEqual(args[4], 0)  # skipped_files
+            self.assertEqual(args[5], 0)  # files_without_charts
+            self.assertIs(args[6], False)  # nested_song_tree
+            self.assertEqual(args[7], 3)  # skipped_blocks
 
     def test_poll_load_results_delivers_queued_results_and_reschedules(self):
         instance = object.__new__(app.LibraryApp)

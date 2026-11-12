@@ -1,4 +1,4 @@
-"""Tk-independent parsing and formatting helpers for the ITGmania library."""
+"""Tk-independent parsing and formatting helpers for the ITGmania library, including the snapshot store (SnapshotStore) that owns library_cache.json."""
 
 from __future__ import annotations
 
@@ -465,7 +465,7 @@ def _nonnegative_int(value):
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
-def write_file_atomically(path, text):
+def write_file_atomically(text, path):
     """Write text to a file atomically.
 
     The text goes to a pid/thread-unique temp file beside the target, which
@@ -547,7 +547,7 @@ class SnapshotStore:
             "rows": rows,
         }
         text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        write_file_atomically(self.snapshot_path, text)
+        write_file_atomically(text, self.snapshot_path)
         return refreshed_at
 
     def read(self, current_cache_dir, current_stats_file):
