@@ -79,7 +79,7 @@ class AdvancedSearchGeometryTests(unittest.TestCase):
     Mirrors the course window's tests (issue #25) against the same rules.
     """
 
-    def open_component(self, saved_geometry=None, report_geometry=None, vroot=(0, 0, 1920, 1080)):
+    def open_component(self, saved_geometry=None, report_geometry=None, vroot=(0, 0, 1920, 1080), dpi_scale=1.0):
         parent = Mock()
         parent.winfo_vrootx.return_value = vroot[0]
         parent.winfo_vrooty.return_value = vroot[1]
@@ -96,6 +96,7 @@ class AdvancedSearchGeometryTests(unittest.TestCase):
             search_var,
             saved_geometry=saved_geometry,
             report_geometry=report_geometry,
+            dpi_scale=dpi_scale,
         )
         mock_window = Mock()
         bindings = {}
@@ -112,6 +113,34 @@ class AdvancedSearchGeometryTests(unittest.TestCase):
         _component, mock_window, _bindings, _protocols, _buttons = self.open_component(
             saved_geometry="700x640+30+40")
         mock_window.geometry.assert_called_once_with("700x640+30+40")
+
+    def test_open_scales_the_saved_geometry_at_150_percent(self):
+        _component, mock_window, _bindings, _protocols, _buttons = self.open_component(
+            saved_geometry="700x640+30+40", dpi_scale=1.5)
+        mock_window.geometry.assert_called_once_with("1050x960+45+60")
+
+    def test_open_scales_the_theme_default_without_a_saved_geometry(self):
+        _component, mock_window, _bindings, _protocols, _buttons = self.open_component(dpi_scale=1.5)
+        mock_window.geometry.assert_called_once_with("840x930")
+
+    def test_open_scales_the_minimum_size(self):
+        _component, mock_window, _bindings, _protocols, _buttons = self.open_component(dpi_scale=1.5)
+        mock_window.minsize.assert_called_once_with(720, 780)
+
+    def test_open_uses_the_scaled_threshold_for_a_narrow_sliver(self):
+        # 135 physical pixels would show at the unscaled 100 px threshold
+        # but not at the scaled 150 px one, so the position is dropped.
+        _component, mock_window, _bindings, _protocols, _buttons = self.open_component(
+            saved_geometry="700x640+-610+40", dpi_scale=1.5)
+        mock_window.geometry.assert_called_once_with("1050x960")
+
+    def test_save_window_geometry_reports_canonical_units(self):
+        component, mock_window, _bindings, _protocols, _buttons, report = self.open_for_close()
+        component._dpi_scale = 1.5
+        mock_window.geometry.return_value = "1050x960+45+60"
+        component.save_window_geometry()
+        report.assert_called_once_with("700x640+30+40")
+        self.assertEqual(component._saved_geometry, "700x640+30+40")
 
     def test_open_uses_the_theme_default_without_a_saved_geometry(self):
         _component, mock_window, _bindings, _protocols, _buttons = self.open_component()

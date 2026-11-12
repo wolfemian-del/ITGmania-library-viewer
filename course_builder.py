@@ -24,9 +24,12 @@ from library_data import (
     course_song_lines,
     find_ambiguous_course_entries,
     format_duration,
+    format_geometry,
     format_new_course,
     number,
     parse_course_geometry,
+    scale_geometry,
+    scale_pixels,
     validate_course_fields,
 )
 
@@ -41,8 +44,12 @@ class CourseBuilder:
                     (the save-time ambiguity check compares the queue against it)
     """
 
+    # The display scale factor (1.0 at 100% DPI): bare instances in tests
+    # have no window to measure, so they read canonical units as-is.
+    _dpi_scale = 1.0
+
     def __init__(self, parent, status, button_factory, selected_rows, library_rows,
-                 saved_geometry=None, report_geometry=None):
+                 saved_geometry=None, report_geometry=None, dpi_scale=1.0):
         self.parent = parent
         self._status = status
         self._button = button_factory
@@ -54,6 +61,10 @@ class CourseBuilder:
         # reports nothing.
         self._saved_geometry = saved_geometry
         self._report_geometry = report_geometry
+        # The display scale factor (issue #51): 1.0 at 100% DPI, 1.5 at
+        # 150%. Geometry and pixel sizes are stored in canonical 100%
+        # units and scaled to physical pixels on open.
+        self._dpi_scale = dpi_scale
         self.window = None
         self.entries: list[dict] = []
         self._last_removal = None  # [(index, row), ...] of the latest removal, for Undo remove (issue #85)
@@ -81,19 +92,24 @@ class CourseBuilder:
         close. Without a remembered geometry, the theme default.
         """
         if not self._saved_geometry:
-            return theme.COURSE_BUILDER_GEOMETRY
+            return scale_geometry(theme.COURSE_BUILDER_GEOMETRY, self._dpi_scale)
         parsed = parse_course_geometry(self._saved_geometry)
         if parsed is None:
-            return theme.COURSE_BUILDER_GEOMETRY
-        width, height, x, y = parsed
+            return scale_geometry(theme.COURSE_BUILDER_GEOMETRY, self._dpi_scale)
+        # The saved string is in canonical 100% units; the window opens in
+        # physical pixels, so scale it — and the visibility thresholds — by
+        # this display's factor before comparing against the virtual desktop.
+        width, height, x, y = (scale_pixels(value, self._dpi_scale) for value in parsed)
         left = self.parent.winfo_vrootx()
         top = self.parent.winfo_vrooty()
         right = left + self.parent.winfo_vrootwidth()
         bottom = top + self.parent.winfo_vrootheight()
         visible_width = min(x + width, right) - max(x, left)
         visible_height = min(y + height, bottom) - max(y, top)
-        if visible_width >= 100 and visible_height >= 32 and y >= top - 16:
-            return self._saved_geometry
+        if (visible_width >= scale_pixels(100, self._dpi_scale)
+                and visible_height >= scale_pixels(32, self._dpi_scale)
+                and y >= top - scale_pixels(16, self._dpi_scale)):
+            return format_geometry(width, height, x, y)
         return f"{width}x{height}"
 
     def open_dialog(self):
@@ -106,35 +122,36 @@ class CourseBuilder:
         self.window = window
         window.title("Build a course")
         window.geometry(self._geometry_for_open())
-        window.minsize(*theme.COURSE_BUILDER_MIN_SIZE)
+        window.minsize(scale_pixels(theme.COURSE_BUILDER_MIN_SIZE[0], self._dpi_scale),
+                          scale_pixels(theme.COURSE_BUILDER_MIN_SIZE[1], self._dpi_scale))
         window.configure(bg=theme.BG_WINDOW)
         window.transient(self.parent)
         self.entries: list[dict] = []
         self._last_removal = None  # a reopened window starts a fresh queue, with nothing to undo
 
         tk.Label(window, text="Build a new course", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
-                 font=theme.FONT_COURSE_TITLE).pack(anchor="w", padx=18, pady=(16, 2))
+                 font=theme.FONT_COURSE_TITLE).pack(anchor="w", padx=scale_pixels(18, self._dpi_scale), pady=(scale_pixels(16, self._dpi_scale), scale_pixels(2, self._dpi_scale)))
         tk.Label(window, text="Select charts in the library, then add them here and arrange the course order.",
-                 fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(anchor="w", padx=18, pady=(0, 12))
+                 fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(anchor="w", padx=scale_pixels(18, self._dpi_scale), pady=(0, scale_pixels(12, self._dpi_scale)))
 
-        title_row = tk.Frame(window, bg=theme.BG_WINDOW, padx=18)
-        title_row.pack(fill="x", pady=(0, 10))
+        title_row = tk.Frame(window, bg=theme.BG_WINDOW, padx=scale_pixels(18, self._dpi_scale))
+        title_row.pack(fill="x", pady=(0, scale_pixels(10, self._dpi_scale)))
         tk.Label(title_row, text="Course title", width=13, anchor="w", fg=theme.TEXT_FIELD_LABEL, bg=theme.BG_WINDOW,
                  font=theme.FONT_BODY).pack(side="left")
         self.title_var = tk.StringVar()
         tk.Entry(title_row, textvariable=self.title_var, bg=theme.BG_INPUT, fg=theme.TEXT_PRIMARY,
                  insertbackground=theme.CURSOR, relief="flat", font=theme.FONT_ENTRY_LARGE,
-                 highlightthickness=1, highlightbackground=theme.BORDER, highlightcolor=theme.ACCENT).pack(
+                 highlightthickness=scale_pixels(1, self._dpi_scale), highlightbackground=theme.BORDER, highlightcolor=theme.ACCENT).pack(
                      side="left", fill="x", expand=True)
 
         queue_frame = tk.Frame(window, bg=theme.BG_WINDOW)
-        queue_frame.pack(fill="both", expand=True, padx=18)
+        queue_frame.pack(fill="both", expand=True, padx=scale_pixels(18, self._dpi_scale))
         columns = ("Pack", "Title", "Type", "Difficulty", "Meter", "Time")
         self.tree = ttk.Treeview(queue_frame, columns=columns, show="headings", selectmode="extended")
         widths = {"Pack": 180, "Title": 300, "Type": 130, "Difficulty": 120, "Meter": 80, "Time": 80}
         for column in columns:
             self.tree.heading(column, text=column)
-            self.tree.column(column, width=widths[column], minwidth=65, stretch=column == "Title",
+            self.tree.column(column, width=scale_pixels(widths[column], self._dpi_scale), minwidth=scale_pixels(65, self._dpi_scale), stretch=column == "Title",
                                     anchor="w" if column in ("Pack", "Title") else "center")
         queue_scroll = ttk.Scrollbar(queue_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=queue_scroll.set)
@@ -154,17 +171,17 @@ class CourseBuilder:
         self.tree.bind("<Control-z>", self._undo_on_key)
         self.tree.bind("<Control-Z>", self._undo_on_key)
 
-        controls = tk.Frame(window, bg=theme.BG_WINDOW, padx=18, pady=12)
+        controls = tk.Frame(window, bg=theme.BG_WINDOW, padx=scale_pixels(18, self._dpi_scale), pady=scale_pixels(12, self._dpi_scale))
         controls.pack(fill="x")
         self._button(controls, "Add selected charts", self.add_selected, primary=True).pack(side="left")
-        self._button(controls, "Remove", self.remove_entries).pack(side="left", padx=(8, 0))
-        self._button(controls, "Undo remove", self.undo_remove).pack(side="left", padx=(8, 0))
-        self._button(controls, "Move up", lambda: self.move_entry(-1)).pack(side="left", padx=(8, 0))
-        self._button(controls, "Move down", lambda: self.move_entry(1)).pack(side="left", padx=(8, 0))
+        self._button(controls, "Remove", self.remove_entries).pack(side="left", padx=(scale_pixels(8, self._dpi_scale), 0))
+        self._button(controls, "Undo remove", self.undo_remove).pack(side="left", padx=(scale_pixels(8, self._dpi_scale), 0))
+        self._button(controls, "Move up", lambda: self.move_entry(-1)).pack(side="left", padx=(scale_pixels(8, self._dpi_scale), 0))
+        self._button(controls, "Move down", lambda: self.move_entry(1)).pack(side="left", padx=(scale_pixels(8, self._dpi_scale), 0))
         self.count_var = tk.StringVar(value="0 charts · 0:00 total")
         tk.Label(controls, textvariable=self.count_var, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW,
-                 font=theme.FONT_BODY).pack(side="left", padx=12)
-        self._button(controls, "Append to .CRS…", self.append_to_existing).pack(side="right", padx=(0, 8))
+                 font=theme.FONT_BODY).pack(side="left", padx=scale_pixels(12, self._dpi_scale))
+        self._button(controls, "Append to .CRS…", self.append_to_existing).pack(side="right", padx=(0, scale_pixels(8, self._dpi_scale)))
         self._button(controls, "Save new .CRS…", self.save_new, primary=True).pack(side="right")
 
         def _close(_event=None):
@@ -243,7 +260,8 @@ class CourseBuilder:
             return
         if self.window.state() != "normal":
             return
-        self._saved_geometry = self.window.geometry()
+        # The window reports physical pixels; store canonical 100% units.
+        self._saved_geometry = scale_geometry(self.window.geometry(), 1.0 / self._dpi_scale)
         if self._report_geometry is not None:
             self._report_geometry(self._saved_geometry)
 
