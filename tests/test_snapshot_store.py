@@ -106,6 +106,21 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(result.reason, "unreadable")
         self.assertIn("Expecting property name", result.detail)
 
+    @unittest.skipIf(sys.version_info < (3, 11),
+                     "the int-string conversion limit is 3.11+")
+    def test_read_oversized_integer_reports_unreadable_with_detail(self):
+        # A JSON integer past the 4,300-digit conversion limit makes json.load
+        # raise ValueError; it must be unreadable, not invalid.
+        with tempfile.TemporaryDirectory() as directory:
+            store, path = self.make_store(directory)
+            path.write_text("[" + "9" * 5000 + "]", encoding="utf-8")
+
+            result = store.read(Path(directory) / "Cache", Path(directory) / "Stats.xml")
+
+        self.assertFalse(result.loaded)
+        self.assertEqual(result.reason, "unreadable")
+        self.assertIn("integer string conversion", result.detail)
+
     def test_read_deeply_nested_json_reports_unreadable(self):
         # The depth is 1,000,000 because the limit is version-dependent:
         # 10,000 levels raise on 3.12 but parse on 3.14 (whose C recursion
