@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import statistics
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import NamedTuple
@@ -57,6 +59,7 @@ __all__ = [
     "aggregate_difficulty_distribution",
     "aggregate_meter_distribution",
     "bpm_sort_key",
+    "cache_dir_candidates",
     "build_dialog_query",
     "chart_bar_at",
     "chart_bars",
@@ -71,6 +74,7 @@ __all__ = [
     "filter_texts_match",
     "filter_token_text",
     "find_unreadable_directives",
+    "first_existing_directory",
     "format_bpm_display",
     "format_duration",
     "format_new_course",
@@ -387,6 +391,34 @@ def looks_like_song_tree(cache: Path) -> bool:
             ):
                 return True
     return False
+
+
+def cache_dir_candidates() -> list[Path]:
+    """Usual ITGmania song-cache locations for this platform, best first.
+
+    The cache lives under the engine's user-data root, which differs per
+    platform (ITGmania v1.3.0, ArchHooks::MountUserFilesystems): Windows
+    %APPDATA%\\ITGmania, macOS ~/Library/Application Support/ITGmania,
+    Linux ~/.itgmania. The Windows entry is the default this app has
+    always used.
+    """
+    # sys.platform (not os.name): pathlib dispatches on os.name, so keying
+    # the Windows branch on it would make the branch untestable.
+    if sys.platform == "win32":
+        root = Path(os.getenv("APPDATA", str(Path.home() / "AppData" / "Roaming"))) / "ITGmania"
+    elif sys.platform == "darwin":
+        root = Path.home() / "Library" / "Application Support" / "ITGmania"
+    else:
+        root = Path.home() / ".itgmania"
+    return [root / "Cache" / "Songs"]
+
+
+def first_existing_directory(candidates) -> Path | None:
+    """First candidate that is actually a directory, else None."""
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
 
 
 def parse_course_geometry(value) -> tuple[int, int, int, int] | None:

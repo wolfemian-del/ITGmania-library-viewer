@@ -36,8 +36,10 @@ from library_data import (
     TECH_FIELDS,
     CHART_FILTER_FIELDS,
     bpm_sort_key,
+    cache_dir_candidates,
     difficulty_sort_key,
     find_unreadable_directives,
+    first_existing_directory,
     format_duration,
     grade_sort_key,
     looks_like_song_tree,
@@ -93,9 +95,10 @@ class LibraryApp:
         self.loaded_source_paths = None
         self.settings_path = self._settings_file_path()
         self.saved_settings = self._read_settings()
-        default_cache = Path(os.getenv("APPDATA", str(Path.home() / "AppData" / "Roaming"))) / "ITGmania" / "Cache" / "Songs"
+        default_cache = first_existing_directory(cache_dir_candidates())
         default_stats = Path.cwd() / "Stats.xml"
-        self.cache_var = tk.StringVar(value=self.saved_settings.get("cache_dir", str(default_cache)))
+        self.cache_var = tk.StringVar(value=self.saved_settings.get(
+            "cache_dir", str(default_cache) if default_cache is not None else ""))
         self.stats_var = tk.StringVar(value=self.saved_settings.get(
             "stats_file", str(default_stats) if default_stats.is_file() else ""))
         self.search_var = tk.StringVar()
