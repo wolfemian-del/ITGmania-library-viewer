@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import contextlib
-import copy
 import csv
 from datetime import datetime
-import json
-import os
 import queue
 import sys
 import threading
@@ -36,8 +33,12 @@ from library_data import (
     TECH_FIELDS,
     CHART_FILTER_FIELDS,
     LIBRARY_CACHE_SCHEMA_VERSION,
+    SettingsStore,
     SnapshotStore,
     _normalized_source_path,
+    _settings_file_path,
+    _valid_column_width,
+    _valid_window_geometry,
     bpm_sort_key,
     cache_dir_candidates,
     declare_dpi_awareness,
@@ -51,7 +52,6 @@ from library_data import (
     match_chart_query,
     number,
     parse_cache_file,
-    parse_course_geometry,
     parse_search_query,
     scale_geometry,
     scale_pixels,
@@ -124,11 +124,13 @@ class LibraryApp:
         # against the current schema version.
         self._snapshot_store = SnapshotStore(
             self.library_cache_path, HEADERS, LIBRARY_CACHE_SCHEMA_VERSION)
-        # What _read_settings could not use, if anything: the file is read
-        # before the status line exists, so the failure is remembered here
-        # and reported once the window is built (_report_discarded_settings).
-        self._settings_read_error = None
-        self.saved_settings = self._read_settings()
+        # The settings store owns settings.json (proposal 0008). Loading it
+        # seeds the store's dedup baseline; a failure is remembered on the
+        # store (last_read_error) and reported once the window is built
+        # (_report_discarded_settings), since the file is read before the
+        # status line exists.
+        self._settings_store = SettingsStore(self.settings_path)
+        self.saved_settings = self._settings_store.load()
         default_cache = first_existing_directory(cache_dir_candidates())
         default_stats = Path.cwd() / "Stats.xml"
         self.cache_var = tk.StringVar(value=self.saved_settings.get(
@@ -185,7 +187,7 @@ class LibraryApp:
         if not isinstance(saved_widths, dict):
             saved_widths = {}
         self.column_widths = {
-            column: self._valid_column_width(saved_widths.get(column), column) for column in HEADERS
+            column: _valid_column_width(saved_widths.get(column), column) for column in HEADERS
         }
         self.default_column_widths = {}
         self.sort_keys = []
@@ -245,7 +247,6 @@ class LibraryApp:
         self._data_paths_note = None
         self._data_paths_form = None
         self._data_paths_popup_shown = False
-        self._last_saved_settings = copy.deepcopy(self.saved_settings)
         self._style()
         self._build()
         self._report_discarded_settings()
@@ -513,16 +514,10 @@ class LibraryApp:
 
     @staticmethod
     def _settings_file_path():
-        appdata = os.getenv("APPDATA")
-        if appdata:
-            config_root = Path(appdata)
-        elif os.name == "nt":
-            config_root = Path.home() / "AppData" / "Roaming"
-        elif sys.platform == "darwin":
-            config_root = Path.home() / "Library" / "Application Support"
-        else:
-            config_root = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config"))
-        return config_root / "ITGmania Library Visualizer" / "settings.json"
+        # Thin wrapper over the module-level helper (proposal 0008): the
+        # seventeen live-test patch sites redirect the settings file here.
+        # The bare name is the imported helper, not this method.
+        return _settings_file_path()
 
     @property
     def library_cache_path(self):
@@ -607,68 +602,14 @@ class LibraryApp:
             for saved, selected in zip(loaded, current))
 
     @staticmethod
-    def _valid_column_width(value, column):
-        try:
-            width = int(value)
-        except (TypeError, ValueError):
-            return None
-        return width if 55 <= width <= 2000 else None
-
-    @staticmethod
-    def _valid_window_geometry(value, min_size):
-        """The canonical geometry string to restore a dialog with, or None.
-
-        The stored value must parse in full and be at least the dialog's
-        minimum size — a smaller value (a 1x1 read before the window was
-        ever shown, say) is rejected whole, position included — and comes
-        back rebuilt in canonical form, so only ever a string Tk itself
-        could have written reaches the window. Shared by the course window
-        (issue #25) and the Advanced Search window (issue #98), which pass
-        their own minimum sizes.
-        """
-        parsed = parse_course_geometry(value)
-        if parsed is None:
-            return None
-        width, height, x, y = parsed
-        min_width, min_height = min_size
-        if width < min_width or height < min_height:
-            return None
-        # Rebuilt exactly as Tk writes a position: "+100", and "+-8" for a
-        # negative coordinate. The shorter "-8" form is a different dialect —
-        # Tk reads it as "8 pixels from the right edge" — so emitting it here
-        # would move the window to the far side of the screen on restore.
-        return f"{width}x{height}+{x}+{y}"
-
-    @staticmethod
     def _valid_course_geometry(value):
         """The canonical geometry string to restore the course window with, or None (issue #25)."""
-        return LibraryApp._valid_window_geometry(value, theme.COURSE_BUILDER_MIN_SIZE)
+        return _valid_window_geometry(value, theme.COURSE_BUILDER_MIN_SIZE)
 
     @staticmethod
     def _valid_advanced_search_geometry(value):
         """The canonical geometry string to restore the Advanced Search window with, or None (issue #98)."""
-        return LibraryApp._valid_window_geometry(value, theme.ADVANCED_SEARCH_MIN_SIZE)
-
-    def _read_settings(self):
-        self._settings_read_error = None
-        try:
-            with self.settings_path.open("r", encoding="utf-8-sig") as handle:
-                data = json.load(handle)
-            if not isinstance(data, dict):
-                raise ValueError("settings must be a JSON object")
-            return data
-        except FileNotFoundError:
-            # First run: no file yet is normal, not a discarded settings file.
-            return {}
-        except (OSError, ValueError, RecursionError) as exc:
-            # ValueError covers UnicodeDecodeError and JSONDecodeError;
-            # RecursionError covers a deeply nested file. The file existed
-            # but could not be used, so the app runs on defaults. The
-            # failure is remembered here and reported on the status line
-            # once the window exists (_report_discarded_settings): this
-            # runs before _build creates the status variable.
-            self._settings_read_error = str(exc)
-            return {}
+        return _valid_window_geometry(value, theme.ADVANCED_SEARCH_MIN_SIZE)
 
     def _report_discarded_settings(self):
         """Append the discarded-settings note to the status line, once.
@@ -680,10 +621,11 @@ class LibraryApp:
         reported; the status line is rewritten by the next load or refresh,
         so the notice is startup-scoped like the snapshot messages.
         """
-        # _read_settings runs before _build creates the status variable, so
-        # a bare instance built for a _load_initial_snapshot test may not
-        # have recorded anything; that is "no failure", not an error.
-        reason = getattr(self, "_settings_read_error", None)
+        # load() runs before _build creates the status variable, so a bare
+        # instance built for a _load_initial_snapshot test may not have a
+        # store; that is "no failure", not an error.
+        store = getattr(self, "_settings_store", None)
+        reason = store.last_read_error if store is not None else None
         if reason is None:
             return
         message = f"Settings file could not be read ({reason}); using defaults."
@@ -751,18 +693,12 @@ class LibraryApp:
         # The Advanced Search window's geometry, on the same terms (issue #98).
         if self.advanced_search_geometry is not None:
             settings["advanced_search_geometry"] = self.advanced_search_geometry
-        if self._last_saved_settings == settings:
-            return
-        temporary = self.settings_path.with_suffix(".tmp")
+        # The store owns the dedup baseline and the atomic write (proposal
+        # 0008); a failed write raises OSError, which the store leaves for
+        # the app to report — and the baseline stays stale so the next
+        # gesture retries.
         try:
-            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
-            with temporary.open("w", encoding="utf-8") as handle:
-                json.dump(settings, handle, indent=2)
-            os.replace(temporary, self.settings_path)
-            # Snapshot by value: the settings dict holds the live column_order list, which the
-            # column drag handler mutates in place, so keeping the dict itself would make the
-            # next comparison compare that list against itself and skip a real change.
-            self._last_saved_settings = copy.deepcopy(settings)
+            self._settings_store.save(settings)
         except OSError as exc:
             self.status.set(f"Could not save settings: {exc}")
 

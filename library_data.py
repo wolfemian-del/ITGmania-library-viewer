@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import ctypes
 import dataclasses
 import json
@@ -63,6 +64,7 @@ __all__ = [
     "TECH_FIELDS",
     "ChartBar",
     "SnapshotResult",
+    "SettingsStore",
     "SnapshotStore",
     "aggregate_bpm_distribution",
     "aggregate_difficulty_distribution",
@@ -592,6 +594,104 @@ class SnapshotStore:
             source_paths=(payload["cache_dir"], payload["stats_file"]),
         )
 
+
+def _settings_file_path():
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        config_root = Path(appdata)
+    elif os.name == "nt":
+        config_root = Path.home() / "AppData" / "Roaming"
+    elif sys.platform == "darwin":
+        config_root = Path.home() / "Library" / "Application Support"
+    else:
+        config_root = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return config_root / "ITGmania Library Visualizer" / "settings.json"
+
+
+def _valid_column_width(value, column):
+    try:
+        width = int(value)
+    except (TypeError, ValueError):
+        return None
+    return width if 55 <= width <= 2000 else None
+
+
+def _valid_window_geometry(value, min_size):
+    """The canonical geometry string to restore a dialog with, or None.
+
+    The stored value must parse in full and be at least the dialog's
+    minimum size — a smaller value (a 1x1 read before the window was
+    ever shown, say) is rejected whole, position included — and comes
+    back rebuilt in canonical form, so only ever a string Tk itself
+    could have written reaches the window. Shared by the course window
+    (issue #25) and the Advanced Search window (issue #98), which pass
+    their own minimum sizes.
+    """
+    parsed = parse_course_geometry(value)
+    if parsed is None:
+        return None
+    width, height, x, y = parsed
+    min_width, min_height = min_size
+    if width < min_width or height < min_height:
+        return None
+    # Rebuilt exactly as Tk writes a position: "+100", and "+-8" for a
+    # negative coordinate. The shorter "-8" form is a different dialect —
+    # Tk reads it as "8 pixels from the right edge" — so emitting it here
+    # would move the window to the far side of the screen on restore.
+    return f"{width}x{height}+{x}+{y}"
+
+
+class SettingsStore:
+    """Owns settings.json: loading, the dedup baseline, and the atomic write.
+
+    The app assembles the settings dict and reports failures on the status
+    line; this store only reads, compares, and writes the file (proposal 0008).
+    """
+
+    def __init__(self, settings_path):
+        self.settings_path = Path(settings_path)
+        self._baseline = None
+        self.last_read_error = None
+
+    def load(self):
+        """Read the settings file: the dict, or {} if it is missing or unusable.
+
+        The baseline is seeded here from a deep copy of the loaded dict, so
+        the returned dict and the baseline can never alias; a failed write
+        leaves the baseline stale and the next save retries.
+        """
+        self.last_read_error = None
+        try:
+            with self.settings_path.open("r", encoding="utf-8-sig") as handle:
+                data = json.load(handle)
+            if not isinstance(data, dict):
+                raise ValueError("settings must be a JSON object")
+        except FileNotFoundError:
+            # First run: no file yet is normal, not a discarded settings file.
+            data = {}
+        except (OSError, ValueError, RecursionError) as exc:
+            # ValueError covers UnicodeDecodeError and JSONDecodeError;
+            # RecursionError covers a deeply nested file. The file existed
+            # but could not be used, so the app runs on defaults.
+            self.last_read_error = str(exc)
+            data = {}
+        self._baseline = copy.deepcopy(data)
+        return data
+
+    def save(self, settings):
+        """Write the settings dict, unless it matches the last saved one.
+
+        Raises OSError exactly as the app's writer did; the baseline updates
+        only after a successful write, so a failed write retries next time.
+        """
+        if self._baseline == settings:
+            return
+        text = json.dumps(settings, indent=2)
+        write_file_atomically(text, self.settings_path)
+        # Snapshot by value: the settings dict holds the live column_order list, which the
+        # column drag handler mutates in place, so keeping the dict itself would make the
+        # next comparison compare that list against itself and skip a real change.
+        self._baseline = copy.deepcopy(settings)
 
 def parse_course_geometry(value) -> tuple[int, int, int, int] | None:
     """Parse a Tk window geometry string into (width, height, x, y), or None.
