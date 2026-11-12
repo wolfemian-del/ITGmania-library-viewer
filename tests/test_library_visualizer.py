@@ -748,6 +748,23 @@ class InsertBatchProgressTests(unittest.TestCase):
         instance.count_label.set.assert_called_once_with("3 charts shown · 3 total")
         instance.root.after.assert_not_called()
 
+    def test_non_finite_time_values_insert_as_blank_instead_of_crashing(self):
+        # Issue #123: a snapshot row whose Time is "nan" or "1e999" used to
+        # raise inside _insert_batch; now the cell is blank and the batch lands.
+        instance, _rows = self.make_instance()
+        instance.rows = [
+            {"Title": "Song A", "Difficulty": "Hard", "Time": "nan"},
+            {"Title": "Song B", "Difficulty": "Hard", "Time": "1e999"},
+            {"Title": "Song C", "Difficulty": "Hard", "Time": 120},
+        ]
+        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
+            instance._insert_batch(instance.rows, 0, 1)
+        self.assertEqual(instance.tree.insert.call_count, 3)
+        time_index = list(app.HEADERS).index("Time")
+        inserted = [kwargs["values"][time_index]
+                    for _args, kwargs in instance.tree.insert.call_args_list]
+        self.assertEqual(inserted, ["", "", "2:00"])
+
     def test_count_line_names_an_unreadable_filter_value(self):
         instance, rows = self.make_instance()
         instance.search_var = Mock()

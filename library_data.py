@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import shlex
@@ -106,7 +107,15 @@ def number(value: str | None, default: float = 0) -> float:
 
 
 def format_duration(seconds) -> str:
-    total = max(0, int(round(number(seconds))))
+    """Format seconds as m:ss (or h:mm:ss); a non-finite or unparseable
+    value reads as missing (blank), the way an empty Time already does."""
+    try:
+        total = float(seconds)
+    except (TypeError, ValueError):
+        return ""
+    if not math.isfinite(total):
+        return ""
+    total = max(0, int(round(total)))
     hours, remainder = divmod(total, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
@@ -178,12 +187,16 @@ def format_bpm_display(displaybpm: str | None, bpm_min, bpm_max) -> str:
 
 
 def _format_bpm_number(value: float) -> str:
+    if not math.isfinite(value):
+        return ""
     if value == int(value):
         return str(int(value))
     return f"{value:g}"
 
 
 def _format_bpm_pair(lo: float, hi: float) -> str:
+    if not (math.isfinite(lo) and math.isfinite(hi)):
+        return ""
     if lo == hi:
         return _format_bpm_number(lo)
     return f"{_format_bpm_number(lo)}–{_format_bpm_number(hi)}"
