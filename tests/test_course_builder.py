@@ -723,7 +723,7 @@ class CourseUndoRemoveTests(unittest.TestCase):
 class CourseGeometryTests(unittest.TestCase):
     """Window geometry memory (issue #25, proposal 0003): restore on open, report on close."""
 
-    def open_builder(self, saved_geometry=None, report_geometry=None, vroot=(0, 0, 1920, 1080)):
+    def open_builder(self, saved_geometry=None, report_geometry=None, vroot=(0, 0, 1920, 1080), dpi_scale=1.0):
         parent = Mock()
         parent.winfo_vrootx.return_value = vroot[0]
         parent.winfo_vrooty.return_value = vroot[1]
@@ -737,6 +737,7 @@ class CourseGeometryTests(unittest.TestCase):
             library_rows=lambda: [],
             saved_geometry=saved_geometry,
             report_geometry=report_geometry,
+            dpi_scale=dpi_scale,
         )
         mock_window = Mock()
         bindings = {}
@@ -750,6 +751,34 @@ class CourseGeometryTests(unittest.TestCase):
     def test_open_restores_the_saved_geometry_when_its_position_is_visible(self):
         _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+30+40")
         mock_window.geometry.assert_called_once_with("900x620+30+40")
+
+    def test_open_scales_the_saved_geometry_at_150_percent(self):
+        _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+30+40", dpi_scale=1.5)
+        mock_window.geometry.assert_called_once_with("1350x930+45+60")
+
+    def test_open_scales_the_theme_default_without_a_saved_geometry(self):
+        _builder, mock_window, _bindings = self.open_builder(dpi_scale=1.5)
+        mock_window.geometry.assert_called_once_with("1500x930")
+
+    def test_open_scales_the_minimum_size(self):
+        _builder, mock_window, _bindings = self.open_builder(dpi_scale=1.5)
+        mock_window.minsize.assert_called_once_with(1050, 660)
+
+    def test_open_uses_the_scaled_threshold_for_a_narrow_sliver(self):
+        # 120 physical pixels would show at the unscaled 100 px threshold
+        # but not at the scaled 150 px one, so the position is dropped.
+        _builder, mock_window, _bindings = self.open_builder(saved_geometry="900x620+-820+40", dpi_scale=1.5)
+        mock_window.geometry.assert_called_once_with("1350x930")
+
+    def test_save_window_geometry_reports_canonical_units(self):
+        builder = make_builder()
+        builder._dpi_scale = 1.5
+        builder.window.state.return_value = "normal"
+        builder.window.geometry.return_value = "1350x930+45+60"
+        builder._report_geometry = Mock()
+        builder.save_window_geometry()
+        builder._report_geometry.assert_called_once_with("900x620+30+40")
+        self.assertEqual(builder._saved_geometry, "900x620+30+40")
 
     def test_open_uses_the_theme_default_without_a_saved_geometry(self):
         _builder, mock_window, _bindings = self.open_builder()

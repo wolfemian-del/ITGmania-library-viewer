@@ -132,6 +132,29 @@ class DistributionUITests(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_panel_width_scales_with_the_display_factor(self):
+        """The panel frame is built at the theme width scaled by the display factor (issue #51)."""
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        try:
+            content = app.tk.Frame(root)
+            panel = dp.DistributionPanel(
+                button_factory=Mock(return_value=Mock()),
+                search_var=Mock(), diff_var=Mock(),
+                show_distribution_panel=Mock(get=Mock(return_value=False)),
+                distribution_metric=Mock(get=Mock(return_value="Meter")),
+                filter_rows=Mock(return_value=[]),
+                apply_chart_filter=Mock(), save_settings=Mock(),
+                dpi_scale=1.5)
+            panel.build_panel(content, Mock(), lambda: Mock())
+            self.assertEqual(int(panel.dist_panel.cget("width")), 480)
+        finally:
+            root.destroy()
+
     def test_question_mark_bar_is_non_interactive(self):
         """Clicking the '?' bar should do nothing and not filter."""
         panel = object.__new__(dp.DistributionPanel)

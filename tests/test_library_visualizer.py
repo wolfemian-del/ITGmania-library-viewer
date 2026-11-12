@@ -12,8 +12,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 import distribution_panel as dp
+import library_data
 import library_visualizer as app
 import row_tints
+import theme
 
 
 class CourseGeometryAppTests(unittest.TestCase):
@@ -64,6 +66,18 @@ class CourseGeometryAppTests(unittest.TestCase):
             instance._save_settings()
             data = json.loads(instance.settings_path.read_text(encoding="utf-8"))
             self.assertNotIn("course_geometry", data)
+
+    def test_save_settings_stores_column_widths_in_canonical_units(self):
+        # The table reports physical pixels; at 150% a 195 px column is
+        # stored as 130, so it comes back the same at any scale (issue #51).
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.make_saving_app(directory, None)
+            instance._dpi_scale = 1.5
+            instance.tree.column.return_value = 195
+            instance._save_settings()
+            data = json.loads(instance.settings_path.read_text(encoding="utf-8"))
+            self.assertTrue(data["column_widths"])
+            self.assertEqual(set(data["column_widths"].values()), {130})
 
     def test_stored_geometry_survives_a_save_triggered_by_an_unrelated_change(self):
         # __init__ seeds course_geometry from the file, so a routine save in a
@@ -2691,6 +2705,47 @@ class LibraryAppExitTests(unittest.TestCase):
         instance._close_app()
         instance.advanced_search.save_window_geometry.assert_called_once_with()
         instance.root.destroy.assert_called_once_with()
+
+
+class LiveDpiScaleTests(unittest.TestCase):
+    """DPI awareness (issue #51) in a real window: the factor comes from the
+    display, and the window, its minimum size, and its column widths are the
+    canonical theme values scaled by it."""
+
+    def test_the_window_opens_at_the_scaled_default_geometry(self):
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(settings_dir.cleanup)
+        settings_path = Path(settings_dir.name) / "settings.json"
+        patcher = patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        try:
+            application = app.LibraryApp(root)
+            # Let the geometry manager settle the requested size before
+            # reading it back: an unmapped window still reports 1x1.
+            root.update_idletasks()
+            factor = application._dpi_scale
+            self.assertEqual(factor, library_data.dpi_scale_factor(root.winfo_fpixels("1i")))
+            self.assertGreater(factor, 0)
+            default_width, default_height = (int(part) for part in theme.WINDOW_DEFAULT_GEOMETRY.split("x"))
+            parsed = library_data.parse_course_geometry(root.geometry())
+            self.assertIsNotNone(parsed)
+            width, height, _x, _y = parsed
+            self.assertEqual((width, height),
+                             (library_data.scale_pixels(default_width, factor), library_data.scale_pixels(default_height, factor)))
+            self.assertEqual(root.minsize(),
+                             (library_data.scale_pixels(theme.WINDOW_MIN_SIZE[0], factor),
+                              library_data.scale_pixels(theme.WINDOW_MIN_SIZE[1], factor)))
+            self.assertEqual(application.tree.column("Title", "width"),
+                             library_data.scale_pixels(130, factor))
+        finally:
+            root.destroy()
 
 
 if __name__ == "__main__":

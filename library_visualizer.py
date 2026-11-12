@@ -37,7 +37,9 @@ from library_data import (
     CHART_FILTER_FIELDS,
     bpm_sort_key,
     cache_dir_candidates,
+    declare_dpi_awareness,
     difficulty_sort_key,
+    dpi_scale_factor,
     find_unreadable_directives,
     first_existing_directory,
     format_duration,
@@ -48,6 +50,8 @@ from library_data import (
     parse_cache_file,
     parse_course_geometry,
     parse_search_query,
+    scale_geometry,
+    scale_pixels,
     stats_index,
 )
 
@@ -85,6 +89,9 @@ class LibraryApp:
     _search_refresh_after_id = None
     _batching_filter_changes = False
     _load_started_at = None
+    # The display scale factor (1.0 at 100% DPI): bare instances in tests
+    # have no window to measure, so they read canonical units as-is.
+    _dpi_scale = 1.0
 
     # The Data paths dialog's note texts (UI redesign): the first-run note is
     # the sketch's wording; the dead-paths sentence is a Muse proposal, to be
@@ -99,8 +106,13 @@ class LibraryApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("ITGmania Library Visualizer")
-        self.root.geometry(theme.WINDOW_DEFAULT_GEOMETRY)
-        self.root.minsize(*theme.WINDOW_MIN_SIZE)
+        # The display scale factor (issue #51): 1.0 at 100% DPI, 1.5 at
+        # 150%. Every pixel number below is stored in canonical 100%
+        # units and scaled here, at the point it reaches the window.
+        self._dpi_scale = dpi_scale_factor(self.root.winfo_fpixels("1i"))
+        self.root.geometry(scale_geometry(theme.WINDOW_DEFAULT_GEOMETRY, self._dpi_scale))
+        self.root.minsize(scale_pixels(theme.WINDOW_MIN_SIZE[0], self._dpi_scale),
+                          scale_pixels(theme.WINDOW_MIN_SIZE[1], self._dpi_scale))
         self.root.configure(bg=theme.BG_WINDOW)
         self.rows: list[dict] = []
         self.loaded_source_paths = None
@@ -249,7 +261,7 @@ class LibraryApp:
         style = ttk.Style()
         style.theme_use("clam")
         style.configure("Treeview", background=theme.BG_TABLE, foreground=theme.TEXT_TABLE, fieldbackground=theme.BG_TABLE,
-                        rowheight=theme.TABLE_ROW_HEIGHT, borderwidth=0, font=theme.FONT_BODY)
+                        rowheight=scale_pixels(theme.TABLE_ROW_HEIGHT, self._dpi_scale), borderwidth=0, font=theme.FONT_BODY)
         style.configure("Treeview.Heading", background=theme.BG_TABLE_HEADING, foreground=theme.TEXT_HEADING, relief="flat",
                         font=theme.FONT_BODY_BOLD)
         style.map("Treeview", background=[("selected", theme.SELECTION_BG)], foreground=[("selected", theme.TEXT_ON_ACCENT)])
@@ -285,13 +297,13 @@ class LibraryApp:
         self.root.option_add("*TCombobox*Listbox.selectForeground", theme.WHITE)
 
     def _build(self):
-        top = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=18, pady=14)
+        top = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=scale_pixels(18, self._dpi_scale), pady=scale_pixels(14, self._dpi_scale))
         top.pack(fill="x")
         tk.Label(top, text="ITGmania Library Visualizer", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
                  font=theme.FONT_APP_TITLE).pack(side="left")
         self.status = tk.StringVar(value="No saved library yet. Choose File → Data paths…, then Load / refresh.")
         tk.Label(top, textvariable=self.status, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW,
-                 font=theme.FONT_BODY).pack(side="right", padx=8)
+                 font=theme.FONT_BODY).pack(side="right", padx=scale_pixels(8, self._dpi_scale))
         # The course builder component (course_builder.py): created here because it needs the
         # status variable above; the Build course button below calls its open_dialog directly.
         # The geometry it opens with comes from settings (issue #25); it is initialized here,
@@ -301,14 +313,16 @@ class LibraryApp:
         self.course_builder = CourseBuilder(self.root, self.status, self._button, self._selected_rows_for_course,
                                             self._library_rows_for_course,
                                             saved_geometry=self.course_geometry,
-                                            report_geometry=self._course_geometry_changed)
+                                            report_geometry=self._course_geometry_changed,
+                                            dpi_scale=self._dpi_scale)
         # The Advanced Search component (advanced_search.py): it edits the search variable's
         # text through its field form; the Advanced… button below calls its open_dialog directly.
         self.advanced_search_geometry = self._valid_advanced_search_geometry(
             self.saved_settings.get("advanced_search_geometry"))
         self.advanced_search = AdvancedSearch(self.root, self._entry, self._button, self._combo, self.search_var,
                                               saved_geometry=self.advanced_search_geometry,
-                                              report_geometry=self._advanced_search_geometry_changed)
+                                              report_geometry=self._advanced_search_geometry_changed,
+                                              dpi_scale=self._dpi_scale)
         # The distribution panel component (distribution_panel.py): it owns the chart panel
         # beside the table. The four variables stay the app's own (the View menu binds one,
         # the settings save reads two), row pulls go through _filter_rows, and the panel's
@@ -322,38 +336,39 @@ class LibraryApp:
             distribution_metric=self.distribution_metric,
             filter_rows=self._filter_rows,
             apply_chart_filter=self.apply_chart_filter,
-            save_settings=self._save_settings)
+            save_settings=self._save_settings,
+            dpi_scale=self._dpi_scale)
         # The main window's X button goes through the same exit path as File → Exit (issue #87).
         self.root.protocol("WM_DELETE_WINDOW", self._close_app)
-        bar = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=18, pady=12)
+        bar = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=scale_pixels(18, self._dpi_scale), pady=scale_pixels(12, self._dpi_scale))
         bar.pack(fill="x")
-        tk.Label(bar, text="Search", fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(side="left", padx=(0, 6))
+        tk.Label(bar, text="Search", fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(side="left", padx=(0, scale_pixels(6, self._dpi_scale)))
         self.search_entry = self._entry(bar, "", self.search_var)
-        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
-        self._button(bar, "Advanced…", self.advanced_search.open_dialog).pack(side="left", padx=(0, 8))
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, scale_pixels(4, self._dpi_scale)))
+        self._button(bar, "Advanced…", self.advanced_search.open_dialog).pack(side="left", padx=(0, scale_pixels(8, self._dpi_scale)))
         self.pack_filter = self._combo(bar, self.pack_var, ["All packs"])
-        self.pack_filter.pack(side="left", padx=4)
+        self.pack_filter.pack(side="left", padx=scale_pixels(4, self._dpi_scale))
         self.type_filter = self._combo(bar, self.type_var, ["All types"])
-        self.type_filter.pack(side="left", padx=4)
+        self.type_filter.pack(side="left", padx=scale_pixels(4, self._dpi_scale))
         self.diff_filter = self._combo(bar, self.diff_var, ["All difficulties"])
-        self.diff_filter.pack(side="left", padx=4)
+        self.diff_filter.pack(side="left", padx=scale_pixels(4, self._dpi_scale))
         # A pick in any filter dropdown saves the settings at once (proposal
         # 0006); _save_settings accepts the event the binding passes.
         for combo in (self.pack_filter, self.type_filter, self.diff_filter):
             combo.bind("<<ComboboxSelected>>", self._save_settings)
         tk.Checkbutton(bar, text="Scored only", variable=self.scored_var, bg=theme.BG_WINDOW, fg=theme.TEXT_LABEL,
                        activebackground=theme.BG_WINDOW, activeforeground=theme.TEXT_ON_ACCENT, selectcolor=theme.BG_INPUT,
-                       font=theme.FONT_BODY).pack(side="left", padx=9)
+                       font=theme.FONT_BODY).pack(side="left", padx=scale_pixels(9, self._dpi_scale))
         self.load_button = self._button(bar, "Load / refresh", self.load_data, primary=True)
-        self.load_button.pack(side="left", padx=4)
-        self._button(bar, "Export CSV", self.export_csv).pack(side="left", padx=4)
-        self._button(bar, "Build course…", self.course_builder.open_dialog).pack(side="left", padx=4)
+        self.load_button.pack(side="left", padx=scale_pixels(4, self._dpi_scale))
+        self._button(bar, "Export CSV", self.export_csv).pack(side="left", padx=scale_pixels(4, self._dpi_scale))
+        self._button(bar, "Build course…", self.course_builder.open_dialog).pack(side="left", padx=scale_pixels(4, self._dpi_scale))
         # The label is the component's to set: build_panel (below) puts the saved state's
         # ◀/▶ text on the button, and the component rewrites it on every visibility change.
         self.dist_button = self._button(bar, "", self.distribution_panel.toggle)
-        self.dist_button.pack(side="left", padx=4)
+        self.dist_button.pack(side="left", padx=scale_pixels(4, self._dpi_scale))
         self.content_frame = tk.Frame(self.root, bg=theme.BG_WINDOW)
-        self.content_frame.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+        self.content_frame.pack(fill="both", expand=True, padx=scale_pixels(18, self._dpi_scale), pady=(0, scale_pixels(8, self._dpi_scale)))
         self.distribution_panel.build_panel(
             self.content_frame, self.dist_button, lambda: self.table_frame)
         self.table_frame = tk.Frame(self.content_frame, bg=theme.BG_WINDOW)
@@ -371,7 +386,9 @@ class LibraryApp:
                 width = 150
             self.default_column_widths[col] = width
             width = self.column_widths[col] or width
-            self.tree.column(col, width=width, minwidth=55, stretch=False, anchor="w" if col in
+            # Canonical widths (saved or default), scaled to this display.
+            self.tree.column(col, width=scale_pixels(width, self._dpi_scale),
+                             minwidth=scale_pixels(55, self._dpi_scale), stretch=False, anchor="w" if col in
                              ("Title", "Subtitle", "Artist", "Pack", "Chart") else "center")
         vs = ttk.Scrollbar(self.table_frame, orient="vertical", command=self.tree.yview)
         hs = ttk.Scrollbar(self.table_frame, orient="horizontal", command=self.tree.xview)
@@ -395,8 +412,8 @@ class LibraryApp:
         self._tree_tint = row_tints.SelectedRowTint(self.tree)
         self.tree.bind("<<TreeviewSelect>>", self._tree_tint.on_select, add="+")
         self.progress = ttk.Progressbar(self.root, mode="indeterminate", style="Horizontal.TProgressbar")
-        self.progress.pack(fill="x", padx=18, pady=(0, 4))
-        footer = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=18, pady=7)
+        self.progress.pack(fill="x", padx=scale_pixels(18, self._dpi_scale), pady=(0, scale_pixels(4, self._dpi_scale)))
+        footer = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=scale_pixels(18, self._dpi_scale), pady=scale_pixels(7, self._dpi_scale))
         footer.pack(fill="x")
         self.count_label = tk.StringVar(value="0 charts")
         tk.Label(footer, textvariable=self.count_label, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW,
@@ -769,7 +786,9 @@ class LibraryApp:
             "stats_file": self.stats_var.get(),
             "column_order": self.column_order,
             "column_visibility": {column: variable.get() for column, variable in self.column_visibility.items()},
-            "column_widths": {column: self.tree.column(column, "width") for column in HEADERS},
+            # Column widths are read back in physical pixels; divide by the
+            # factor so the file keeps canonical 100% units (issue #51).
+            "column_widths": {column: scale_pixels(self.tree.column(column, "width"), 1.0 / self._dpi_scale) for column in HEADERS},
             "sort_keys": [[column, descending] for column, descending in self.sort_keys],
             "show_distribution": self.show_distribution_panel.get(),
             "distribution_metric": self.distribution_metric.get(),
@@ -903,7 +922,7 @@ class LibraryApp:
             variable.set(column in DEFAULT_VISIBLE_COLUMNS)
         self._sync_group_checks()
         for column, width in self.default_column_widths.items():
-            self.tree.column(column, width=width)
+            self.tree.column(column, width=scale_pixels(width, self._dpi_scale))
         visible = [column for column in self.column_order if self.column_visibility[column].get()]
         self.tree.configure(displaycolumns=visible)
         self._save_settings()
@@ -958,11 +977,11 @@ class LibraryApp:
 
     def _path_row(self, parent, label, variable, command):
         row = tk.Frame(parent, bg=theme.BG_PANEL)
-        row.pack(fill="x", pady=3)
+        row.pack(fill="x", pady=scale_pixels(3, self._dpi_scale))
         tk.Label(row, text=label, width=17, anchor="w", bg=theme.BG_PANEL, fg=theme.TEXT_FIELD_LABEL,
                  font=theme.FONT_BODY).pack(side="left")
         entry = self._entry(row, "", variable)
-        entry.pack(side="left", fill="x", expand=True, padx=8)
+        entry.pack(side="left", fill="x", expand=True, padx=scale_pixels(8, self._dpi_scale))
         self._button(row, "Browse…", command).pack(side="left")
         return entry
 
@@ -981,11 +1000,13 @@ class LibraryApp:
         return ttk.Combobox(parent, textvariable=variable, values=values, state="readonly", width=18,
                             font=theme.FONT_BODY)
 
-    @staticmethod
-    def _button(parent, text, command, primary=False):
+    def _button(self, parent, text, command, primary=False):
+        # An instance method so the padding can scale with this display
+        # (issue #51); callers pass it around bound.
         return tk.Button(parent, text=text, command=command, bg=theme.ACCENT_BG if primary else theme.BG_BUTTON,
                          fg=theme.TEXT_ON_ACCENT, activebackground=theme.ACCENT_BG_HOVER if primary else theme.BG_BUTTON_HOVER,
-                         activeforeground=theme.TEXT_ON_ACCENT, relief="flat", padx=theme.BUTTON_PADX, pady=theme.BUTTON_PADY,
+                         activeforeground=theme.TEXT_ON_ACCENT, relief="flat",
+                         padx=scale_pixels(theme.BUTTON_PADX, self._dpi_scale), pady=scale_pixels(theme.BUTTON_PADY, self._dpi_scale),
                          font=theme.FONT_BODY_BOLD, cursor="hand2")
 
     def choose_cache(self):
@@ -1017,12 +1038,12 @@ class LibraryApp:
         window = tk.Toplevel(self.root)
         self._data_paths_window = window
         window.title("Where is your library?")
-        window.geometry("560x260")
+        window.geometry(scale_geometry("560x260", self._dpi_scale))
         window.resizable(False, False)
         window.configure(bg=theme.BG_WINDOW)
         window.transient(self.root)
 
-        form = tk.Frame(window, bg=theme.BG_WINDOW, padx=18)
+        form = tk.Frame(window, bg=theme.BG_WINDOW, padx=scale_pixels(18, self._dpi_scale))
         form.pack(fill="x")
         self._data_paths_form = form
         # The note explains why the dialog opened (first run, dead saved
@@ -1033,17 +1054,17 @@ class LibraryApp:
         if note is None:
             note = "" if self._current_paths_match_loaded() else self._DATA_PATHS_DIFFER_NOTE
         self._data_paths_note = tk.Label(
-            window, text="", wraplength=520, anchor="w", justify="left",
+            window, text="", wraplength=scale_pixels(520, self._dpi_scale), anchor="w", justify="left",
             fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, font=theme.FONT_BODY)
         self._set_data_paths_note(note or "")
 
         cache_entry = self._path_row(form, "Cache / Songs", self.cache_var, self.choose_cache)
         stats_entry = self._path_row(form, "Player Stats.xml", self.stats_var, self.choose_stats)
 
-        btn_row = tk.Frame(window, bg=theme.BG_WINDOW, padx=18)
-        btn_row.pack(fill="x", pady=(14, 16))
+        btn_row = tk.Frame(window, bg=theme.BG_WINDOW, padx=scale_pixels(18, self._dpi_scale))
+        btn_row.pack(fill="x", pady=(scale_pixels(14, self._dpi_scale), scale_pixels(16, self._dpi_scale)))
         self._button(btn_row, "Load library", self._data_paths_load, primary=True).pack(side="right")
-        self._button(btn_row, "Cancel", self._close_data_paths_dialog).pack(side="right", padx=(0, 8))
+        self._button(btn_row, "Cancel", self._close_data_paths_dialog).pack(side="right", padx=(0, scale_pixels(8, self._dpi_scale)))
 
         window.protocol("WM_DELETE_WINDOW", self._close_data_paths_dialog)
         window.bind("<Escape>", lambda _event: self._close_data_paths_dialog() or "break")
@@ -1072,9 +1093,9 @@ class LibraryApp:
             # path edited while the dialog is open).
             form = getattr(self, "_data_paths_form", None)
             if form is not None:
-                note.pack(anchor="w", padx=18, pady=(14, 2), before=form)
+                note.pack(anchor="w", padx=scale_pixels(18, self._dpi_scale), pady=(scale_pixels(14, self._dpi_scale), scale_pixels(2, self._dpi_scale)), before=form)
             else:
-                note.pack(anchor="w", padx=18, pady=(14, 2))
+                note.pack(anchor="w", padx=scale_pixels(18, self._dpi_scale), pady=(scale_pixels(14, self._dpi_scale), scale_pixels(2, self._dpi_scale)))
         else:
             note.pack_forget()
 
@@ -1591,14 +1612,14 @@ class LibraryApp:
         window.transient(self.root)
 
         tk.Label(window, text="ITGmania Library Visualizer", fg=theme.TEXT_TITLE, bg=theme.BG_WINDOW,
-                 font=theme.FONT_DIALOG_TITLE).pack(anchor="w", padx=24, pady=(18, 2))
+                 font=theme.FONT_DIALOG_TITLE).pack(anchor="w", padx=scale_pixels(24, self._dpi_scale), pady=(scale_pixels(18, self._dpi_scale), scale_pixels(2, self._dpi_scale)))
         tk.Label(window, text=f"Version {__version__}", fg=theme.TEXT_PRIMARY, bg=theme.BG_WINDOW,
-                 font=theme.FONT_BODY_BOLD).pack(anchor="w", padx=24)
+                 font=theme.FONT_BODY_BOLD).pack(anchor="w", padx=scale_pixels(24, self._dpi_scale))
         tk.Label(window, text="Released under the MIT License (see the LICENSE file).", fg=theme.TEXT_MUTED,
-                 bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(anchor="w", padx=24, pady=(10, 14))
+                 bg=theme.BG_WINDOW, font=theme.FONT_BODY).pack(anchor="w", padx=scale_pixels(24, self._dpi_scale), pady=(scale_pixels(10, self._dpi_scale), scale_pixels(14, self._dpi_scale)))
 
-        btn_row = tk.Frame(window, bg=theme.BG_WINDOW, padx=24)
-        btn_row.pack(fill="x", pady=(0, 16))
+        btn_row = tk.Frame(window, bg=theme.BG_WINDOW, padx=scale_pixels(24, self._dpi_scale))
+        btn_row.pack(fill="x", pady=(0, scale_pixels(16, self._dpi_scale)))
         self._button(btn_row, "Close", window.destroy, primary=True).pack(side="right")
 
         def _close(_event=None):
@@ -1614,6 +1635,9 @@ class LibraryApp:
 def main():
     if tk is None:
         sys.exit("Tkinter is required to run the ITGmania Library Visualizer GUI.")
+    # Declare DPI awareness before the first window exists (issue #51):
+    # without it Windows bitmap-stretches the app at 125%/150%.
+    declare_dpi_awareness()
     root = tk.Tk()
     LibraryApp(root)
     root.mainloop()

@@ -56,6 +56,7 @@ from library_data import (
     distribution_summary_stats,
     get_active_chart_filters,
     parse_search_query,
+    scale_pixels,
 )
 
 
@@ -74,8 +75,12 @@ class DistributionPanel:
     save_settings:            the app's settings save (visibility and metric persist)
     """
 
+    # The display scale factor (1.0 at 100% DPI): bare instances in tests
+    # have no window to measure, so they read canonical units as-is.
+    _dpi_scale = 1.0
+
     def __init__(self, button_factory, search_var, diff_var, show_distribution_panel,
-                 distribution_metric, filter_rows, apply_chart_filter, save_settings):
+                 distribution_metric, filter_rows, apply_chart_filter, save_settings, dpi_scale=1.0):
         self._button = button_factory
         self.search_var = search_var
         self.diff_var = diff_var
@@ -84,6 +89,10 @@ class DistributionPanel:
         self._filter_rows = filter_rows
         self._apply_chart_filter = apply_chart_filter
         self._save_settings = save_settings
+        # The display scale factor (issue #51): 1.0 at 100% DPI, 1.5 at
+        # 150%. Pixel sizes are stored in canonical 100% units and scaled
+        # to physical pixels when the panel is built.
+        self._dpi_scale = dpi_scale
         # Filled in by build_panel(); None until then — the panel does nothing before it exists:
         self.dist_panel = None  # the panel frame; also the built-panel marker the guards check
         self.dist_summary_var = None
@@ -115,38 +124,42 @@ class DistributionPanel:
         """
         self.dist_button = toolbar_button
         self._sibling_frame = sibling_frame
-        self.dist_panel = tk.Frame(content_frame, bg=theme.BG_PANEL, width=theme.DIST_PANEL_WIDTH, padx=10, pady=10)
+        # The panel width is a pixel value in canonical 100% units; the
+        # wraplengths below derive from the scaled width.
+        panel_width = scale_pixels(theme.DIST_PANEL_WIDTH, self._dpi_scale)
+        self.dist_panel = tk.Frame(content_frame, bg=theme.BG_PANEL, width=panel_width,
+                                   padx=scale_pixels(10, self._dpi_scale), pady=scale_pixels(10, self._dpi_scale))
         self.dist_panel.pack_propagate(False)
 
         # Header: Title + Close button
         hdr = tk.Frame(self.dist_panel, bg=theme.BG_PANEL)
-        hdr.pack(fill="x", pady=(0, 6))
+        hdr.pack(fill="x", pady=(0, scale_pixels(6, self._dpi_scale)))
         tk.Label(hdr, text="Distribution", fg=theme.TEXT_TITLE, bg=theme.BG_PANEL,
                  font=theme.FONT_PANEL_TITLE).pack(side="left")
         self._button(hdr, "✕", self.toggle).pack(side="right")
 
         # Metric selector
         metric_bar = tk.Frame(self.dist_panel, bg=theme.BG_PANEL)
-        metric_bar.pack(fill="x", pady=(4, 6))
+        metric_bar.pack(fill="x", pady=(scale_pixels(4, self._dpi_scale), scale_pixels(6, self._dpi_scale)))
         for m in ("Meter", "Difficulty", "BPM"):
             b = tk.Radiobutton(
                 metric_bar, text=m, value=m, variable=self.distribution_metric,
                 indicatoron=False, bg=theme.BG_INPUT, fg=theme.TEXT_PRIMARY, selectcolor=theme.ACCENT_BG,
                 activebackground=theme.ACCENT_BG, activeforeground=theme.WHITE, font=theme.FONT_SMALL,
-                command=self._on_distribution_metric_changed, padx=6, pady=3,
+                command=self._on_distribution_metric_changed, padx=scale_pixels(6, self._dpi_scale), pady=scale_pixels(3, self._dpi_scale),
             )
-            b.pack(side="left", padx=2, expand=True, fill="x")
+            b.pack(side="left", padx=scale_pixels(2, self._dpi_scale), expand=True, fill="x")
 
         # Summary line
         self.dist_summary_var = tk.StringVar(value="")
         tk.Label(self.dist_panel, textvariable=self.dist_summary_var, fg=theme.TEXT_MUTED, bg=theme.BG_PANEL,
-                 font=theme.FONT_SMALL, wraplength=theme.DIST_PANEL_WIDTH - 24, justify="left").pack(fill="x", pady=(0, 6))
+                 font=theme.FONT_SMALL, wraplength=panel_width - 24, justify="left").pack(fill="x", pady=(0, scale_pixels(6, self._dpi_scale)))
 
         # Active filter banner: shown just above the chart, only while a chart filter is active.
         # It is built here but not packed; show_rows packs it before the chart container.
-        self.dist_banner_frame = tk.Frame(self.dist_panel, bg=theme.BG_INPUT, padx=8, pady=5)
+        self.dist_banner_frame = tk.Frame(self.dist_panel, bg=theme.BG_INPUT, padx=scale_pixels(8, self._dpi_scale), pady=scale_pixels(5, self._dpi_scale))
         self.dist_banner_label = tk.Label(self.dist_banner_frame, text="", fg=theme.ACCENT, bg=theme.BG_INPUT,
-                                          font=theme.FONT_BODY, wraplength=theme.DIST_PANEL_WIDTH - 90,
+                                          font=theme.FONT_BODY, wraplength=panel_width - 90,
                                           justify="left", anchor="w")
         self.dist_banner_label.pack(side="left", fill="x", expand=True)
         self._button(self.dist_banner_frame, "Clear", self.clear_chart_filter).pack(side="right")
@@ -158,7 +171,7 @@ class DistributionPanel:
         self.dist_button.configure(
             text="Distribution ◀" if self.show_distribution_panel.get() else "Distribution ▶")
         if self.show_distribution_panel.get():
-            self.dist_panel.pack(side="right", fill="y", padx=(10, 0))
+            self.dist_panel.pack(side="right", fill="y", padx=(scale_pixels(10, self._dpi_scale), 0))
 
     def _ensure_distribution_canvas(self):
         if not _load_matplotlib():
@@ -183,7 +196,7 @@ class DistributionPanel:
             text="Install matplotlib to enable\ndistribution charts\n\nRun:\npip install matplotlib",
             fg=theme.TEXT_MUTED, bg=theme.BG_PANEL, font=theme.FONT_BODY, justify="center",
         )
-        self._matplotlib_missing_label.pack(expand=True, pady=40)
+        self._matplotlib_missing_label.pack(expand=True, pady=scale_pixels(40, self._dpi_scale))
 
     def set_visible(self, visible: bool):
         """Single source of truth for panel visibility (toolbar + View menu)."""
@@ -191,7 +204,7 @@ class DistributionPanel:
             return
         self.show_distribution_panel.set(visible)
         if visible:
-            self.dist_panel.pack(side="right", fill="y", padx=(10, 0), before=self._sibling_frame())
+            self.dist_panel.pack(side="right", fill="y", padx=(scale_pixels(10, self._dpi_scale), 0), before=self._sibling_frame())
             self.dist_button.configure(text="Distribution ◀")
             self.show_rows(self._last_visible_rows)
         else:
@@ -257,7 +270,7 @@ class DistributionPanel:
         if active_filters:
             banner = " · ".join(f"{name} {value}" for name, value in active_filters)
             self.dist_banner_label.configure(text=f"Filtered by: {banner}")
-            self.dist_banner_frame.pack(fill="x", pady=(0, 6), before=self.dist_chart_frame)
+            self.dist_banner_frame.pack(fill="x", pady=(0, scale_pixels(6, self._dpi_scale)), before=self.dist_chart_frame)
         else:
             self.dist_banner_frame.pack_forget()
 
