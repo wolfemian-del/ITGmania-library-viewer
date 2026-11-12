@@ -328,6 +328,64 @@ class DistributionTests(unittest.TestCase):
         # Empty rows
         self.assertEqual(data.distribution_summary_stats("Meter", []), "0 charts")
 
+    def test_non_finite_values_are_excluded_from_summary_stats(self):
+        # Probe-sweep cosmetic 1: a hostile tempo used to print "Mean: inf"
+        # / "Mean: nan" in the distribution summary.
+        rows = [
+            {"Meter": 10, "bpm_max": 150},
+            {"Meter": float("inf"), "bpm_max": float("inf")},
+            {"Meter": float("nan"), "bpm_max": float("nan")},
+            {"Meter": 12, "bpm_max": 180},
+        ]
+        meter_summary = data.distribution_summary_stats("Meter", rows)
+        self.assertIn("Median: 11", meter_summary)
+        self.assertNotIn("inf", meter_summary)
+        self.assertNotIn("nan", meter_summary)
+        bpm_summary = data.distribution_summary_stats("BPM", rows)
+        self.assertIn("Median: 165", bpm_summary)
+        self.assertNotIn("inf", bpm_summary)
+        self.assertNotIn("nan", bpm_summary)
+        # All non-finite reads like no values at all.
+        hostile = [{"Meter": float("nan"), "bpm_max": float("inf")}]
+        self.assertEqual(data.distribution_summary_stats("Meter", hostile), "1 charts")
+        self.assertEqual(data.distribution_summary_stats("BPM", hostile), "1 charts")
+
+    def test_nan_meters_form_a_single_bar(self):
+        # Probe-sweep cosmetic 2: NaN is not equal to itself, so each NaN
+        # row used to make a bar of its own, each claiming the full count.
+        rows = [
+            {"Meter": 10},
+            {"Meter": float("nan")},
+            {"Meter": "nan"},
+            {"Meter": float("inf")},
+        ]
+        dist = data.aggregate_meter_distribution(rows)
+        labels = [item[0] for item in dist]
+        counts = {item[0]: item[1] for item in dist}
+        self.assertEqual(labels.count("nan"), 1)
+        self.assertEqual(counts["nan"], 2)
+        self.assertEqual(counts["10"], 1)
+        self.assertEqual(counts["inf"], 1)
+        # Bars add up to the row count (no double-counting).
+        self.assertEqual(sum(item[1] for item in dist), 4)
+
+    def test_nan_bar_shows_active_when_its_filter_is_typed(self):
+        # Probe-sweep cosmetic 3: filter_texts_match("nan", "nan") was False.
+        rows = [{"Meter": float("nan")}, {"Meter": 10}]
+        dist = data.aggregate_meter_distribution(rows, active_val="nan")
+        actives = {item[0]: item[3] for item in dist}
+        self.assertTrue(actives["nan"])
+        self.assertFalse(actives["10"])
+
+    def test_filter_texts_match_treats_nan_as_nan(self):
+        match = data.filter_texts_match
+        self.assertTrue(match("nan", "nan"))
+        self.assertTrue(match("=nan", "nan"))
+        self.assertTrue(match("nan", "=nan"))
+        self.assertFalse(match("nan", "inf"))
+        self.assertFalse(match("nan", "11"))
+        self.assertTrue(match("nan-nan", "nan-nan"))
+
 
 class ChartClickLogicTests(unittest.TestCase):
     """The chart's pure decision logic, extracted from the window methods (proposal 0005 step 2).
