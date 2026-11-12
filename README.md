@@ -12,9 +12,9 @@ python library_visualizer.py
 
 Optional: install `matplotlib` (`pip install matplotlib`, or `pip install -r requirements.txt`) to display interactive collection distribution charts (Meter, Difficulty, and BPM) in the collapsible side panel. Without it the panel shows an install hint and everything else works as usual.
 
-The app starts with the usual ITGmania cache location for your platform filled in when it exists. Choose the flat `Cache/Songs` folder and the player's `Stats.xml` in **File → Data paths…**, then choose **Load / refresh**. The `Stats.xml` can be selected from a local profile folder; it is read only. After the first refresh, the app saves a local snapshot of the parsed chart library and restores it on later launches. Use **Load / refresh** when you want to reread the cache and scores; the saved snapshot does not update automatically when those files change.
+The app starts with the usual ITGmania cache location for your platform filled in when it exists. Select the flat `Cache/Songs` folder and the player's `Stats.xml` with **Browse…**, then choose **Load / refresh**. The `Stats.xml` can be selected from a local profile folder; it is read only. After the first refresh, the app saves a local snapshot of the parsed chart library and restores it on later launches. Use **Load / refresh** when you want to reread the cache and scores; the saved snapshot does not update automatically when those files change. While it reads, the progress bar shows files done out of the total, with an estimated time left once the scan is under way.
 
-On Linux the usual cache location is `~/.itgmania/Cache/Songs`, and on macOS `~/Library/Application Support/ITGmania/Cache/Songs`; if the guess comes up empty, choose the cache and profile paths in **File → Data paths…**.
+On Linux the usual cache location is `~/.itgmania/Cache/Songs`, and on macOS `~/Library/Application Support/ITGmania/Cache/Songs`; if the guess comes up empty, choose the cache and profile paths with **Browse…**.
 
 ## Data expectations and troubleshooting
 
@@ -57,7 +57,7 @@ The **Time** column shows cached song music length as `minutes:seconds`; CSV exp
 
 ## Data paths
 
-The cache folder is commonly `%APPDATA%\ITGmania\Cache\Songs`. `Stats.xml` lives inside a player profile's save folder. The app does not edit either source. Change the paths in **File → Data paths…**; on a first run with no usable paths the app asks for them itself before showing an empty library.
+The cache folder is commonly `%APPDATA%\ITGmania\Cache\Songs`. `Stats.xml` lives inside a player profile's save folder. The app does not edit either source.
 
 The app remembers the selected data paths, the Pack/Type/Difficulty filter selections, column order, visibility, and widths, and the course and Advanced Search windows' sizes and positions, in `%APPDATA%\ITGmania Library Visualizer\settings.json` on Windows. The parsed library snapshot is stored beside it as `library_cache.json`. On other platforms these files use the standard per-user configuration directory. If the settings file exists but cannot be read (corrupt, mis-encoded, or not a JSON object), the app starts with its defaults and says so on the status line.
 
