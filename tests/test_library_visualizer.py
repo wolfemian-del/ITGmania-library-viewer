@@ -1010,6 +1010,221 @@ class InitialSnapshotTests(unittest.TestCase):
         instance.progress.stop.assert_called_once_with()
 
 
+class _StubStatus:
+    """A status line without a window: a str behind get/set, like StringVar."""
+
+    def __init__(self, value=""):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+    def set(self, value):
+        self._value = value
+
+
+class DiscardedSettingsStatusTests(unittest.TestCase):
+    """A settings file that exists but cannot be read is discarded for
+    defaults, and the status line must say so once the window is built —
+    including after the deferred snapshot load rewrites the status line."""
+
+    @staticmethod
+    def make_reader(settings_path):
+        instance = object.__new__(app.LibraryApp)
+        instance.settings_path = settings_path
+        return instance
+
+    def test_corrupt_settings_are_remembered_not_just_discarded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.make_reader(Path(directory) / "settings.json")
+            instance.settings_path.write_text("{not json", encoding="utf-8")
+
+            self.assertEqual(instance._read_settings(), {})
+            self.assertIn("Expecting", instance._settings_read_error)
+
+    def test_misencoded_settings_are_remembered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.make_reader(Path(directory) / "settings.json")
+            instance.settings_path.write_bytes(b"\xff\xfe not utf-8")
+
+            self.assertEqual(instance._read_settings(), {})
+            self.assertIsNotNone(instance._settings_read_error)
+
+    def test_non_object_settings_are_remembered(self):
+        # Readable JSON that is not an object is discarded the same way:
+        # there are no settings in it to keep.
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.make_reader(Path(directory) / "settings.json")
+            instance.settings_path.write_text("[1, 2]", encoding="utf-8")
+
+            self.assertEqual(instance._read_settings(), {})
+            self.assertIn("JSON object", instance._settings_read_error)
+
+    def test_missing_settings_file_records_no_failure(self):
+        # First run: no file yet is normal, and must not cry wolf.
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.make_reader(Path(directory) / "settings.json")
+
+            self.assertEqual(instance._read_settings(), {})
+            self.assertIsNone(instance._settings_read_error)
+
+    def test_readable_settings_record_no_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.make_reader(Path(directory) / "settings.json")
+            instance.settings_path.write_text(json.dumps({"cache_dir": "/cache"}), encoding="utf-8")
+
+            self.assertEqual(instance._read_settings(), {"cache_dir": "/cache"})
+            self.assertIsNone(instance._settings_read_error)
+
+    def test_bom_saved_settings_record_no_failure(self):
+        # Issue #119: a BOM is stripped by utf-8-sig, so a BOM-saved file
+        # reads fine and is not a discarded-settings case.
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.make_reader(Path(directory) / "settings.json")
+            instance.settings_path.write_bytes(
+                b"\xef\xbb\xbf" + json.dumps({"cache_dir": "/cache"}).encode("utf-8"))
+
+            self.assertEqual(instance._read_settings(), {"cache_dir": "/cache"})
+            self.assertIsNone(instance._settings_read_error)
+
+    def test_report_appends_the_message_once_and_keeps_the_snapshot_line(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._settings_read_error = "Expecting value: line 1 column 1 (char 0)"
+        instance.status = _StubStatus("Showing saved library snapshot · 3 charts · last refreshed 2026-11-10 08:00.")
+
+        instance._report_discarded_settings()
+        instance._report_discarded_settings()  # the build-time and deferred reports must not duplicate it
+
+        self.assertTrue(instance.status.get().startswith("Showing saved library snapshot"))
+        self.assertEqual(instance.status.get().count("Settings file could not be read"), 1)
+        self.assertIn("using defaults.", instance.status.get())
+
+    def test_report_does_nothing_without_a_recorded_failure(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._settings_read_error = None
+        instance.status = _StubStatus("Choose your cache's Songs folder and player Stats.xml, then click Load / refresh.")
+
+        instance._report_discarded_settings()
+
+        self.assertEqual(instance.status.get(),
+                         "Choose your cache's Songs folder and player Stats.xml, then click Load / refresh.")
+
+    def test_deferred_load_reports_discarded_settings_after_the_snapshot_status(self):
+        instance = object.__new__(app.LibraryApp)
+        instance.progress = Mock()
+        instance._load_generation = 0
+        instance._settings_read_error = "Expecting value: line 1 column 1 (char 0)"
+        instance.status = _StubStatus()
+
+        def load():
+            instance.status.set("No saved library snapshot yet. Choose your paths, then click Load / refresh.")
+
+        instance.load_cached_data = load
+
+        instance._load_initial_snapshot()
+
+        self.assertIn("No saved library snapshot yet.", instance.status.get())
+        self.assertIn("Settings file could not be read", instance.status.get())
+        instance.progress.stop.assert_called_once_with()
+
+    def test_deferred_load_does_not_report_when_a_user_scan_supersedes_it(self):
+        # A Load / refresh pressed inside the deferral window owns the
+        # status line; the startup notice must not scribble over its scan.
+        instance = object.__new__(app.LibraryApp)
+        instance.progress = Mock()
+        instance.load_cached_data = Mock()
+        instance._load_generation = 1
+        instance._settings_read_error = "Expecting value: line 1 column 1 (char 0)"
+        instance.status = _StubStatus("Loading…")
+
+        instance._load_initial_snapshot()
+
+        self.assertEqual(instance.status.get(), "Loading…")
+        instance.progress.stop.assert_not_called()
+
+
+class LiveDiscardedSettingsTests(unittest.TestCase):
+    """The same notice in a real window (live Tk; skipped headless)."""
+
+    def make_root(self):
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        self.addCleanup(root.destroy)
+        return root
+
+    def make_settings(self, content, binary=False):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        settings_path = Path(tmp.name) / "settings.json"
+        if binary:
+            settings_path.write_bytes(content)
+        else:
+            settings_path.write_text(content, encoding="utf-8")
+        patcher = patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return Path(tmp.name), settings_path
+
+    def pump_until(self, root, predicate, timeout=10):
+        deadline = time.monotonic() + timeout
+        while not predicate() and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.02)
+        self.assertTrue(predicate(), "timed out waiting for the deferred startup load")
+
+    def test_live_window_reports_corrupt_settings_and_keeps_the_notice(self):
+        root = self.make_root()
+        self.make_settings("{not json")
+
+        application = app.LibraryApp(root)
+        # Visible as soon as the window is built, before the deferred load.
+        self.assertIn("Settings file could not be read", application.status.get())
+        self.assertIn("using defaults.", application.status.get())
+        # And still there once the deferred snapshot load has rewritten the
+        # status line (no snapshot file here, so it reports that instead).
+        self.pump_until(root, lambda: "No saved library snapshot yet." in application.status.get())
+        self.assertIn("Settings file could not be read", application.status.get())
+
+    def test_live_window_with_readable_settings_shows_no_notice(self):
+        root = self.make_root()
+        self.make_settings(json.dumps({"cache_dir": "/cache"}))
+
+        application = app.LibraryApp(root)
+        self.pump_until(root, lambda: "No saved library snapshot yet." in application.status.get())
+        self.assertNotIn("Settings file could not be read", application.status.get())
+
+    def test_live_window_with_a_snapshot_still_reports_discarded_settings(self):
+        root = self.make_root()
+        settings_dir, settings_path = self.make_settings("{not json")
+        # With the settings discarded, the app falls back to its guessed
+        # default paths, so the snapshot must be written for those paths
+        # to restore — the same paths __init__ derives from the defaults.
+        default_cache = app.first_existing_directory(app.cache_dir_candidates())
+        cache_dir = str(default_cache) if default_cache is not None else ""
+        default_stats = Path.cwd() / "Stats.xml"
+        stats_file = str(default_stats) if default_stats.is_file() else ""
+        row = {header: "" for header in app.HEADERS}
+        row.update({"Title": "Song", "Pack": "P", "Type": "dance-single",
+                    "Difficulty": "Hard", "Meter": 10, "Course path": "P/Song"})
+        payload = {"schema_version": app.LIBRARY_CACHE_SCHEMA_VERSION,
+                   "cache_dir": cache_dir, "stats_file": stats_file,
+                   "refreshed_at": "2026-11-10T08:00:00-05:00", "files": 1,
+                   "skipped_files": 0, "files_without_charts": 0,
+                   "nested_song_tree": False, "rows": [dict(row) for _ in range(3)]}
+        (settings_dir / "library_cache.json").write_text(json.dumps(payload))
+
+        application = app.LibraryApp(root)
+        # The snapshot load owns the status line while it runs.
+        self.assertEqual(application.status.get(), "Loading saved library…")
+        self.pump_until(root, lambda: len(application.tree.get_children()) >= 3)
+        self.assertTrue(application.status.get().startswith("Showing saved library snapshot"))
+        self.assertIn("Settings file could not be read", application.status.get())
+
+
 class LiveStartupSnapshotTests(unittest.TestCase):
     """Startup with a saved snapshot, in a real window: construction returns
     before the snapshot is read; the load lands once the event loop runs."""
