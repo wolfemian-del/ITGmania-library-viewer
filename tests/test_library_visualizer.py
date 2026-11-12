@@ -52,7 +52,8 @@ class CourseGeometryAppTests(unittest.TestCase):
         instance.diff_var = Mock(get=Mock(return_value="All difficulties"))
         instance.course_geometry = course_geometry
         instance.advanced_search_geometry = None
-        instance._last_saved_settings = None
+        instance._settings_store = library_data.SettingsStore(instance.settings_path)
+        instance._settings_store.load()
         return instance
 
     def test_save_settings_includes_the_key_only_when_a_geometry_is_set(self):
@@ -182,7 +183,8 @@ class AdvancedSearchGeometryAppTests(unittest.TestCase):
         instance.diff_var = Mock(get=Mock(return_value="All difficulties"))
         instance.course_geometry = None
         instance.advanced_search_geometry = advanced_search_geometry
-        instance._last_saved_settings = None
+        instance._settings_store = library_data.SettingsStore(instance.settings_path)
+        instance._settings_store.load()
         return instance
 
     def test_save_settings_includes_the_key_only_when_a_geometry_is_set(self):
@@ -280,7 +282,6 @@ class LibrarySnapshotTests(unittest.TestCase):
             instance.library_cache_path, app.HEADERS, library_data.LIBRARY_CACHE_SCHEMA_VERSION)
         instance.course_geometry = None
         instance.advanced_search_geometry = None
-        instance._last_saved_settings = None
         return instance
 
     @staticmethod
@@ -479,10 +480,10 @@ class LibrarySnapshotTests(unittest.TestCase):
             instance = self.make_app(root / "settings.json", cache_dir, stats_file)
             instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
             with instance.library_cache_path.open("r+", encoding="utf-8") as handle:
-                payload = app.json.load(handle)
+                payload = json.load(handle)
                 payload["schema_version"] = library_data.LIBRARY_CACHE_SCHEMA_VERSION + 1
                 handle.seek(0)
-                app.json.dump(payload, handle)
+                json.dump(payload, handle)
                 handle.truncate()
 
             instance.load_cached_data()
@@ -498,10 +499,10 @@ class LibrarySnapshotTests(unittest.TestCase):
             instance = self.make_app(root / "settings.json", cache_dir, stats_file)
             instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
             with instance.library_cache_path.open("r+", encoding="utf-8") as handle:
-                payload = app.json.load(handle)
+                payload = json.load(handle)
                 payload["schema_version"] = 2
                 handle.seek(0)
-                app.json.dump(payload, handle)
+                json.dump(payload, handle)
                 handle.truncate()
 
             instance.load_cached_data()
@@ -518,10 +519,10 @@ class LibrarySnapshotTests(unittest.TestCase):
             instance = self.make_app(root / "settings.json", cache_dir, stats_file)
             instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
             with instance.library_cache_path.open("r+", encoding="utf-8") as handle:
-                payload = app.json.load(handle)
+                payload = json.load(handle)
                 del payload["rows"][0]["Subtitle"]
                 handle.seek(0)
-                app.json.dump(payload, handle)
+                json.dump(payload, handle)
                 handle.truncate()
 
             instance.load_cached_data()
@@ -533,6 +534,8 @@ class LibrarySnapshotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             instance = self.make_app(root / "settings.json", root / "Cache", root / "Stats.xml")
+            instance._settings_store = library_data.SettingsStore(root / "settings.json")
+            instance._settings_store.load()
             instance.tree = Mock()
             instance.tree.column.return_value = 100
             instance.column_order = list(app.HEADERS)
@@ -543,60 +546,9 @@ class LibrarySnapshotTests(unittest.TestCase):
 
             instance._save_settings()
 
-            saved = instance._read_settings()
+            saved = instance._settings_store.load()
             self.assertTrue(saved.get("show_distribution"))
             self.assertEqual(saved.get("distribution_metric"), "Difficulty")
-
-    def test_settings_with_deeply_nested_json_returns_empty_dict(self):
-        # Issue #122: a settings file nested far past the recursion limit
-        # raises RecursionError out of json.load; it must fall back to
-        # defaults instead of killing startup before the window appears.
-        # Depth 1,000,000 for the same version-dependent reason as the
-        # snapshot test above: 10,000 levels raise on 3.12 but parse on
-        # 3.14, so the depth must exceed every supported version's limit.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            instance = self.make_app(root / "settings.json", root / "Cache", root / "Stats.xml")
-            instance.settings_path.write_text("[" * 1000000 + "]" * 1000000, encoding="utf-8")
-
-            self.assertEqual(instance._read_settings(), {})
-
-    @unittest.skipIf(sys.version_info < (3, 11),
-                     "the int-string conversion limit is 3.11+")
-    def test_settings_with_oversized_integer_returns_empty_dict(self):
-        # Issue #122: an integer past the 4,300-digit conversion limit
-        # raises ValueError out of json.load; same fallback as above.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            instance = self.make_app(root / "settings.json", root / "Cache", root / "Stats.xml")
-            instance.settings_path.write_text("[" + "9" * 5000 + "]", encoding="utf-8")
-
-            self.assertEqual(instance._read_settings(), {})
-
-    def test_settings_with_invalid_utf8_returns_empty_dict(self):
-        # A mis-encoded hand-edited settings.json must not crash startup:
-        # _read_settings runs in __init__, so an uncaught decode error
-        # would kill the app before the window appears. Same gap PR #116
-        # closed for the snapshot reader (load_cached_data).
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            instance = self.make_app(root / "settings.json", root / "Cache", root / "Stats.xml")
-            instance.settings_path.write_bytes(b"\xff\xfe not utf-8")
-
-            self.assertEqual(instance._read_settings(), {})
-
-    def test_settings_with_utf8_bom_are_honoured(self):
-        # Issue #119: a settings.json saved with a UTF-8 BOM (an option
-        # in several Windows editors) must be read, not treated as
-        # corrupt. _read_settings opens with utf-8-sig, which strips a
-        # BOM when present and decodes plain UTF-8 identically.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            instance = self.make_app(root / "settings.json", root / "Cache", root / "Stats.xml")
-            payload = json.dumps({"cache_dir": "/cache"}).encode("utf-8")
-            instance.settings_path.write_bytes(b"\xef\xbb\xbf" + payload)
-
-            self.assertEqual(instance._read_settings(), {"cache_dir": "/cache"})
 
     def test_clear_chart_filter_resets_diff_and_search_directives(self):
         instance = object.__new__(app.LibraryApp)
@@ -966,7 +918,8 @@ class FilterPersistenceTests(unittest.TestCase):
         instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
         instance.course_geometry = None
         instance.advanced_search_geometry = None
-        instance._last_saved_settings = None
+        instance._settings_store = library_data.SettingsStore(instance.settings_path)
+        instance._settings_store.load()
 
     def test_loaded_keeps_values_that_are_in_the_new_library(self):
         instance = self.make_loaded_instance(pack="Pack2", type_="dance-single", difficulty="Challenge")
@@ -1062,7 +1015,8 @@ class FilterPersistenceTests(unittest.TestCase):
             # Seed the variable from the real settings file through the
             # real reader, the way __init__ seeds it at startup.
             instance.settings_path = settings_path
-            seeded = instance._read_settings()
+            instance._settings_store = library_data.SettingsStore(settings_path)
+            seeded = instance._settings_store.load()
             instance.pack_var = _ValueVar(seeded.get("filter_pack", "All packs"),
                                           on_set=instance._refresh_unless_batching)
             rows = self.rows(("Pack1", "dance-single", "Hard"))
@@ -1257,68 +1211,10 @@ class DiscardedSettingsStatusTests(unittest.TestCase):
     defaults, and the status line must say so once the window is built —
     including after the deferred snapshot load rewrites the status line."""
 
-    @staticmethod
-    def make_reader(settings_path):
-        instance = object.__new__(app.LibraryApp)
-        instance.settings_path = settings_path
-        return instance
-
-    def test_corrupt_settings_are_remembered_not_just_discarded(self):
-        with tempfile.TemporaryDirectory() as directory:
-            instance = self.make_reader(Path(directory) / "settings.json")
-            instance.settings_path.write_text("{not json", encoding="utf-8")
-
-            self.assertEqual(instance._read_settings(), {})
-            self.assertIn("Expecting", instance._settings_read_error)
-
-    def test_misencoded_settings_are_remembered(self):
-        with tempfile.TemporaryDirectory() as directory:
-            instance = self.make_reader(Path(directory) / "settings.json")
-            instance.settings_path.write_bytes(b"\xff\xfe not utf-8")
-
-            self.assertEqual(instance._read_settings(), {})
-            self.assertIsNotNone(instance._settings_read_error)
-
-    def test_non_object_settings_are_remembered(self):
-        # Readable JSON that is not an object is discarded the same way:
-        # there are no settings in it to keep.
-        with tempfile.TemporaryDirectory() as directory:
-            instance = self.make_reader(Path(directory) / "settings.json")
-            instance.settings_path.write_text("[1, 2]", encoding="utf-8")
-
-            self.assertEqual(instance._read_settings(), {})
-            self.assertIn("JSON object", instance._settings_read_error)
-
-    def test_missing_settings_file_records_no_failure(self):
-        # First run: no file yet is normal, and must not cry wolf.
-        with tempfile.TemporaryDirectory() as directory:
-            instance = self.make_reader(Path(directory) / "settings.json")
-
-            self.assertEqual(instance._read_settings(), {})
-            self.assertIsNone(instance._settings_read_error)
-
-    def test_readable_settings_record_no_failure(self):
-        with tempfile.TemporaryDirectory() as directory:
-            instance = self.make_reader(Path(directory) / "settings.json")
-            instance.settings_path.write_text(json.dumps({"cache_dir": "/cache"}), encoding="utf-8")
-
-            self.assertEqual(instance._read_settings(), {"cache_dir": "/cache"})
-            self.assertIsNone(instance._settings_read_error)
-
-    def test_bom_saved_settings_record_no_failure(self):
-        # Issue #119: a BOM is stripped by utf-8-sig, so a BOM-saved file
-        # reads fine and is not a discarded-settings case.
-        with tempfile.TemporaryDirectory() as directory:
-            instance = self.make_reader(Path(directory) / "settings.json")
-            instance.settings_path.write_bytes(
-                b"\xef\xbb\xbf" + json.dumps({"cache_dir": "/cache"}).encode("utf-8"))
-
-            self.assertEqual(instance._read_settings(), {"cache_dir": "/cache"})
-            self.assertIsNone(instance._settings_read_error)
-
     def test_report_appends_the_message_once_and_keeps_the_snapshot_line(self):
         instance = object.__new__(app.LibraryApp)
-        instance._settings_read_error = "Expecting value: line 1 column 1 (char 0)"
+        instance._settings_store = library_data.SettingsStore(Path("settings.json"))
+        instance._settings_store.last_read_error = "Expecting value: line 1 column 1 (char 0)"
         instance.status = _StubStatus("Showing saved library snapshot · 3 charts · last refreshed 2026-11-10 08:00.")
 
         instance._report_discarded_settings()
@@ -1330,7 +1226,7 @@ class DiscardedSettingsStatusTests(unittest.TestCase):
 
     def test_report_does_nothing_without_a_recorded_failure(self):
         instance = object.__new__(app.LibraryApp)
-        instance._settings_read_error = None
+        instance._settings_store = library_data.SettingsStore(Path("settings.json"))
         instance.status = _StubStatus("Choose your cache's Songs folder and player Stats.xml, then click Load / refresh.")
 
         instance._report_discarded_settings()
@@ -1342,7 +1238,8 @@ class DiscardedSettingsStatusTests(unittest.TestCase):
         instance = object.__new__(app.LibraryApp)
         instance.progress = Mock()
         instance._load_generation = 0
-        instance._settings_read_error = "Expecting value: line 1 column 1 (char 0)"
+        instance._settings_store = library_data.SettingsStore(Path("settings.json"))
+        instance._settings_store.last_read_error = "Expecting value: line 1 column 1 (char 0)"
         instance.status = _StubStatus()
 
         def load():
@@ -1363,7 +1260,8 @@ class DiscardedSettingsStatusTests(unittest.TestCase):
         instance.progress = Mock()
         instance.load_cached_data = Mock()
         instance._load_generation = 1
-        instance._settings_read_error = "Expecting value: line 1 column 1 (char 0)"
+        instance._settings_store = library_data.SettingsStore(Path("settings.json"))
+        instance._settings_store.last_read_error = "Expecting value: line 1 column 1 (char 0)"
         instance.status = _StubStatus("Loading…")
 
         instance._load_initial_snapshot()
@@ -2644,7 +2542,8 @@ class PerformanceAndExportTests(unittest.TestCase):
             instance.diff_var = Mock(get=Mock(return_value="All difficulties"))
             instance.course_geometry = None
             instance.advanced_search_geometry = None
-            instance._last_saved_settings = None
+            instance._settings_store = library_data.SettingsStore(settings_path)
+            instance._settings_store.load()
 
             # First save writes to disk
             instance._save_settings()
@@ -2652,9 +2551,9 @@ class PerformanceAndExportTests(unittest.TestCase):
             first_mtime = settings_path.stat().st_mtime_ns
 
             # Second save with no changes (e.g. routine table row click) skips write
-            with patch("json.dump") as mock_dump:
+            with patch("json.dumps") as mock_dumps:
                 instance._save_settings()
-                mock_dump.assert_not_called()
+                mock_dumps.assert_not_called()
             self.assertEqual(settings_path.stat().st_mtime_ns, first_mtime)
 
             # Changing a column width causes it to save
@@ -2662,6 +2561,41 @@ class PerformanceAndExportTests(unittest.TestCase):
             instance._save_settings()
             data = json.loads(settings_path.read_text(encoding="utf-8"))
             self.assertEqual(data["column_widths"]["Pack"], 150)
+
+    def test_failed_settings_save_leaves_no_temp_file(self):
+        # Proposal 0008 §6 step 1: a failed settings dump leaves no
+        # settings.tmp behind. The failure is forced inside os.replace —
+        # the dump and the replace are the two failure points, and the
+        # replace is the one that survives the move to the store, whose
+        # save serializes with json.dumps instead of json.dump.
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            instance = object.__new__(app.LibraryApp)
+            instance.settings_path = settings_path
+            instance.tree = Mock()
+            instance.cache_var = Mock(get=Mock(return_value="/cache"))
+            instance.stats_var = Mock(get=Mock(return_value="/stats.xml"))
+            instance.column_order = list(app.HEADERS)
+            instance.column_visibility = {col: Mock(get=Mock(return_value=True)) for col in app.HEADERS}
+            instance.tree.column.return_value = 100
+            instance.sort_keys = [("Pack", False)]
+            instance.show_distribution_panel = Mock(get=Mock(return_value=False))
+            instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
+            instance.pack_var = Mock(get=Mock(return_value="All packs"))
+            instance.type_var = Mock(get=Mock(return_value="All types"))
+            instance.diff_var = Mock(get=Mock(return_value="All difficulties"))
+            instance.course_geometry = None
+            instance.advanced_search_geometry = None
+            instance._settings_store = library_data.SettingsStore(settings_path)
+            instance._settings_store.load()
+            instance.status = Mock()
+
+            with patch("os.replace", side_effect=OSError("locked")):
+                instance._save_settings()
+
+            self.assertEqual([p for p in Path(directory).iterdir()
+                              if p.name.endswith(".tmp")], [])
+            self.assertIn("Could not save settings", instance.status.set.call_args.args[0])
 
     def test_save_settings_persists_in_place_column_reorder_after_earlier_save(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2682,7 +2616,8 @@ class PerformanceAndExportTests(unittest.TestCase):
             instance.diff_var = Mock(get=Mock(return_value="All difficulties"))
             instance.course_geometry = None
             instance.advanced_search_geometry = None
-            instance._last_saved_settings = None
+            instance._settings_store = library_data.SettingsStore(settings_path)
+            instance._settings_store.load()
 
             # An earlier save in the session (any routine click) populates the dedup snapshot.
             instance._save_settings()
