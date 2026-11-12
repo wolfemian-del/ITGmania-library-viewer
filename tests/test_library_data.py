@@ -1819,3 +1819,67 @@ class CacheDirCandidatesTests(unittest.TestCase):
             self.assertEqual(data.cache_dir_candidates(),
                              [Path.home() / "AppData" / "Roaming"
                               / "ITGmania" / "Cache" / "Songs"])
+
+
+class NonFiniteFormatTests(unittest.TestCase):
+    """Issues #123 and #137: a non-finite value reads as missing (blank),
+    not a crash out of the format helpers."""
+
+    def test_format_duration_treats_non_finite_as_missing(self):
+        for value in ("nan", "1e999", float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                self.assertEqual(data.format_duration(value), "")
+
+    def test_format_duration_treats_unparseable_as_missing(self):
+        for value in ("abc", None):
+            with self.subTest(value=value):
+                self.assertEqual(data.format_duration(value), "")
+
+    def test_format_duration_still_formats_real_values(self):
+        self.assertEqual(data.format_duration(0), "0:00")
+        self.assertEqual(data.format_duration(90), "1:30")
+        self.assertEqual(data.format_duration(3661), "1:01:01")
+        self.assertEqual(data.format_duration("120"), "2:00")
+
+    def test_format_bpm_display_treats_non_finite_as_missing(self):
+        self.assertEqual(data.format_bpm_display(None, float("inf"), float("inf")), "")
+        self.assertEqual(data.format_bpm_display("nan", 150, 150), "")
+        self.assertEqual(data.format_bpm_display("inf", 150, 150), "")
+        self.assertEqual(data.format_bpm_display("150:inf", 150, 150), "")
+        self.assertEqual(data.format_bpm_display("nan:nan", 150, 150), "")
+        self.assertEqual(data.format_bpm_display(None, 150, float("inf")), "")
+
+    def test_format_bpm_display_still_formats_real_values(self):
+        self.assertEqual(data.format_bpm_display(None, 100, 300), "100–300")
+        self.assertEqual(data.format_bpm_display("120", 100, 300), "120")
+        self.assertEqual(data.format_bpm_display("*", 100, 300), "*")
+        self.assertEqual(data.format_bpm_display(None, 150, 150), "150")
+
+    def test_cache_with_non_finite_bpms_parses_with_a_blank_bpm_cell(self):
+        # Issue #137: a song with #BPMS inf and no #DISPLAYBPM used to raise
+        # OverflowError out of parse_cache_file (zero rows); now the row
+        # parses and its BPM cell is blank. Same for a nan #DISPLAYBPM.
+        cases = {
+            "inf_bpms": "#BPMS:0.000=inf;\n",
+            "nan_display": "#BPMS:0.000=120.000;\n#DISPLAYBPM:nan;\n",
+        }
+        for name, timing in cases.items():
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as directory:
+                    cache_file = Path(directory) / "song.cache"
+                    cache_file.write_text(
+                        "#TITLE:Bad Song;\n"
+                        "#ARTIST:Tempo Crew;\n"
+                        "#SONGFILENAME:Songs/Pack/Bad Song/bad.ogg;\n"
+                        "#MUSICLENGTH:100.000;\n"
+                        + timing +
+                        "#NOTEDATA:;\n"
+                        "#STEPSTYPE:dance-single;\n"
+                        "#DIFFICULTY:Easy;\n"
+                        "#METER:5;\n"
+                        "#RADARVALUES:0.100,0.100,0.050,0.010,0.020,100,105,10,5,0,1,0,5,0;\n",
+                        encoding="utf-8",
+                    )
+                    rows, _skipped = data.parse_cache_file(cache_file, {})
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["BPM"], "")
