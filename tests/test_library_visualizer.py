@@ -2013,6 +2013,8 @@ class RefreshGenerationTests(unittest.TestCase):
 
             instance._save_library_cache.assert_not_called()
             instance.root.after.assert_not_called()
+            # Superseded before the first file: nothing is queued at all,
+            # not even the progress report.
             self.assertTrue(instance._load_results.empty())
 
     def test_load_worker_superseded_after_scan_does_not_save(self):
@@ -2040,7 +2042,14 @@ class RefreshGenerationTests(unittest.TestCase):
 
             instance._save_library_cache.assert_not_called()
             instance.root.after.assert_not_called()
-            self.assertTrue(instance._load_results.empty())
+            # A scan superseded mid-loop queues no delivery. The (0, 1)
+            # progress report sent before the generation moved is dropped
+            # by the poller's own generation check.
+            kinds = []
+            while not instance._load_results.empty():
+                kinds.append(instance._load_results.get_nowait()[0])
+            self.assertNotIn("loaded", kinds)
+            self.assertNotIn("failed", kinds)
 
     def test_older_scan_cannot_overwrite_newer_snapshot(self):
         sample = "#SONGFILENAME:Songs/P/S/a.ogg;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n"
@@ -2087,10 +2096,13 @@ class RefreshGenerationTests(unittest.TestCase):
 
             # Both scans queued their results for the main thread (the older
             # one's delivery is dropped by _loaded's generation check).
+            # Progress and phase reports share the queue; only the
+            # deliveries are collected here.
             queued = []
             while not instance._load_results.empty():
-                kind, _, kwargs = instance._load_results.get_nowait()
-                queued.append((kind, kwargs["generation"]))
+                item = instance._load_results.get_nowait()
+                if item[0] == "loaded":
+                    queued.append((item[0], item[2]["generation"]))
             self.assertEqual(queued, [("loaded", 1), ("loaded", 2)])
 
     def test_loaded_and_load_failed_ignore_stale_generation(self):
@@ -2140,13 +2152,17 @@ class RefreshGenerationTests(unittest.TestCase):
             instance._load_worker(cache_dir, stats_file, generation=1)
 
             # The worker thread hands results over through the queue; it never
-            # calls root.after (Tk) from its own thread.
+            # calls root.after (Tk) from its own thread. Progress reports
+            # share the queue, so the delivery is found by kind.
             instance.root.after.assert_not_called()
-            kind, args, kwargs = instance._load_results.get_nowait()
-            self.assertEqual(kind, "loaded")
+            queued = []
+            while not instance._load_results.empty():
+                queued.append(instance._load_results.get_nowait())
+            loaded = [item for item in queued if item[0] == "loaded"]
+            self.assertEqual(len(loaded), 1)
+            kind, args, kwargs = loaded[0]
             self.assertEqual(args[1], 1)  # one cache file scanned
             self.assertEqual(kwargs["generation"], 1)
-            self.assertTrue(instance._load_results.empty())
 
             # A malformed Stats.xml queues a failure the same way.
             stats_file.write_text("<Stats><SongScores>", encoding="utf-8")
@@ -2199,6 +2215,166 @@ class RefreshGenerationTests(unittest.TestCase):
             self.assertEqual(instance._load_generation, 1)
             mock_thread.assert_called_once()
             self.assertEqual(mock_thread.call_args.kwargs["args"][2], 1)
+
+
+class LoadProgressTests(unittest.TestCase):
+    """The scan's progress readout: determinate bar, files done, ETA."""
+
+    def make_progress_app(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_generation = 1
+        instance._load_started_at = None
+        instance.status = _StubStatus()
+        instance.progress = MagicMock()
+        instance.progress.__getitem__.return_value = "indeterminate"
+        return instance
+
+    def test_first_progress_switches_the_bar_to_determinate_and_counts_files(self):
+        instance = self.make_progress_app()
+
+        instance._show_load_progress(0, 7000, 1)
+
+        instance.progress.stop.assert_called_once()
+        instance.progress.configure.assert_called_once_with(
+            mode="determinate", maximum=7000, value=0)
+        instance.progress.__setitem__.assert_called_once_with("value", 0)
+        self.assertEqual(instance.status.get(), "Reading chart cache… 0 / 7,000 files")
+
+    def test_later_progress_does_not_reconfigure_the_bar(self):
+        instance = self.make_progress_app()
+        instance.progress.__getitem__.return_value = "determinate"
+
+        instance._show_load_progress(25, 7000, 1)
+
+        instance.progress.stop.assert_not_called()
+        instance.progress.configure.assert_not_called()
+        instance.progress.__setitem__.assert_called_once_with("value", 25)
+        self.assertEqual(instance.status.get(), "Reading chart cache… 25 / 7,000 files")
+
+    def test_eta_appears_once_fifty_files_are_done(self):
+        instance = self.make_progress_app()
+        instance._load_started_at = time.monotonic() - 10
+
+        instance._show_load_progress(100, 1000, 1)
+
+        # Ten seconds for 100 of 1,000 files: 90 seconds left.
+        self.assertEqual(
+            instance.status.get(),
+            "Reading chart cache… 100 / 1,000 files · about 90 s left")
+
+    def test_no_eta_before_fifty_files_or_at_the_total(self):
+        instance = self.make_progress_app()
+        instance._load_started_at = time.monotonic() - 10
+
+        instance._show_load_progress(25, 1000, 1)
+        self.assertNotIn("s left", instance.status.get())
+
+        instance._show_load_progress(1000, 1000, 1)
+        self.assertNotIn("s left", instance.status.get())
+
+    def test_stale_progress_and_phase_are_ignored(self):
+        instance = self.make_progress_app()
+        instance._load_generation = 2
+
+        instance._show_load_progress(25, 100, 1)
+        instance._show_load_phase("Saving snapshot…", 1)
+
+        instance.progress.stop.assert_not_called()
+        instance.progress.configure.assert_not_called()
+        self.assertEqual(instance.status.get(), "")
+
+    def test_phase_sets_the_status_line(self):
+        instance = self.make_progress_app()
+
+        instance._show_load_phase("Saving snapshot…", 1)
+
+        self.assertEqual(instance.status.get(), "Saving snapshot…")
+
+    def test_poll_load_results_routes_progress_and_phase(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_results = queue.Queue()
+        instance._show_load_progress = Mock()
+        instance._show_load_phase = Mock()
+        instance._loaded = Mock()
+        instance._load_failed = Mock()
+        instance.root = Mock()
+        instance._load_results.put(("progress", 25, 100, 1))
+        instance._load_results.put(("phase", "Saving snapshot…", 1))
+
+        instance._poll_load_results()
+
+        instance._show_load_progress.assert_called_once_with(25, 100, 1)
+        instance._show_load_phase.assert_called_once_with("Saving snapshot…", 1)
+        instance._loaded.assert_not_called()
+        instance._load_failed.assert_not_called()
+        instance.root.after.assert_called_once()
+        delay, callback = instance.root.after.call_args[0]
+        self.assertEqual(delay, 75)
+        self.assertEqual(callback, instance._poll_load_results)
+
+
+class LiveLoadProgressTests(unittest.TestCase):
+    """A real scan in a real window: the bar goes determinate, the status
+    counts files, and the bar is indeterminate again when the load lands."""
+
+    def test_scan_shows_file_progress_and_restores_the_bar(self):
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        self.addCleanup(root.destroy)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        settings_dir = Path(tmp.name)
+        settings_path = settings_dir / "settings.json"
+        cache_dir = settings_dir / "Cache"
+        cache_dir.mkdir()
+        fixtures = Path(__file__).parent / "fixtures"
+        sample = (fixtures / "plain_tune.cache").read_text(encoding="utf-8")
+        for index in range(60):
+            (cache_dir / f"tune-{index:03}.cache").write_text(sample, encoding="utf-8")
+        stats_file = settings_dir / "Stats.xml"
+        stats_file.write_text((fixtures / "Stats.xml").read_text(encoding="utf-8"))
+        patcher = patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        application = app.LibraryApp(root)
+        application.cache_var.set(str(cache_dir))
+        application.stats_var.set(str(stats_file))
+        # Record every status the scan sets, including the ones the poller
+        # applies in a single drain between pump turns.
+        seen = []
+        real_set = application.status.set
+
+        def record(value):
+            seen.append(value)
+            real_set(value)
+
+        application.status.set = record
+
+        application.load_data()
+        deadline = time.monotonic() + 15
+        while len(application.rows) == 0 and time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.02)
+        self.assertEqual(len(application.rows), 120)  # 60 files, 2 charts each
+        # The initial report (0 of 60) and the first loop report (25 of 60)
+        # pin the two different progress puts in the worker.
+        self.assertIn("Reading chart cache… 0 / 60 files", seen)
+        self.assertTrue(any("25 / 60 files" in text for text in seen),
+                        f"no loop-report status among: {seen}")
+        self.assertTrue(any("about" in text and "s left" in text for text in seen),
+                        f"no ETA status among: {seen}")
+        self.assertIn("Saving snapshot…", seen)
+        self.assertTrue(application.status.get().startswith(
+            "Scanned 60 files · parsed 120 charts"))
+        # The bar is indeterminate again for the next snapshot restore.
+        # ["mode"] is a Tcl index object, so the comparison needs str().
+        self.assertEqual(str(application.progress["mode"]), "indeterminate")
+        self.assertEqual(application.progress["value"], 0)
 
 
 class DialogKeyBindingTests(unittest.TestCase):

@@ -84,6 +84,7 @@ class LibraryApp:
     # Defaults for state that is only set later, so every instance has these attributes.
     _search_refresh_after_id = None
     _batching_filter_changes = False
+    _load_started_at = None
 
     # The Data paths dialog's note texts (UI redesign): the first-run note is
     # the sketch's wording; the dead-paths sentence is a Muse proposal, to be
@@ -1160,6 +1161,8 @@ class LibraryApp:
         self.load_button.configure(state="disabled")
         self._load_generation += 1
         generation = self._load_generation
+        # The scan's clock for its time-remaining estimate (see _show_load_progress).
+        self._load_started_at = time.monotonic()
         threading.Thread(target=self._load_worker, args=(cache, stats, generation), daemon=True).start()
 
     def _load_is_stale(self, generation):
@@ -1172,10 +1175,18 @@ class LibraryApp:
             scores = stats_index(stats_file)
             rows = []
             files = [p for p in cache.iterdir() if p.is_file()]
+            total = len(files)
+            if self._load_is_stale(generation):
+                # Superseded before the first file: queue nothing, not even
+                # the progress report below.
+                return
+            # The total is known before any file is parsed: report it at once
+            # so the bar can go determinate, then report as the loop goes.
+            self._load_results.put(("progress", 0, total, generation))
             skipped_files = 0
             files_without_charts = 0
             skipped_blocks = 0
-            for path in files:
+            for index, path in enumerate(files, start=1):
                 if self._load_is_stale(generation):
                     return
                 try:
@@ -1186,6 +1197,11 @@ class LibraryApp:
                     rows.extend(chart_rows)
                 except (OSError, UnicodeError):
                     skipped_files += 1
+                # Every 25 files, and on the last one: often enough for the
+                # bar to move smoothly, rarely enough to churn the queue.
+                # A scan superseded mid-loop stops reporting with it.
+                if (index % 25 == 0 or index == total) and not self._load_is_stale(generation):
+                    self._load_results.put(("progress", index, total, generation))
 
             nested_song_tree = looks_like_song_tree(cache) if not files else False
             cache_error = ""
@@ -1195,6 +1211,9 @@ class LibraryApp:
             with self._snapshot_lock:
                 if self._load_is_stale(generation):
                     return
+                # The bar is already full here; name the phase so the tail
+                # of the load does not look like a stall.
+                self._load_results.put(("phase", "Saving snapshot…", generation))
                 try:
                     refreshed_at = self._save_library_cache(
                         cache, stats_file, rows, len(files), skipped_files,
@@ -1236,6 +1255,12 @@ class LibraryApp:
                 if result[0] == "loaded":
                     _, args, kwargs = result
                     self._loaded(*args, **kwargs)
+                elif result[0] == "progress":
+                    _, done, total, generation = result
+                    self._show_load_progress(done, total, generation)
+                elif result[0] == "phase":
+                    _, text, generation = result
+                    self._show_load_phase(text, generation)
                 else:
                     _, message, generation = result
                     self._load_failed(message, generation=generation)
@@ -1247,11 +1272,47 @@ class LibraryApp:
             except tk.TclError:
                 pass  # the window is gone; stop polling
 
+    def _show_load_progress(self, done, total, generation):
+        """Show a scan's progress on the main thread: determinate bar, files done, ETA.
+
+        The first message of a scan carries the total, which is when the bar
+        can go determinate — until then it bounced while Stats.xml parsed.
+        The ETA is a straight line from the average rate so far; it only
+        appears once 50 files are done, so the first few files cannot make
+        it jump around.
+        """
+        if generation is not None and self._load_is_stale(generation):
+            return
+        if total > 0:
+            # ["mode"] comes back as a Tcl index object, not a str, so the
+            # comparison needs str() — a bare == "determinate" never matches.
+            if str(self.progress["mode"]) != "determinate":
+                self.progress.stop()
+                self.progress.configure(mode="determinate", maximum=total, value=0)
+            self.progress["value"] = done
+        text = f"Reading chart cache… {done:,} / {total:,} files"
+        started = self._load_started_at
+        if started is not None and done >= 50 and done < total:
+            elapsed = time.monotonic() - started
+            if elapsed > 0:
+                remaining = elapsed * (total - done) / done
+                text += f" · about {max(1, round(remaining))} s left"
+        self.status.set(text)
+
+    def _show_load_phase(self, text, generation):
+        """Name a scan phase on the status line (e.g. the snapshot write)."""
+        if generation is not None and self._load_is_stale(generation):
+            return
+        self.status.set(text)
+
     def _load_failed(self, message, generation=None):
         if generation is not None and self._load_is_stale(generation):
             return
         self.load_button.configure(state="normal")
         self.progress.stop()
+        # Back to indeterminate for the next snapshot restore, which has no
+        # total to count against.
+        self.progress.configure(mode="indeterminate", value=0)
         self.status.set("Could not load library.")
         messagebox.showerror("Could not load library", message)
 
@@ -1262,6 +1323,9 @@ class LibraryApp:
             return
         self.load_button.configure(state="normal")
         self.progress.stop()
+        # Back to indeterminate for the next snapshot restore, which has no
+        # total to count against.
+        self.progress.configure(mode="indeterminate", value=0)
         self.rows = rows
         if source_paths:
             self.loaded_source_paths = source_paths
