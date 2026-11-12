@@ -35,6 +35,9 @@ from library_data import (
     TAP_FIELDS,
     TECH_FIELDS,
     CHART_FILTER_FIELDS,
+    LIBRARY_CACHE_SCHEMA_VERSION,
+    SnapshotStore,
+    _normalized_source_path,
     bpm_sort_key,
     cache_dir_candidates,
     declare_dpi_awareness,
@@ -60,7 +63,6 @@ SEARCH_DEBOUNCE_MS = 200
 # loop (see _insert_batch): long enough to fill quickly, short enough that the
 # window stays responsive while a big library streams in.
 ROW_INSERT_BUDGET_SECONDS = 0.012
-LIBRARY_CACHE_SCHEMA_VERSION = 3
 HEADERS = ("Title", "Subtitle", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart", "Score",
            "Grade", "Best %", "Plays", "Last played", "Peak NPS", "Taps/Holds", "Jumps",
            "Holds", "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4", "W5",
@@ -117,6 +119,11 @@ class LibraryApp:
         self.rows: list[dict] = []
         self.loaded_source_paths = None
         self.settings_path = self._settings_file_path()
+        # The snapshot store owns library_cache.json (proposal 0008); its
+        # path is derived once here from the settings path, and it is built
+        # against the current schema version.
+        self._snapshot_store = SnapshotStore(
+            self.library_cache_path, HEADERS, LIBRARY_CACHE_SCHEMA_VERSION)
         # What _read_settings could not use, if anything: the file is read
         # before the status line exists, so the failure is remembered here
         # and reported once the window is built (_report_discarded_settings).
@@ -521,39 +528,6 @@ class LibraryApp:
     def library_cache_path(self):
         return self.settings_path.with_name("library_cache.json")
 
-    @staticmethod
-    def _normalized_source_path(path):
-        return os.path.normcase(os.path.abspath(os.path.expanduser(str(path))))
-
-    def _save_library_cache(self, cache_dir, stats_file, rows, files, skipped_files,
-                            files_without_charts, nested_song_tree, skipped_blocks=0):
-        refreshed_at = datetime.now().astimezone().isoformat(timespec="seconds")
-        payload = {
-            "schema_version": LIBRARY_CACHE_SCHEMA_VERSION,
-            "cache_dir": str(cache_dir),
-            "stats_file": str(stats_file),
-            "refreshed_at": refreshed_at,
-            "files": files,
-            "skipped_files": skipped_files,
-            "files_without_charts": files_without_charts,
-            "skipped_blocks": skipped_blocks,
-            "nested_song_tree": nested_song_tree,
-            "rows": rows,
-        }
-        path = self.library_cache_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        try:
-            with temporary.open("w", encoding="utf-8") as handle:
-                json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
-            os.replace(temporary, path)
-        finally:
-            try:
-                temporary.unlink()
-            except FileNotFoundError:
-                pass
-        return refreshed_at
-
     def _load_initial_snapshot(self):
         """Load the saved snapshot (scheduled from __init__ so the window paints first)."""
         if self._load_generation:
@@ -575,56 +549,29 @@ class LibraryApp:
         self._maybe_show_first_run_paths_dialog()
 
     def load_cached_data(self):
-        try:
-            with self.library_cache_path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
-        except FileNotFoundError:
+        # The store reads and validates; this method only maps the result
+        # onto the status line and delivers the rows (proposal 0008).
+        result = self._snapshot_store.read(self.cache_var.get(), self.stats_var.get())
+        if result.loaded:
+            self._loaded(
+                result.rows, result.files, result.skipped_files,
+                result.files_without_charts, result.skipped_blocks,
+                result.nested_song_tree,
+                refreshed_at=result.refreshed_at,
+                from_cache=True,
+                source_paths=result.source_paths,
+            )
+            self._report_moved_source_paths(*result.source_paths)
+            return
+        if result.reason == "missing":
             self.status.set("No saved library yet. Choose File → Data paths…, then Load / refresh.")
-            self.refresh_table()
-            return
-        except (OSError, ValueError, RecursionError) as exc:
-            # ValueError covers UnicodeDecodeError and JSONDecodeError;
-            # RecursionError covers a deeply nested file.
-            self.status.set(f"Saved library snapshot could not be read ({exc}). Click Load / refresh to rebuild it.")
-            self.refresh_table()
-            return
-
-        valid_rows = isinstance(payload, dict) and isinstance(payload.get("rows"), list) \
-            and all(isinstance(row, dict) and all(key in row for key in (*HEADERS, "Course path"))
-                    for row in payload["rows"])
-        if (not valid_rows or payload.get("schema_version") != LIBRARY_CACHE_SCHEMA_VERSION
-                or not isinstance(payload.get("cache_dir"), str)
-                or not isinstance(payload.get("stats_file"), str)):
+        elif result.reason == "unreadable":
+            self.status.set(f"Saved library snapshot could not be read ({result.detail}). Click Load / refresh to rebuild it.")
+        elif result.reason == "invalid":
             self.status.set("Saved library snapshot is invalid or outdated. Click Load / refresh to rebuild it.")
-            self.refresh_table()
-            return
-
-        paths_match = (
-            self._normalized_source_path(payload.get("cache_dir", ""))
-            == self._normalized_source_path(self.cache_var.get())
-            and self._normalized_source_path(payload.get("stats_file", ""))
-            == self._normalized_source_path(self.stats_var.get())
-        )
-        if not paths_match:
+        else:  # paths_mismatch
             self.status.set("Saved library snapshot is for different data paths. Click Load / refresh to rebuild it.")
-            self.refresh_table()
-            return
-
-        self._loaded(
-            payload["rows"], self._nonnegative_int(payload.get("files")),
-            self._nonnegative_int(payload.get("skipped_files")),
-            self._nonnegative_int(payload.get("files_without_charts")),
-            self._nonnegative_int(payload.get("skipped_blocks")),
-            payload.get("nested_song_tree") is True,
-            refreshed_at=payload.get("refreshed_at", "") if isinstance(payload.get("refreshed_at", ""), str) else "",
-            from_cache=True,
-            source_paths=(payload["cache_dir"], payload["stats_file"]),
-        )
-        self._report_moved_source_paths(payload["cache_dir"], payload["stats_file"])
-
-    @staticmethod
-    def _nonnegative_int(value):
-        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+        self.refresh_table()
 
     def _source_paths_changed(self):
         if not self.loaded_source_paths:
@@ -656,7 +603,7 @@ class LibraryApp:
             return True
         current = (cache_var.get(), stats_var.get())
         return all(
-            self._normalized_source_path(saved) == self._normalized_source_path(selected)
+            _normalized_source_path(saved) == _normalized_source_path(selected)
             for saved, selected in zip(loaded, current))
 
     @staticmethod
@@ -1236,7 +1183,7 @@ class LibraryApp:
                 # of the load does not look like a stall.
                 self._load_results.put(("phase", "Saving snapshot…", generation))
                 try:
-                    refreshed_at = self._save_library_cache(
+                    refreshed_at = self._snapshot_store.write(
                         cache, stats_file, rows, len(files), skipped_files,
                         files_without_charts, nested_song_tree, skipped_blocks)
                 except (OSError, TypeError, ValueError) as exc:
