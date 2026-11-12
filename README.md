@@ -75,7 +75,7 @@ python -m unittest discover -s tests
 
 `theme.py` holds the colors and fonts; `tests/test_theme.py` checks the window code uses it.
 
-The UI-independent parsing and course helpers live in `library_data.py`; `tests/test_library_data.py` exercises them without importing Tkinter. Course formatting, parsing, trailing-modifier detection, and field validation live there so CRS features can grow without pulling in the Tk UI. The snapshot lifecycle tests exercise the app module.
+The UI-independent parsing and course helpers live in `library_data.py`; `tests/test_library_data.py` exercises them without importing Tkinter. Course formatting, parsing, trailing-modifier detection, and field validation live there so CRS features can grow without pulling in the Tk UI. The snapshot store lives there too, with its tests in `tests/test_snapshot_store.py`; the app-side wiring tests stay in `tests/test_library_visualizer.py`.
 
 The Build-a-course dialog is a separate component in `course_builder.py`, constructed by the main window with the few things it needs (its parent window, the status variable, the button factory, a way to read the table's selected rows, a way to read every row in the library, the remembered window geometry, a callback that reports the geometry when the window closes, and the display scale factor); its tests are in `tests/test_course_builder.py`.
 

@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import ctypes
+import dataclasses
+import json
 import math
 import os
 import re
 import shlex
 import statistics
 import sys
+import threading
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -50,6 +54,7 @@ __all__ = [
     "DIFFICULTY_ORDER",
     "GRADE_OPTIONS",
     "GRADE_NAMES",
+    "LIBRARY_CACHE_SCHEMA_VERSION",
     "NUMERIC_SEARCH_FIELDS",
     "RADAR_COUNT_FIELDS",
     "RADAR_FIELDS",
@@ -57,6 +62,8 @@ __all__ = [
     "TAP_FIELDS",
     "TECH_FIELDS",
     "ChartBar",
+    "SnapshotResult",
+    "SnapshotStore",
     "aggregate_bpm_distribution",
     "aggregate_difficulty_distribution",
     "aggregate_meter_distribution",
@@ -71,14 +78,18 @@ __all__ = [
     "course_song_line",
     "course_song_lines",
     "course_trailing_risk",
+    "declare_dpi_awareness",
     "difficulty_sort_key",
+    "dpi_scale_factor",
     "distribution_summary_stats",
     "filter_texts_match",
     "filter_token_text",
+    "find_ambiguous_course_entries",
     "find_unreadable_directives",
     "first_existing_directory",
     "format_bpm_display",
     "format_duration",
+    "format_geometry",
     "format_new_course",
     "get_active_chart_filters",
     "grade_sort_key",
@@ -87,16 +98,21 @@ __all__ = [
     "number",
     "parse_bpms",
     "parse_cache_file",
+    "parse_course_geometry",
     "parse_course_text",
     "parse_duration_seconds",
     "parse_numeric_bound",
     "parse_search_query",
     "replace_search_directive",
+    "scale_geometry",
+    "scale_pixels",
     "split_dialog_query",
     "split_path",
+    "split_search_query",
     "stats_index",
     "tag_map",
     "validate_course_fields",
+    "write_file_atomically",
 ]
 
 
@@ -433,6 +449,148 @@ def first_existing_directory(candidates) -> Path | None:
         if candidate.is_dir():
             return candidate
     return None
+
+
+# The library snapshot (proposal 0008): SnapshotStore owns library_cache.json.
+LIBRARY_CACHE_SCHEMA_VERSION = 3
+
+
+def _normalized_source_path(path):
+    """Normalize a source path for comparison (case, spelling, and ~)."""
+    return os.path.normcase(os.path.abspath(os.path.expanduser(str(path))))
+
+
+def _nonnegative_int(value):
+    """A counter value as read back from a snapshot, or 0 if it is not one."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def write_file_atomically(path, text):
+    """Write text to a file atomically.
+
+    The text goes to a pid/thread-unique temp file beside the target, which
+    is then moved into place with os.replace; the temp file is removed in a
+    finally, so a failed write leaves no litter. Serialization is the
+    caller's job: the helper takes text, not a dict, so the settings file
+    keeps indent=2 with default ASCII escaping and the snapshot keeps
+    compact JSON with ensure_ascii=False.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+@dataclasses.dataclass
+class SnapshotResult:
+    """What SnapshotStore.read returns: the loaded rows, or the reason it could not load.
+
+    Either loaded (rows, counters, refreshed_at, source_paths) or not loaded
+    with a reason kind (missing / unreadable / invalid / paths_mismatch) and
+    a detail string — str(exc) for unreadable, None otherwise. The app maps
+    each reason kind to today's status text.
+    """
+
+    loaded: bool
+    rows: list = dataclasses.field(default_factory=list)
+    files: int = 0
+    skipped_files: int = 0
+    files_without_charts: int = 0
+    skipped_blocks: int = 0
+    nested_song_tree: bool = False
+    refreshed_at: str = ""
+    source_paths: tuple = ("", "")
+    reason: str | None = None
+    detail: str | None = None
+
+
+class SnapshotStore:
+    """Owns library_cache.json: the snapshot write, and the read with its five-branch validation.
+
+    It never touches Tk, the app, or the status line. The app constructs one
+    with the snapshot path (derived once from the settings path), hands scan
+    results to write, and maps read's result onto the status line.
+    """
+
+    def __init__(self, snapshot_path, headers, schema_version=LIBRARY_CACHE_SCHEMA_VERSION):
+        self.snapshot_path = Path(snapshot_path)
+        self.headers = headers
+        self.schema_version = schema_version
+
+    def write(self, cache_dir, stats_file, rows, files, skipped_files,
+              files_without_charts, nested_song_tree, skipped_blocks=0):
+        """Write a scan's rows to the snapshot; returns refreshed_at.
+
+        Raises OSError/TypeError/ValueError exactly as today: the worker
+        catches them and reports the failure instead of delivering rows.
+        Argument order matches _save_library_cache on main, default included.
+        """
+        refreshed_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        payload = {
+            "schema_version": self.schema_version,
+            "cache_dir": str(cache_dir),
+            "stats_file": str(stats_file),
+            "refreshed_at": refreshed_at,
+            "files": files,
+            "skipped_files": skipped_files,
+            "files_without_charts": files_without_charts,
+            "skipped_blocks": skipped_blocks,
+            "nested_song_tree": nested_song_tree,
+            "rows": rows,
+        }
+        text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        write_file_atomically(self.snapshot_path, text)
+        return refreshed_at
+
+    def read(self, current_cache_dir, current_stats_file):
+        """Read the snapshot back: the rows, or the reason it could not be loaded."""
+        try:
+            with self.snapshot_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except FileNotFoundError:
+            return SnapshotResult(loaded=False, reason="missing")
+        except (OSError, ValueError, RecursionError) as exc:
+            # ValueError covers UnicodeDecodeError and JSONDecodeError;
+            # RecursionError covers a deeply nested file. FileNotFoundError
+            # is caught first because it is a subclass of OSError.
+            return SnapshotResult(loaded=False, reason="unreadable", detail=str(exc))
+
+        valid_rows = isinstance(payload, dict) and isinstance(payload.get("rows"), list) \
+            and all(isinstance(row, dict) and all(key in row for key in (*self.headers, "Course path"))
+                    for row in payload["rows"])
+        if (not valid_rows or payload.get("schema_version") != self.schema_version
+                or not isinstance(payload.get("cache_dir"), str)
+                or not isinstance(payload.get("stats_file"), str)):
+            return SnapshotResult(loaded=False, reason="invalid")
+
+        if not (
+            _normalized_source_path(payload.get("cache_dir", ""))
+            == _normalized_source_path(current_cache_dir)
+            and _normalized_source_path(payload.get("stats_file", ""))
+            == _normalized_source_path(current_stats_file)
+        ):
+            return SnapshotResult(loaded=False, reason="paths_mismatch")
+
+        refreshed_at = payload.get("refreshed_at", "")
+        return SnapshotResult(
+            loaded=True,
+            rows=payload["rows"],
+            files=_nonnegative_int(payload.get("files")),
+            skipped_files=_nonnegative_int(payload.get("skipped_files")),
+            files_without_charts=_nonnegative_int(payload.get("files_without_charts")),
+            skipped_blocks=_nonnegative_int(payload.get("skipped_blocks")),
+            nested_song_tree=payload.get("nested_song_tree") is True,
+            refreshed_at=refreshed_at if isinstance(refreshed_at, str) else "",
+            source_paths=(payload["cache_dir"], payload["stats_file"]),
+        )
 
 
 def parse_course_geometry(value) -> tuple[int, int, int, int] | None:

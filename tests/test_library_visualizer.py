@@ -274,6 +274,10 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance.status = Mock()
         instance.refresh_table = Mock()
         instance._loaded = Mock()
+        # The snapshot store the delegate reads through (proposal 0008):
+        # the path is derived from the settings path, as in __init__.
+        instance._snapshot_store = library_data.SnapshotStore(
+            instance.library_cache_path, app.HEADERS, library_data.LIBRARY_CACHE_SCHEMA_VERSION)
         instance.course_geometry = None
         instance.advanced_search_geometry = None
         instance._last_saved_settings = None
@@ -290,7 +294,7 @@ class LibrarySnapshotTests(unittest.TestCase):
             stats_file = root / "Stats.xml"
             instance = self.make_app(root / "settings.json", cache_dir, stats_file)
             rows = [self.sample_row()]
-            instance._save_library_cache(cache_dir, stats_file, rows, 1, 0, 0, False, skipped_blocks=3)
+            instance._snapshot_store.write(cache_dir, stats_file, rows, 1, 0, 0, False, skipped_blocks=3)
 
             instance.load_cached_data()
 
@@ -307,7 +311,7 @@ class LibrarySnapshotTests(unittest.TestCase):
             stats_file = root / "Stats.xml"
             instance = self.make_app(root / "settings.json", cache_dir, stats_file)
             rows = [self.sample_row()]
-            instance._save_library_cache(cache_dir, stats_file, rows, 1, 0, 0, False)
+            instance._snapshot_store.write(cache_dir, stats_file, rows, 1, 0, 0, False)
 
             instance.load_cached_data()
 
@@ -327,7 +331,7 @@ class LibrarySnapshotTests(unittest.TestCase):
             stats_file.write_text("<Stats/>")
             cache_dir.mkdir(parents=True)
             instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            instance._save_library_cache(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
+            instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
             shutil.rmtree(root / "Cache")
             instance.status = _StubStatus(
                 "Showing saved library snapshot · 1 charts · last refreshed 2026-11-10 08:00.")
@@ -349,7 +353,7 @@ class LibrarySnapshotTests(unittest.TestCase):
             cache_dir.mkdir(parents=True)
             stats_file.write_text("<Stats/>")
             instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            instance._save_library_cache(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
+            instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
             stats_file.unlink()
             instance.status = _StubStatus(
                 "Showing saved library snapshot · 1 charts · last refreshed 2026-11-10 08:00.")
@@ -365,7 +369,7 @@ class LibrarySnapshotTests(unittest.TestCase):
             cache_dir = root / "Cache" / "Songs"
             stats_file = root / "Stats.xml"
             instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            instance._save_library_cache(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
+            instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
             # Neither path was ever created on disk.
             instance.status = _StubStatus(
                 "Showing saved library snapshot · 1 charts · last refreshed 2026-11-10 08:00.")
@@ -383,7 +387,7 @@ class LibrarySnapshotTests(unittest.TestCase):
             cache_dir.mkdir(parents=True)
             stats_file.write_text("<Stats/>")
             instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            instance._save_library_cache(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
+            instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
             success = "Showing saved library snapshot · 1 charts · last refreshed 2026-11-10 08:00."
             instance.status = _StubStatus(success)
 
@@ -395,7 +399,7 @@ class LibrarySnapshotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             instance = self.make_app(root / "settings.json", root / "CacheB", root / "Stats.xml")
-            instance._save_library_cache(
+            instance._snapshot_store.write(
                 root / "CacheA", root / "Stats.xml", [self.sample_row()], 1, 0, 0, False)
 
             instance.load_cached_data()
@@ -422,6 +426,9 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance._loaded.assert_not_called()
         instance.refresh_table.assert_called_once()
         self.assertIn("could not be read", instance.status.set.call_args.args[0])
+        # The detail pin (proposal 0008, Revision 3): the status text
+        # carries the exception, not just the reason kind.
+        self.assertIn("recursion", instance.status.set.call_args.args[0])
 
     @unittest.skipIf(sys.version_info < (3, 11),
                      "the int-string conversion limit is 3.11+")
@@ -438,6 +445,9 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance._loaded.assert_not_called()
         instance.refresh_table.assert_called_once()
         self.assertIn("could not be read", instance.status.set.call_args.args[0])
+        # The detail pin (proposal 0008, Revision 3): the status text
+        # carries the exception, not just the reason kind.
+        self.assertIn("integer string conversion", instance.status.set.call_args.args[0])
 
     def test_snapshot_with_invalid_utf8_reports_could_not_be_read(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -450,16 +460,19 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance._loaded.assert_not_called()
         instance.refresh_table.assert_called_once()
         self.assertIn("could not be read", instance.status.set.call_args.args[0])
+        # The detail pin (proposal 0008, Revision 3): the status text
+        # carries the exception, not just the reason kind.
+        self.assertIn("codec can't decode", instance.status.set.call_args.args[0])
 
     def test_snapshot_is_not_restored_with_an_unsupported_schema(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cache_dir, stats_file = root / "Cache", root / "Stats.xml"
             instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            instance._save_library_cache(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
+            instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
             with instance.library_cache_path.open("r+", encoding="utf-8") as handle:
                 payload = app.json.load(handle)
-                payload["schema_version"] = app.LIBRARY_CACHE_SCHEMA_VERSION + 1
+                payload["schema_version"] = library_data.LIBRARY_CACHE_SCHEMA_VERSION + 1
                 handle.seek(0)
                 app.json.dump(payload, handle)
                 handle.truncate()
@@ -474,7 +487,7 @@ class LibrarySnapshotTests(unittest.TestCase):
             root = Path(directory)
             cache_dir, stats_file = root / "Cache", root / "Stats.xml"
             instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            instance._save_library_cache(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
+            instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
             with instance.library_cache_path.open("r+", encoding="utf-8") as handle:
                 payload = app.json.load(handle)
                 payload["schema_version"] = 2
@@ -494,7 +507,7 @@ class LibrarySnapshotTests(unittest.TestCase):
             root = Path(directory)
             cache_dir, stats_file = root / "Cache", root / "Stats.xml"
             instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            instance._save_library_cache(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
+            instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
             with instance.library_cache_path.open("r+", encoding="utf-8") as handle:
                 payload = app.json.load(handle)
                 del payload["rows"][0]["Subtitle"]
@@ -1058,6 +1071,15 @@ class FilterPersistenceTests(unittest.TestCase):
             instance = self.make_loaded_instance(type_="dance-double")
             instance.settings_path = Path(directory) / "settings.json"
             instance._loaded = Mock()
+            # load_cached_data reads through the snapshot store (proposal
+            # 0008); the missing file returns before the paths are compared,
+            # so the variables can stay empty.
+            instance.cache_var = Mock()
+            instance.cache_var.get.return_value = ""
+            instance.stats_var = Mock()
+            instance.stats_var.get.return_value = ""
+            instance._snapshot_store = library_data.SnapshotStore(
+                instance.library_cache_path, app.HEADERS, library_data.LIBRARY_CACHE_SCHEMA_VERSION)
 
             instance.load_cached_data()
 
@@ -1408,7 +1430,7 @@ class LiveDiscardedSettingsTests(unittest.TestCase):
         row = {header: "" for header in app.HEADERS}
         row.update({"Title": "Song", "Pack": "P", "Type": "dance-single",
                     "Difficulty": "Hard", "Meter": 10, "Course path": "P/Song"})
-        payload = {"schema_version": app.LIBRARY_CACHE_SCHEMA_VERSION,
+        payload = {"schema_version": library_data.LIBRARY_CACHE_SCHEMA_VERSION,
                    "cache_dir": cache_dir, "stats_file": stats_file,
                    "refreshed_at": "2026-11-10T08:00:00-05:00", "files": 1,
                    "skipped_files": 0, "files_without_charts": 0,
@@ -1447,7 +1469,7 @@ class LiveStartupSnapshotTests(unittest.TestCase):
         row = {header: "" for header in app.HEADERS}
         row.update({"Title": "Song", "Pack": "P", "Type": "dance-single",
                     "Difficulty": "Hard", "Meter": 10, "Course path": "P/Song"})
-        payload = {"schema_version": app.LIBRARY_CACHE_SCHEMA_VERSION,
+        payload = {"schema_version": library_data.LIBRARY_CACHE_SCHEMA_VERSION,
                    "cache_dir": str(cache_dir), "stats_file": str(stats_file),
                    "refreshed_at": "2026-11-10T08:00:00-05:00", "files": 1,
                    "skipped_files": 0, "files_without_charts": 0,
@@ -1492,7 +1514,7 @@ class LiveStartupSnapshotTests(unittest.TestCase):
         row = {header: "" for header in app.HEADERS}
         row.update({"Title": "Song", "Pack": "P", "Type": "dance-single",
                     "Difficulty": "Hard", "Meter": 10, "Course path": "P/Song"})
-        payload = {"schema_version": app.LIBRARY_CACHE_SCHEMA_VERSION,
+        payload = {"schema_version": library_data.LIBRARY_CACHE_SCHEMA_VERSION,
                    "cache_dir": str(cache_dir), "stats_file": str(stats_file),
                    "refreshed_at": "2026-11-10T08:00:00-05:00", "files": 1,
                    "skipped_files": 0, "files_without_charts": 0,
@@ -1556,7 +1578,7 @@ class LiveDataPathsDialogTests(unittest.TestCase):
             settings_path.write_text(json.dumps(
                 {"cache_dir": str(cache_dir), "stats_file": str(stats_file)}))
         if snapshot_rows is not None:
-            payload = {"schema_version": app.LIBRARY_CACHE_SCHEMA_VERSION,
+            payload = {"schema_version": library_data.LIBRARY_CACHE_SCHEMA_VERSION,
                        "cache_dir": str(cache_dir), "stats_file": str(stats_file),
                        "refreshed_at": "2026-11-10T08:00:00-05:00", "files": 1,
                        "skipped_files": 0, "files_without_charts": 0,
@@ -1791,7 +1813,7 @@ class LiveFilterPersistenceTests(unittest.TestCase):
         root = self.make_root()
         with patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path)):
             writer = app.LibraryApp(root)
-            writer._save_library_cache(cache_dir, stats_file, rows, len(rows), 0, 0, False)
+            writer._snapshot_store.write(cache_dir, stats_file, rows, len(rows), 0, 0, False)
         root.destroy()
         return settings_path
 
@@ -1954,7 +1976,7 @@ class LiveSelectAllTests(unittest.TestCase):
         writer_root = self.make_root()
         with patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path)):
             writer = app.LibraryApp(writer_root)
-            writer._save_library_cache(cache_dir, stats_file, rows, len(rows), 0, 0, False)
+            writer._snapshot_store.write(cache_dir, stats_file, rows, len(rows), 0, 0, False)
         writer_root.destroy()
 
         root = self.make_root()
@@ -2019,13 +2041,13 @@ class RefreshGenerationTests(unittest.TestCase):
             instance = object.__new__(app.LibraryApp)
             instance._load_generation = 2
             instance._load_results = queue.Queue()
-            instance._save_library_cache = Mock()
+            instance._snapshot_store = Mock()
             instance.root = Mock()
 
             # Run worker with stale generation 1
             instance._load_worker(cache_dir, stats_file, generation=1)
 
-            instance._save_library_cache.assert_not_called()
+            instance._snapshot_store.write.assert_not_called()
             instance.root.after.assert_not_called()
             # Superseded before the first file: nothing is queued at all,
             # not even the progress report.
@@ -2044,7 +2066,7 @@ class RefreshGenerationTests(unittest.TestCase):
             instance._load_generation = 1
             instance._snapshot_lock = threading.Lock()
             instance._load_results = queue.Queue()
-            instance._save_library_cache = Mock()
+            instance._snapshot_store = Mock()
             instance.root = Mock()
 
             def newer_refresh_starts_while_parsing(path, scores):
@@ -2054,7 +2076,7 @@ class RefreshGenerationTests(unittest.TestCase):
             with patch.object(app, "parse_cache_file", newer_refresh_starts_while_parsing):
                 instance._load_worker(cache_dir, stats_file, generation=1)
 
-            instance._save_library_cache.assert_not_called()
+            instance._snapshot_store.write.assert_not_called()
             instance.root.after.assert_not_called()
             # A scan superseded mid-loop queues no delivery. The (0, 1)
             # progress report sent before the generation moved is dropped
@@ -2083,19 +2105,25 @@ class RefreshGenerationTests(unittest.TestCase):
             instance._load_results = queue.Queue()
             instance.root = Mock()
 
-            real_save = app.LibraryApp._save_library_cache
+            # The slow-write seam re-anchors on the store's write (proposal
+            # 0008, Revision 3): the worker calls store.write, so the test
+            # wraps that method on the instance's own store.
+            store = library_data.SnapshotStore(
+                instance.library_cache_path, app.HEADERS, library_data.LIBRARY_CACHE_SCHEMA_VERSION)
+            real_write = store.write
             old_is_saving, new_has_saved = threading.Event(), threading.Event()
 
-            def slow_save_for_old_folder(cache_dir, *args):
+            def slow_write_for_old_folder(cache_dir, *args):
                 if Path(cache_dir) == old_folder:
                     old_is_saving.set()
                     new_has_saved.wait(0.3)  # long enough for an unlocked newer scan to finish first
-                refreshed_at = real_save(instance, cache_dir, *args)
+                refreshed_at = real_write(cache_dir, *args)
                 if Path(cache_dir) == new_folder:
                     new_has_saved.set()
                 return refreshed_at
 
-            instance._save_library_cache = slow_save_for_old_folder
+            store.write = slow_write_for_old_folder
+            instance._snapshot_store = store
             old_scan = threading.Thread(target=instance._load_worker, args=(old_folder, stats_file, 1))
             old_scan.start()
             self.assertTrue(old_is_saving.wait(5))
@@ -2160,7 +2188,8 @@ class RefreshGenerationTests(unittest.TestCase):
             instance._load_generation = 1
             instance._snapshot_lock = threading.Lock()
             instance._load_results = queue.Queue()
-            instance._save_library_cache = Mock(return_value="2026-01-01T00:00:00")
+            instance._snapshot_store = Mock()
+            instance._snapshot_store.write.return_value = "2026-01-01T00:00:00"
             instance.root = Mock()
 
             instance._load_worker(cache_dir, stats_file, generation=1)
