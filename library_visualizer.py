@@ -94,6 +94,10 @@ class LibraryApp:
         self.rows: list[dict] = []
         self.loaded_source_paths = None
         self.settings_path = self._settings_file_path()
+        # What _read_settings could not use, if anything: the file is read
+        # before the status line exists, so the failure is remembered here
+        # and reported once the window is built (_report_discarded_settings).
+        self._settings_read_error = None
         self.saved_settings = self._read_settings()
         default_cache = first_existing_directory(cache_dir_candidates())
         default_stats = Path.cwd() / "Stats.xml"
@@ -207,6 +211,7 @@ class LibraryApp:
         self._last_saved_settings = copy.deepcopy(self.saved_settings)
         self._style()
         self._build()
+        self._report_discarded_settings()
         self.search_var.trace_add("write", lambda *_: self._schedule_search_refresh())
         for var in (self.pack_var, self.type_var, self.diff_var, self.scored_var):
             var.trace_add("write", lambda *_: self._refresh_unless_batching())
@@ -528,6 +533,10 @@ class LibraryApp:
             self.load_cached_data()
         finally:
             self.progress.stop()
+            # The snapshot load rewrites the status line, so a discarded
+            # settings file reported at build time would be erased here;
+            # appending it again keeps the notice visible after startup.
+            self._report_discarded_settings()
 
     def load_cached_data(self):
         try:
@@ -638,14 +647,47 @@ class LibraryApp:
         return LibraryApp._valid_window_geometry(value, theme.ADVANCED_SEARCH_MIN_SIZE)
 
     def _read_settings(self):
+        self._settings_read_error = None
         try:
             with self.settings_path.open("r", encoding="utf-8-sig") as handle:
                 data = json.load(handle)
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError, RecursionError):
-            # ValueError covers UnicodeDecodeError and JSONDecodeError;
-            # RecursionError covers a deeply nested file.
+            if not isinstance(data, dict):
+                raise ValueError("settings must be a JSON object")
+            return data
+        except FileNotFoundError:
+            # First run: no file yet is normal, not a discarded settings file.
             return {}
+        except (OSError, ValueError, RecursionError) as exc:
+            # ValueError covers UnicodeDecodeError and JSONDecodeError;
+            # RecursionError covers a deeply nested file. The file existed
+            # but could not be used, so the app runs on defaults. The
+            # failure is remembered here and reported on the status line
+            # once the window exists (_report_discarded_settings): this
+            # runs before _build creates the status variable.
+            self._settings_read_error = str(exc)
+            return {}
+
+    def _report_discarded_settings(self):
+        """Append the discarded-settings note to the status line, once.
+
+        The wording mirrors the snapshot reader's ("Saved library snapshot
+        could not be read (…)", load_cached_data): the file, the reason it
+        could not be used, and what the app did instead — run on defaults.
+        Appending, rather than replacing, keeps whatever the snapshot load
+        reported; the status line is rewritten by the next load or refresh,
+        so the notice is startup-scoped like the snapshot messages.
+        """
+        # _read_settings runs before _build creates the status variable, so
+        # a bare instance built for a _load_initial_snapshot test may not
+        # have recorded anything; that is "no failure", not an error.
+        reason = getattr(self, "_settings_read_error", None)
+        if reason is None:
+            return
+        message = f"Settings file could not be read ({reason}); using defaults."
+        current = self.status.get()
+        if message in current:
+            return
+        self.status.set(f"{current} {message}" if current else message)
 
     def _save_settings(self, _event=None):
         if self.tree is None:
