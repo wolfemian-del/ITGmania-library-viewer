@@ -2733,12 +2733,12 @@ class LiveDpiScaleTests(unittest.TestCase):
             factor = application._dpi_scale
             self.assertEqual(factor, library_data.dpi_scale_factor(root.winfo_fpixels("1i")))
             self.assertGreater(factor, 0)
-            default_width, default_height = (int(part) for part in theme.WINDOW_DEFAULT_GEOMETRY.split("x"))
-            parsed = library_data.parse_course_geometry(root.geometry())
-            self.assertIsNotNone(parsed)
-            width, height, _x, _y = parsed
-            self.assertEqual((width, height),
-                             (library_data.scale_pixels(default_width, factor), library_data.scale_pixels(default_height, factor)))
+            # The exact window size is not asserted here: the window
+            # manager clamps it to the screen (the Windows runner's
+            # display is ~1024 wide, so 1500x850 comes back smaller).
+            # The requested size is covered exactly by the geometry unit
+            # tests; the factor reaching the real window is shown by the
+            # minimum size and the column width below.
             self.assertEqual(root.minsize(),
                              (library_data.scale_pixels(theme.WINDOW_MIN_SIZE[0], factor),
                               library_data.scale_pixels(theme.WINDOW_MIN_SIZE[1], factor)))
