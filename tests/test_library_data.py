@@ -1,7 +1,10 @@
+import os
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import library_data as data
 
@@ -1769,3 +1772,50 @@ class CourseGeometryParsingTests(unittest.TestCase):
                       "9" * 5000 + "x620+0+0", "1000x620+" + "9" * 5000 + "+0"):
             with self.subTest(value=value):
                 self.assertIsNone(data.parse_course_geometry(value))
+
+
+class CacheDirCandidatesTests(unittest.TestCase):
+    """Issue #21: the cache guess is per-platform and existence-gated."""
+
+    def test_first_existing_directory_returns_the_first_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            existing = root / "Cache" / "Songs"
+            existing.mkdir(parents=True)
+            missing = root / "Nope"
+            self.assertEqual(data.first_existing_directory([missing, existing]), existing)
+            self.assertIsNone(data.first_existing_directory([missing, root / "AlsoNope"]))
+
+    def test_first_existing_directory_skips_a_candidate_that_is_a_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            file_candidate = root / "Cache"
+            file_candidate.write_text("not a directory", encoding="utf-8")
+            real = root / "Real"
+            real.mkdir()
+            self.assertEqual(data.first_existing_directory([file_candidate, real]), real)
+
+    def test_candidates_on_linux(self):
+        with patch.object(sys, "platform", "linux"):
+            self.assertEqual(data.cache_dir_candidates(),
+                             [Path.home() / ".itgmania" / "Cache" / "Songs"])
+
+    def test_candidates_on_macos(self):
+        with patch.object(sys, "platform", "darwin"):
+            self.assertEqual(data.cache_dir_candidates(),
+                             [Path.home() / "Library" / "Application Support"
+                              / "ITGmania" / "Cache" / "Songs"])
+
+    def test_candidates_on_windows_use_appdata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            appdata = Path(directory)
+            with patch.object(sys, "platform", "win32"), patch.dict(os.environ, {"APPDATA": str(appdata)}):
+                self.assertEqual(data.cache_dir_candidates(),
+                                 [appdata / "ITGmania" / "Cache" / "Songs"])
+
+    def test_candidates_on_windows_without_appdata_fall_back_to_home(self):
+        env = {key: value for key, value in os.environ.items() if key != "APPDATA"}
+        with patch.object(sys, "platform", "win32"), patch.dict(os.environ, env, clear=True):
+            self.assertEqual(data.cache_dir_candidates(),
+                             [Path.home() / "AppData" / "Roaming"
+                              / "ITGmania" / "Cache" / "Songs"])

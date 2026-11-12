@@ -12,9 +12,9 @@ python library_visualizer.py
 
 Optional: install `matplotlib` (`pip install matplotlib`, or `pip install -r requirements.txt`) to display interactive collection distribution charts (Meter, Difficulty, and BPM) in the collapsible side panel. Without it the panel shows an install hint and everything else works as usual.
 
-The app starts with the usual Windows ITGmania cache location filled in when it exists. Select the flat `Cache/Songs` folder and the player's `Stats.xml` with **Browse…**, then choose **Load / refresh**. The `Stats.xml` can be selected from a local profile folder; it is read only. After the first refresh, the app saves a local snapshot of the parsed chart library and restores it on later launches. Use **Load / refresh** when you want to reread the cache and scores; the saved snapshot does not update automatically when those files change.
+The app starts with the usual ITGmania cache location for your platform filled in when it exists. Select the flat `Cache/Songs` folder and the player's `Stats.xml` with **Browse…**, then choose **Load / refresh**. The `Stats.xml` can be selected from a local profile folder; it is read only. After the first refresh, the app saves a local snapshot of the parsed chart library and restores it on later launches. Use **Load / refresh** when you want to reread the cache and scores; the saved snapshot does not update automatically when those files change.
 
-On Linux and macOS, choose the cache and profile paths with **Browse…**; the automatic cache-path guess is Windows-specific.
+On Linux the usual cache location is `~/.itgmania/Cache/Songs`, and on macOS `~/Library/Application Support/ITGmania/Cache/Songs`; if the guess comes up empty, choose the cache and profile paths with **Browse…**.
 
 ## Data expectations and troubleshooting
 

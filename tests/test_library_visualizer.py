@@ -191,6 +191,56 @@ class AdvancedSearchGeometryAppTests(unittest.TestCase):
         instance._save_settings.assert_called_once_with()
 
 
+class CacheDefaultTests(unittest.TestCase):
+    """Issue #21: the cache field is seeded from the first existing
+    per-platform candidate, or left empty when none exists."""
+
+    def make_root(self):
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+
+        def destroy_quietly():
+            with contextlib.suppress(Exception):
+                root.destroy()
+
+        self.addCleanup(destroy_quietly)
+        return root
+
+    def construct(self, settings, first_existing):
+        root = self.make_root()
+        settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(settings_dir.cleanup)
+        settings_path = Path(settings_dir.name) / "settings.json"
+        settings_path.write_text(json.dumps(settings), encoding="utf-8")
+        patcher = patch.object(app.LibraryApp, "_settings_file_path", staticmethod(lambda: settings_path))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        guesser = patch.object(app, "first_existing_directory", return_value=first_existing)
+        guesser.start()
+        self.addCleanup(guesser.stop)
+        return app.LibraryApp(root)
+
+    def test_cache_field_prefills_with_the_first_existing_candidate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "Cache" / "Songs"
+            application = self.construct({}, candidate)
+            self.assertEqual(application.cache_var.get(), str(candidate))
+
+    def test_cache_field_starts_empty_when_no_candidate_exists(self):
+        application = self.construct({}, None)
+        self.assertEqual(application.cache_var.get(), "")
+
+    def test_saved_cache_dir_still_wins_over_the_guess(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "Cache" / "Songs"
+            application = self.construct({"cache_dir": "/saved/cache"}, candidate)
+            self.assertEqual(application.cache_var.get(), "/saved/cache")
+
+
 class LibrarySnapshotTests(unittest.TestCase):
     @staticmethod
     def make_app(settings_path, cache_dir, stats_file):
