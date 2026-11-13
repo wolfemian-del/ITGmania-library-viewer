@@ -57,6 +57,72 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertIsNone(result.reason)
         self.assertIsNone(result.detail)
 
+    def test_round_trip_preserves_score_description_and_merge_uses_it(self):
+        # Issue #152: the parse carries the scoring description in each
+        # row as a hidden "Score description" field. A snapshot round-trip
+        # must preserve it, and a merge after the restore must key on it
+        # (not on the Chart field) for a both-tags Edit chart.
+        with tempfile.TemporaryDirectory() as directory:
+            cache_dir = Path(directory) / "Cache" / "Songs"
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Edit' Description='Real Desc'>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+                "<LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "<Steps StepsType='dance-single' Difficulty='Edit'>"
+                "<HighScoreList><NumTimesPlayed>1</NumTimesPlayed>"
+                "<LastPlayed>2026-01-01</LastPlayed>"
+                "<HighScore><PercentDP>0.50</PercentDP><Score>500000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            cache_file = Path(directory) / "both.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Edit;\n"
+                "#DESCRIPTION:Real Desc;\n"
+                "#CHARTNAME:Other Name;\n",
+                encoding="utf-8",
+            )
+            scores = library_data.stats_index(stats_file)
+            rows, _ = library_data.parse_cache_file(cache_file, scores)
+            self.assertEqual(rows[0]["Score"], 950000)
+            self.assertEqual(rows[0]["Score description"], "Real Desc")
+
+            # Round-trip through the snapshot store.
+            store, _path = self.make_store(directory)
+            store.write(cache_dir, stats_file, rows, 1, 0, 0, False)
+            result = store.read(cache_dir, stats_file)
+            self.assertTrue(result.loaded)
+            restored = result.rows
+            self.assertEqual(restored[0]["Score description"], "Real Desc")
+            self.assertEqual(restored[0]["Score"], 950000)
+
+            # A changed score in Stats.xml is picked up by the merge
+            # through the carried description, not the Chart field.
+            stats_file.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Edit' Description='Real Desc'>"
+                "<HighScoreList><NumTimesPlayed>9</NumTimesPlayed>"
+                "<LastPlayed>2026-02-03</LastPlayed>"
+                "<HighScore><PercentDP>0.97</PercentDP><Score>970000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            changed = library_data.merge_scores(
+                restored, library_data.stats_index(stats_file))
+            self.assertEqual(changed, 1)
+            self.assertEqual(restored[0]["Score"], 970000)
+            self.assertEqual(restored[0]["Plays"], 9)
+
     def test_write_field_order_pin(self):
         # skipped_blocks and nested_song_tree are adjacent positional
         # arguments; if their order were swapped, the payload would carry
@@ -284,12 +350,16 @@ class SnapshotStoreTests(unittest.TestCase):
         # non-dict row, and non-string source paths are all invalid.
         malformed = [
             ["not", "a", "dict"],
-            {"schema_version": 3, "cache_dir": "Cache", "stats_file": "Stats.xml",
+            {"schema_version": library_data.LIBRARY_CACHE_SCHEMA_VERSION,
+             "cache_dir": "Cache", "stats_file": "Stats.xml",
              "rows": "not a list"},
-            {"schema_version": 3, "cache_dir": "Cache", "stats_file": "Stats.xml",
+            {"schema_version": library_data.LIBRARY_CACHE_SCHEMA_VERSION,
+             "cache_dir": "Cache", "stats_file": "Stats.xml",
              "rows": ["not a dict"]},
-            {"schema_version": 3, "cache_dir": 123, "stats_file": "Stats.xml", "rows": []},
-            {"schema_version": 3, "cache_dir": "Cache", "stats_file": None, "rows": []},
+            {"schema_version": library_data.LIBRARY_CACHE_SCHEMA_VERSION,
+             "cache_dir": 123, "stats_file": "Stats.xml", "rows": []},
+            {"schema_version": library_data.LIBRARY_CACHE_SCHEMA_VERSION,
+             "cache_dir": "Cache", "stats_file": None, "rows": []},
         ]
         for payload in malformed:
             with self.subTest(payload=payload), tempfile.TemporaryDirectory() as directory:

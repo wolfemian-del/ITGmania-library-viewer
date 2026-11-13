@@ -768,22 +768,23 @@ class MergeScoresTests(unittest.TestCase):
         self.assertEqual(changed, 0)
         self.assertEqual(rows, before)
 
-    def test_merge_scores_for_a_both_tags_edit_uses_the_shared_score(self):
+    def test_merge_scores_for_a_both_tags_edit_uses_the_described_score(self):
         # An Edit chart carrying both #DESCRIPTION and #CHARTNAME with
         # different values: the parse keys its score on the description,
-        # but the row's Chart field carries the chart name, so the merge
-        # keys on the chart name and falls back to the shared-key score.
-        # This pins the accepted edge from issue #147.
+        # and the row now carries that description, so the merge looks up
+        # the same entry instead of falling back to the shared-key score.
         with tempfile.TemporaryDirectory() as directory:
             stats_file = Path(directory) / "Stats.xml"
             stats_file.write_text(
                 "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
                 "<Steps StepsType='dance-single' Difficulty='Edit' Description='Real Desc'>"
-                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+                "<LastPlayed>2026-02-01</LastPlayed>"
                 "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
                 "</HighScoreList></Steps>"
                 "<Steps StepsType='dance-single' Difficulty='Edit'>"
-                "<HighScoreList><NumTimesPlayed>1</NumTimesPlayed><LastPlayed>2026-01-01</LastPlayed>"
+                "<HighScoreList><NumTimesPlayed>1</NumTimesPlayed>"
+                "<LastPlayed>2026-01-01</LastPlayed>"
                 "<HighScore><PercentDP>0.50</PercentDP><Score>500000</Score></HighScore>"
                 "</HighScoreList></Steps>"
                 "</Song></SongScores></Stats>",
@@ -807,14 +808,14 @@ class MergeScoresTests(unittest.TestCase):
         # described score -- and its Chart field carries the chart name.
         self.assertEqual(rows[0]["Chart"], "Other Name")
         self.assertEqual(rows[0]["Score"], 950000)
+        self.assertEqual(rows[0]["Score description"], "Real Desc")
         changed = data.merge_scores(rows, scores)
 
-        # The merge keys on the row's Chart, finds no described entry for
-        # it, and falls back to the shared-key score.
-        self.assertEqual(changed, 1)
-        self.assertEqual(rows[0]["Score"], 500000)
-        self.assertEqual(rows[0]["Best %"], 50.0)
-        self.assertEqual(rows[0]["Plays"], 1)
+        # The merge reads the carried description and keeps the described
+        # score, even though an undescribed sibling entry exists.
+        self.assertEqual(changed, 0)
+        self.assertEqual(rows[0]["Score"], 950000)
+        self.assertEqual(rows[0]["Plays"], 5)
 
     def test_merge_scores_blanks_fields_when_the_score_is_gone(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -945,16 +946,17 @@ class MergeScoresTests(unittest.TestCase):
         self.assertEqual(changed, 0)
         self.assertEqual(rows[0]["Score"], 900000)
 
-    def test_merge_scores_for_a_both_tags_edit_with_only_its_own_entry_blanks_the_score(self):
-        # The both-tags edge, worst outcome: the chart's own described
-        # entry is the only one, so the merge (keyed on the chart name)
-        # finds nothing and blanks a real score. A full refresh repairs it.
+    def test_merge_scores_for_a_both_tags_edit_with_only_its_own_entry_keeps_the_score(self):
+        # The both-tags edge, fixed: the chart's own described entry is the
+        # only one, and the row carries that description, so the merge keeps
+        # the score instead of blanking it.
         with tempfile.TemporaryDirectory() as directory:
             stats_file = Path(directory) / "Stats.xml"
             stats_file.write_text(
                 "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
                 "<Steps StepsType='dance-single' Difficulty='Edit' Description='Real Desc'>"
-                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+                "<LastPlayed>2026-02-01</LastPlayed>"
                 "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
                 "</HighScoreList></Steps>"
                 "</Song></SongScores></Stats>",
@@ -976,24 +978,26 @@ class MergeScoresTests(unittest.TestCase):
             self.assertEqual(rows[0]["Score"], 950000)
             changed = data.merge_scores(rows, scores)
 
-        self.assertEqual(changed, 1)
-        self.assertEqual(rows[0]["Score"], "")
-        self.assertEqual(rows[0]["Plays"], 0)
+        self.assertEqual(changed, 0)
+        self.assertEqual(rows[0]["Score"], 950000)
+        self.assertEqual(rows[0]["Plays"], 5)
 
-    def test_merge_scores_for_a_both_tags_edit_takes_a_sibling_edit_score(self):
-        # The both-tags edge, third outcome: a sibling Edit's description
-        # equals this chart's CHARTNAME, so the merge takes the sibling's
-        # score instead of the chart's own.
+    def test_merge_scores_for_a_both_tags_edit_ignores_a_sibling_edit_score(self):
+        # The both-tags edge, fixed: a sibling Edit's description equals
+        # this chart's CHARTNAME, but the row carries this chart's own
+        # description, so the merge keeps its own score.
         with tempfile.TemporaryDirectory() as directory:
             stats_file = Path(directory) / "Stats.xml"
             stats_file.write_text(
                 "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
                 "<Steps StepsType='dance-single' Difficulty='Edit' Description='Real Desc'>"
-                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+                "<LastPlayed>2026-02-01</LastPlayed>"
                 "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
                 "</HighScoreList></Steps>"
                 "<Steps StepsType='dance-single' Difficulty='Edit' Description='Other Name'>"
-                "<HighScoreList><NumTimesPlayed>8</NumTimesPlayed><LastPlayed>2026-02-03</LastPlayed>"
+                "<HighScoreList><NumTimesPlayed>8</NumTimesPlayed>"
+                "<LastPlayed>2026-02-03</LastPlayed>"
                 "<HighScore><PercentDP>0.90</PercentDP><Score>900000</Score></HighScore>"
                 "</HighScoreList></Steps>"
                 "</Song></SongScores></Stats>",
@@ -1015,9 +1019,53 @@ class MergeScoresTests(unittest.TestCase):
             self.assertEqual(rows[0]["Score"], 950000)
             changed = data.merge_scores(rows, scores)
 
+        self.assertEqual(changed, 0)
+        self.assertEqual(rows[0]["Score"], 950000)
+        self.assertEqual(rows[0]["Plays"], 5)
+
+    def test_merge_scores_for_a_row_without_a_score_description_falls_back_to_the_chart_field(self):
+        # A row that somehow lacks the carried description falls back to
+        # the Chart field (defensive: the schema bump to 4 discards
+        # snapshots written before the field existed).
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Edit' Description='Real Desc'>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+                "<LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "<Steps StepsType='dance-single' Difficulty='Edit'>"
+                "<HighScoreList><NumTimesPlayed>1</NumTimesPlayed>"
+                "<LastPlayed>2026-01-01</LastPlayed>"
+                "<HighScore><PercentDP>0.50</PercentDP><Score>500000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            cache_file = Path(directory) / "both.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Edit;\n"
+                "#DESCRIPTION:Real Desc;\n"
+                "#CHARTNAME:Other Name;\n",
+                encoding="utf-8",
+            )
+            scores = data.stats_index(stats_file)
+            rows, _ = data.parse_cache_file(cache_file, scores)
+            # Simulate a row without the field: drop the carried description.
+            del rows[0]["Score description"]
+            self.assertEqual(rows[0]["Score"], 950000)
+            changed = data.merge_scores(rows, scores)
+
+        # Without the field the merge keys on the Chart field and falls
+        # back to the shared-key score, as in v1.
         self.assertEqual(changed, 1)
-        self.assertEqual(rows[0]["Score"], 900000)
-        self.assertEqual(rows[0]["Plays"], 8)
+        self.assertEqual(rows[0]["Score"], 500000)
 
 
 class DifficultySortTests(unittest.TestCase):

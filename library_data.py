@@ -343,11 +343,9 @@ def _score_for_chart(scores: dict, base_key: tuple[str, str, str],
     scores-only sync can run it over already-parsed rows. `description` is
     the value the score is keyed on: for the parse it is the chart's
     #DESCRIPTION (falling back to #CHARTNAME); for a sync it is the row's
-    Chart field, which is #CHARTNAME-or-#DESCRIPTION -- the opposite
-    fallback order. So an Edit chart carrying both tags with different
-    values can blank its score, take the shared-key score, or take a
-    sibling Edit's score, depending on which Stats.xml entries exist
-    (issue #147); a full refresh repairs it.
+    carried "Score description" field, falling back to the Chart field
+    for a row that lacks it (the schema bump to 4 discards snapshots
+    written before the field existed).
     """
     diff = difficulty.casefold()
     chart = (description or "").strip()
@@ -393,18 +391,19 @@ def merge_scores(rows: list[dict], scores: dict) -> int:
     """Re-derive the score fields of already-parsed rows, in place.
 
     The score key is re-derived from each row: the base key
-    (Course path, Type, Difficulty), all casefolded, plus the row's Chart
-    field for described Edit charts. Returns the number of rows whose
-    score fields changed. Rows are never added or removed -- a song
-    added to the cache has no row to merge into and still needs a full
-    refresh (issue #147).
+    (Course path, Type, Difficulty), all casefolded, plus the scoring
+    description the parse carried in the row ("Score description"),
+    falling back to the row's Chart field for a row that lacks it.
+    Returns the number of rows whose score fields changed. Rows are
+    never added or removed -- a song added to the cache has no row to
+    merge into and still needs a full refresh (issue #147).
 
-    Known edge, accepted for v1: an Edit chart carrying both #DESCRIPTION
-    and a different #CHARTNAME is keyed by the parse on its description,
-    but the row's Chart field carries the chart name, so the merge looks
-    up the wrong description. With Stats.xml unchanged it can blank the
-    score, take the shared-key score, or take a sibling Edit's score,
-    depending on which entries exist; a full refresh repairs it.
+    The parse carries the scoring description in the row, so the merge
+    looks up the same entry the parse did -- including for an Edit chart
+    carrying both #DESCRIPTION and a different #CHARTNAME. The schema
+    bump to 4 discards snapshots written before this field existed, so
+    they rebuild with it; the Chart fallback is only a defensive path
+    for a row that somehow lacks the field.
     """
     changed = 0
     for row in rows:
@@ -414,7 +413,10 @@ def merge_scores(rows: list[dict], scores: dict) -> int:
             row["Difficulty"].casefold(),
         )
         before = tuple(row.get(field) for field in _SCORE_FIELDS)
-        score = _score_for_chart(scores, base_key, row["Difficulty"], row["Chart"])
+        # The parse carries the scoring description in the row; fall back to
+        # the Chart field for rows from old snapshots, which lack it.
+        description = row.get("Score description") or row["Chart"]
+        score = _score_for_chart(scores, base_key, row["Difficulty"], description)
         _apply_score_fields(row, score)
         if tuple(row.get(field) for field in _SCORE_FIELDS) != before:
             changed += 1
@@ -469,6 +471,10 @@ def parse_cache_file(path: Path, scores: dict) -> tuple[list[dict], int]:
             "Time": number(song_tags.get("MUSICLENGTH")) if song_tags.get("MUSICLENGTH") else "",
             "BPM": bpm_display, "bpm_min": chart_min, "bpm_max": chart_max,
             "Chart": display_name,
+            # The description the score is keyed on (#DESCRIPTION, falling
+            # back to #CHARTNAME): the merge reads it back, so a both-tags
+            # Edit looks up the same entry the parse did (issue #152).
+            "Score description": score_description,
             # ITGmania formats #PEAKNPS as player-separated sections (P1|P2); take player 1.
             "Peak NPS": number(tags.get("PEAKNPS", "").split("|")[0]) if tags.get("PEAKNPS") else "",
             "Taps/Holds": radar.get("TapsAndHolds", ""), "Jumps": radar.get("Jumps", ""),
@@ -526,7 +532,7 @@ def first_existing_directory(candidates) -> Path | None:
 
 
 # The library snapshot (proposal 0008): SnapshotStore owns library_cache.json.
-LIBRARY_CACHE_SCHEMA_VERSION = 3
+LIBRARY_CACHE_SCHEMA_VERSION = 4
 
 
 def _normalized_source_path(path):
