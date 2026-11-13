@@ -97,6 +97,7 @@ __all__ = [
     "grade_sort_key",
     "looks_like_song_tree",
     "match_chart_query",
+    "merge_scores",
     "number",
     "parse_bpms",
     "parse_cache_file",
@@ -334,6 +335,92 @@ def _merged_edit_fallback(scores: dict, base_key: tuple[str, str, str]) -> dict:
     return merged
 
 
+def _score_for_chart(scores: dict, base_key: tuple[str, str, str],
+                     difficulty: str, description: str) -> dict:
+    """Return the best Stats.xml entry for one chart.
+
+    This is the score lookup parse_cache_file uses, factored out so the
+    scores-only sync can run it over already-parsed rows. `description` is
+    the value the score is keyed on: for the parse it is the chart's
+    #DESCRIPTION (falling back to #CHARTNAME); for a sync it is the row's
+    Chart field, which is #CHARTNAME-or-#DESCRIPTION -- the opposite
+    fallback order. So an Edit chart carrying both tags with different
+    values can blank its score, take the shared-key score, or take a
+    sibling Edit's score, depending on which Stats.xml entries exist
+    (issue #147); a full refresh repairs it.
+    """
+    diff = difficulty.casefold()
+    chart = (description or "").strip()
+    if diff == "edit" and chart:
+        score = scores.get((*base_key, chart.casefold()))
+        if score is None:
+            # The Stats entry itself has no description: use its shared key.
+            score = scores.get(base_key, {})
+    elif diff == "edit":
+        # The cache chart has no description: fall back to the shared
+        # result across the song's Edit entries, described or not.
+        score = _merged_edit_fallback(scores, base_key)
+    else:
+        score = scores.get(base_key, {})
+    return score or {}
+
+
+def _apply_score_fields(row: dict, score: dict) -> None:
+    """Rewrite a row's score-derived fields from one Stats.xml entry.
+
+    Touches only the score fields (Score, Grade, Best %, Plays,
+    Last played, the TAP_FIELDS, Max combo); every other field is left
+    as it is. A missing entry blanks them, the way the parse does for
+    an unscored chart.
+    """
+    percent = number(score.get("PercentDP")) * 100
+    row["Score"] = number(score.get("Score")) if score else ""
+    row["Grade"] = GRADE_NAMES.get(score.get("Grade", ""), score.get("Grade", ""))
+    row["Best %"] = round(percent, 2) if score else ""
+    row["Plays"] = number(score.get("plays"))
+    row["Last played"] = score.get("last_played", "")
+    for name in TAP_FIELDS:
+        row[name] = number(score.get("tap_" + name)) if score else ""
+    row["Max combo"] = number(score.get("MaxCombo")) if score else ""
+
+
+# The fields _apply_score_fields owns, used to count changed rows.
+_SCORE_FIELDS = ("Score", "Grade", "Best %", "Plays", "Last played",
+                 *TAP_FIELDS, "Max combo")
+
+
+def merge_scores(rows: list[dict], scores: dict) -> int:
+    """Re-derive the score fields of already-parsed rows, in place.
+
+    The score key is re-derived from each row: the base key
+    (Course path, Type, Difficulty), all casefolded, plus the row's Chart
+    field for described Edit charts. Returns the number of rows whose
+    score fields changed. Rows are never added or removed -- a song
+    added to the cache has no row to merge into and still needs a full
+    refresh (issue #147).
+
+    Known edge, accepted for v1: an Edit chart carrying both #DESCRIPTION
+    and a different #CHARTNAME is keyed by the parse on its description,
+    but the row's Chart field carries the chart name, so the merge looks
+    up the wrong description. With Stats.xml unchanged it can blank the
+    score, take the shared-key score, or take a sibling Edit's score,
+    depending on which entries exist; a full refresh repairs it.
+    """
+    changed = 0
+    for row in rows:
+        base_key = (
+            row["Course path"].casefold(),
+            row["Type"].casefold(),
+            row["Difficulty"].casefold(),
+        )
+        before = tuple(row.get(field) for field in _SCORE_FIELDS)
+        score = _score_for_chart(scores, base_key, row["Difficulty"], row["Chart"])
+        _apply_score_fields(row, score)
+        if tuple(row.get(field) for field in _SCORE_FIELDS) != before:
+            changed += 1
+    return changed
+
+
 def parse_cache_file(path: Path, scores: dict) -> tuple[list[dict], int]:
     """Parse a cache file into chart rows, and count skipped chart blocks.
 
@@ -373,19 +460,8 @@ def parse_cache_file(path: Path, scores: dict) -> tuple[list[dict], int]:
         # there instead (older SSC loading), not a replacement for it.
         score_description = tags.get("DESCRIPTION", "").strip() or tags.get("CHARTNAME", "").strip()
         base_key = (song_dir.casefold(), chart_type.casefold(), difficulty.casefold())
-        if difficulty.casefold() == "edit" and score_description:
-            score = scores.get((*base_key, score_description.casefold()))
-            if score is None:
-                # The Stats entry itself has no description: use its shared key.
-                score = scores.get(base_key, {})
-        elif difficulty.casefold() == "edit":
-            # The cache chart has no description: fall back to the shared
-            # result across the song's Edit entries, described or not.
-            score = _merged_edit_fallback(scores, base_key)
-        else:
-            score = scores.get(base_key, {})
-        percent = number(score.get("PercentDP")) * 100
-        rows.append({
+        score = _score_for_chart(scores, base_key, difficulty, score_description)
+        row = {
             "Title": song_tags.get("TITLE", path.stem),
             "Subtitle": song_tags.get("SUBTITLE", ""), "Artist": song_tags.get("ARTIST", ""),
             "Pack": pack, "Type": chart_type, "Difficulty": difficulty, "Course path": song_dir,
@@ -393,21 +469,17 @@ def parse_cache_file(path: Path, scores: dict) -> tuple[list[dict], int]:
             "Time": number(song_tags.get("MUSICLENGTH")) if song_tags.get("MUSICLENGTH") else "",
             "BPM": bpm_display, "bpm_min": chart_min, "bpm_max": chart_max,
             "Chart": display_name,
-            "Score": number(score.get("Score")) if score else "",
-            "Grade": GRADE_NAMES.get(score.get("Grade", ""), score.get("Grade", "")),
-            "Best %": round(percent, 2) if score else "", "Plays": number(score.get("plays")),
-            "Last played": score.get("last_played", ""),
             # ITGmania formats #PEAKNPS as player-separated sections (P1|P2); take player 1.
             "Peak NPS": number(tags.get("PEAKNPS", "").split("|")[0]) if tags.get("PEAKNPS") else "",
             "Taps/Holds": radar.get("TapsAndHolds", ""), "Jumps": radar.get("Jumps", ""),
             "Holds": radar.get("Holds", ""), "Rolls": radar.get("Rolls", ""),
             "Mines": radar.get("Mines", ""), "Hands": radar.get("Hands", ""),
             "Lifts": radar.get("Lifts", ""),
-            **{name: number(score.get("tap_" + name)) if score else "" for name in TAP_FIELDS},
-            "Max combo": number(score.get("MaxCombo")) if score else "",
             **{name: tech[i] if i < len(tech) and tech[i] >= 0 else ""
                for i, name in enumerate(TECH_FIELDS)},
-        })
+        }
+        _apply_score_fields(row, score)
+        rows.append(row)
     return rows, skipped_blocks
 
 

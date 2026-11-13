@@ -2203,6 +2203,381 @@ class RefreshGenerationTests(unittest.TestCase):
             self.assertEqual(mock_thread.call_args.kwargs["args"][2], 1)
 
 
+class ScoresSyncTests(unittest.TestCase):
+    """The scores-only sync (issue #147): re-read Stats.xml, no cache re-parse."""
+
+    def _write_song(self, root):
+        cache_dir = root / "Cache"
+        cache_dir.mkdir()
+        (cache_dir / "song.cache").write_text(
+            "#TITLE:Song;\n"
+            "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+            "#NOTEDATA:;\n"
+            "#STEPSTYPE:dance-single;\n"
+            "#DIFFICULTY:Hard;\n"
+            "#METER:10;\n",
+            encoding="utf-8")
+        stats_file = root / "Stats.xml"
+        stats_file.write_text(
+            "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+            "<Steps StepsType='dance-single' Difficulty='Hard'>"
+            "<HighScoreList><NumTimesPlayed>7</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+            "<HighScore><PercentDP>0.95</PercentDP><Score>900000</Score><Grade>Tier01</Grade></HighScore>"
+            "</HighScoreList></Steps>"
+            "</Song></SongScores></Stats>",
+            encoding="utf-8")
+        return cache_dir, stats_file
+
+    def _fresh_stats(self, stats_file):
+        stats_file.write_text(
+            "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+            "<Steps StepsType='dance-single' Difficulty='Hard'>"
+            "<HighScoreList><NumTimesPlayed>8</NumTimesPlayed><LastPlayed>2026-02-02</LastPlayed>"
+            "<HighScore><PercentDP>0.975</PercentDP><Score>975000</Score><Grade>Tier02</Grade></HighScore>"
+            "</HighScoreList></Steps>"
+            "</Song></SongScores></Stats>",
+            encoding="utf-8")
+
+    def _sync_instance(self, root, rows):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_generation = 1
+        instance._snapshot_lock = threading.Lock()
+        instance._load_results = queue.Queue()
+        instance._snapshot_store = library_data.SnapshotStore(
+            root / "library_cache.json", app.HEADERS,
+            library_data.LIBRARY_CACHE_SCHEMA_VERSION)
+        instance.root = Mock()
+        instance.rows = rows
+        return instance
+
+    def test_sync_worker_merges_scores_saves_snapshot_and_delivers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = self._write_song(root)
+            rows, _ = library_data.parse_cache_file(
+                cache_dir / "song.cache", library_data.stats_index(stats_file))
+            self.assertEqual(rows[0]["Score"], 900000)
+            self._fresh_stats(stats_file)
+            instance = self._sync_instance(root, rows)
+            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
+
+            # The rows carry the fresh scores, the snapshot on disk does too,
+            # and the delivery reports one changed chart.
+            self.assertEqual(rows[0]["Score"], 975000)
+            self.assertEqual(rows[0]["Best %"], 97.5)
+            snapshot = json.loads((root / "library_cache.json").read_text(encoding="utf-8"))
+            self.assertEqual(snapshot["rows"][0]["Score"], 975000)
+            queued = []
+            while not instance._load_results.empty():
+                queued.append(instance._load_results.get_nowait())
+            synced = [item for item in queued if item[0] == "scores_synced"]
+            self.assertEqual(len(synced), 1)
+            kind, args, kwargs = synced[0]
+            self.assertEqual(args[1], 1)  # one chart changed
+            self.assertEqual(kwargs["generation"], 1)
+            self.assertTrue(kwargs["refreshed_at"])
+
+    def test_sync_worker_superseded_does_not_save_or_deliver(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = self._write_song(root)
+            rows, _ = library_data.parse_cache_file(
+                cache_dir / "song.cache", library_data.stats_index(stats_file))
+            self._fresh_stats(stats_file)
+            instance = self._sync_instance(root, rows)
+            instance._load_generation = 2  # a newer Load / refresh exists
+            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
+
+            self.assertFalse((root / "library_cache.json").exists())
+            self.assertTrue(instance._load_results.empty())
+
+    def test_sync_worker_malformed_stats_fails_without_changes_or_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = self._write_song(root)
+            rows, _ = library_data.parse_cache_file(
+                cache_dir / "song.cache", library_data.stats_index(stats_file))
+            stats_file.write_text("<Stats><SongScores>", encoding="utf-8")
+            instance = self._sync_instance(root, rows)
+            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
+
+            self.assertEqual(rows[0]["Score"], 900000)  # unchanged
+            self.assertFalse((root / "library_cache.json").exists())
+            kind, message, generation = instance._load_results.get_nowait()
+            self.assertEqual((kind, generation), ("scores_sync_failed", 1))
+            self.assertIn("malformed", message)
+            self.assertTrue(instance._load_results.empty())
+
+    def test_scores_synced_handler_reports_count_and_refreshes_preserving_selection(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_generation = 1
+        instance.progress = Mock()
+        instance.status = Mock()
+        instance.refresh_table = Mock()
+        rows = [{"Title": "Song"}]
+        instance._scores_synced(rows, 2, refreshed_at="2026-02-02T10:00:00+00:00", generation=1)
+
+        self.assertIs(instance.rows, rows)
+        self.assertEqual(instance.last_refreshed_at, "2026-02-02T10:00:00+00:00")
+        status = instance.status.set.call_args.args[0]
+        self.assertIn("Scores synced · 2 charts updated", status)
+        instance.refresh_table.assert_called_once_with(preserve_selection=True)
+
+    def test_scores_synced_handler_reports_up_to_date_when_nothing_changed(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_generation = 1
+        instance.progress = Mock()
+        instance.status = Mock()
+        instance.refresh_table = Mock()
+        instance._scores_synced([], 0, refreshed_at="2026-02-02T10:00:00+00:00", generation=1)
+        status = instance.status.set.call_args.args[0]
+        self.assertIn("Scores are already up to date", status)
+        instance.refresh_table.assert_called_once_with(preserve_selection=True)
+
+    def test_scores_synced_handler_drops_stale_generation(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_generation = 5
+        instance.progress = Mock()
+        instance.status = Mock()
+        instance.refresh_table = Mock()
+        instance._scores_synced([], 1, generation=4)
+        instance.progress.stop.assert_not_called()
+        instance.status.set.assert_not_called()
+        instance.refresh_table.assert_not_called()
+
+    def test_sync_scores_refuses_while_a_scan_is_in_flight(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._scan_in_flight = True
+        instance.rows = [{"Title": "Song"}]
+        instance.status = Mock()
+        instance.sync_scores()
+        instance.status.set.assert_called_once_with(
+            "A library load is in progress. Wait for it to finish, then sync scores.")
+
+    def test_sync_scores_refuses_with_no_library_loaded(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._scan_in_flight = False
+        instance.rows = []
+        instance.status = Mock()
+        instance.sync_scores()
+        instance.status.set.assert_called_once_with(
+            "No library loaded. Load / refresh first, then sync scores.")
+
+    def test_sync_scores_refuses_when_the_selected_paths_differ(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._scan_in_flight = False
+        instance.rows = [{"Title": "Song"}]
+        instance.status = Mock()
+        instance.loaded_source_paths = ("/old/cache", "/old/Stats.xml")
+        instance.cache_var = Mock()
+        instance.cache_var.get.return_value = "/new/cache"
+        instance.stats_var = Mock()
+        instance.stats_var.get.return_value = "/new/Stats.xml"
+        instance.sync_scores()
+        instance.status.set.assert_called_once_with(
+            "The selected data paths differ from the loaded library. Load / refresh first, then sync scores.")
+
+    def test_sync_scores_refuses_while_a_sync_is_in_flight(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._scan_in_flight = False
+        instance._sync_in_flight = True
+        instance.rows = [{"Title": "Song"}]
+        instance.status = Mock()
+        instance.sync_scores()
+        instance.status.set.assert_called_once_with(
+            "A scores sync is already in progress. Wait for it to finish, then sync again.")
+
+    def test_sync_scores_sets_the_flag_and_disables_the_menu(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = self._write_song(root)
+            instance = object.__new__(app.LibraryApp)
+            instance._scan_in_flight = False
+            instance._sync_in_flight = False
+            instance._load_generation = 1
+            instance.rows = [{"Title": "Song"}]
+            instance.cache_var = Mock()
+            instance.cache_var.get.return_value = str(cache_dir)
+            instance.stats_var = Mock()
+            instance.stats_var.get.return_value = str(stats_file)
+            instance.progress = Mock()
+            instance.status = Mock()
+            instance._file_menu = Mock()
+            with patch.object(app.threading, "Thread") as mock_thread:
+                instance.sync_scores()
+            self.assertTrue(instance._sync_in_flight)
+            instance._file_menu.entryconfigure.assert_called_once_with(
+                "Sync scores from Stats.xml", state="disabled")
+            mock_thread.assert_called_once()
+
+    def test_scores_synced_handler_clears_the_sync_flag_and_re_enables_the_menu(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_generation = 1
+        instance._sync_in_flight = True
+        instance.progress = Mock()
+        instance.status = Mock()
+        instance.refresh_table = Mock()
+        instance._file_menu = Mock()
+        instance._scores_synced([{"Title": "Song"}], 1, refreshed_at="2026-02-02T10:00:00+00:00", generation=1)
+        self.assertFalse(instance._sync_in_flight)
+        instance._file_menu.entryconfigure.assert_called_once_with(
+            "Sync scores from Stats.xml", state="normal")
+
+    def test_scores_sync_failed_handler_clears_the_sync_flag_and_re_enables_the_menu(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_generation = 1
+        instance._sync_in_flight = True
+        instance.progress = Mock()
+        instance.status = Mock()
+        instance._file_menu = Mock()
+        with patch.object(app, "messagebox"):
+            instance._scores_sync_failed("boom", generation=1)
+        self.assertFalse(instance._sync_in_flight)
+        instance._file_menu.entryconfigure.assert_called_once_with(
+            "Sync scores from Stats.xml", state="normal")
+
+    def test_stale_scores_synced_clears_the_flag_but_leaves_the_menu_to_the_scan(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_generation = 5
+        instance._sync_in_flight = True
+        instance.progress = Mock()
+        instance.status = Mock()
+        instance.refresh_table = Mock()
+        instance._file_menu = Mock()
+        instance._scores_synced([], 1, generation=4)
+        self.assertFalse(instance._sync_in_flight)
+        instance._file_menu.entryconfigure.assert_not_called()
+        instance.progress.stop.assert_not_called()
+        instance.status.set.assert_not_called()
+        instance.refresh_table.assert_not_called()
+
+    def test_sync_worker_unexpected_stats_error_fails_without_changes_or_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = self._write_song(root)
+            rows, _ = library_data.parse_cache_file(
+                cache_dir / "song.cache", library_data.stats_index(stats_file))
+            # A bogus encoding in the XML declaration raises LookupError,
+            # which is neither ParseError nor OSError.
+            stats_file.write_bytes(b'<?xml version="1.0" encoding="not-a-real-codec"?><Stats/>')
+            instance = self._sync_instance(root, rows)
+            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
+
+            self.assertEqual(rows[0]["Score"], 900000)  # unchanged
+            self.assertFalse((root / "library_cache.json").exists())
+            kind, message, generation = instance._load_results.get_nowait()
+            self.assertEqual((kind, generation), ("scores_sync_failed", 1))
+            self.assertIn("Could not sync scores", message)
+            self.assertTrue(instance._load_results.empty())
+
+    def test_sync_worker_missing_stats_file_fails_without_changes_or_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = self._write_song(root)
+            rows, _ = library_data.parse_cache_file(
+                cache_dir / "song.cache", library_data.stats_index(stats_file))
+            missing = root / "Stats-gone.xml"
+            instance = self._sync_instance(root, rows)
+            instance._sync_scores_worker(cache_dir, missing, rows, generation=1)
+
+            self.assertEqual(rows[0]["Score"], 900000)  # unchanged
+            self.assertFalse((root / "library_cache.json").exists())
+            kind, message, generation = instance._load_results.get_nowait()
+            self.assertEqual((kind, generation), ("scores_sync_failed", 1))
+            self.assertIn("Could not read", message)
+            self.assertTrue(instance._load_results.empty())
+
+    def test_report_newer_stats_file_hints_when_stats_is_newer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>", encoding="utf-8")
+            instance = object.__new__(app.LibraryApp)
+            instance.last_refreshed_at = "2026-01-01T00:00:00+00:00"
+            instance.stats_var = Mock()
+            instance.stats_var.get.return_value = str(stats_file)
+            instance.status = Mock()
+            instance.status.get.return_value = "Showing saved library snapshot."
+            instance._report_newer_stats_file()
+            status = instance.status.set.call_args.args[0]
+            self.assertIn("Stats.xml is newer than the saved library", status)
+            self.assertIn("Sync scores from Stats.xml", status)
+
+    def test_report_newer_stats_file_stays_quiet_when_stats_is_older(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>", encoding="utf-8")
+            instance = object.__new__(app.LibraryApp)
+            instance.last_refreshed_at = "2999-01-01T00:00:00+00:00"
+            instance.stats_var = Mock()
+            instance.stats_var.get.return_value = str(stats_file)
+            instance.status = Mock()
+            instance._report_newer_stats_file()
+            instance.status.set.assert_not_called()
+
+    def test_set_sync_menu_state_configures_the_entry(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._file_menu = Mock()
+        instance._set_sync_menu_state("disabled")
+        instance._file_menu.entryconfigure.assert_called_once_with(
+            "Sync scores from Stats.xml", state="disabled")
+
+    def test_load_data_marks_a_scan_in_flight_and_disables_the_sync_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache"
+            cache_dir.mkdir()
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>", encoding="utf-8")
+            instance = object.__new__(app.LibraryApp)
+            instance.cache_var = Mock()
+            instance.cache_var.get.return_value = str(cache_dir)
+            instance.stats_var = Mock()
+            instance.stats_var.get.return_value = str(stats_file)
+            instance._save_settings = Mock()
+            instance.progress = Mock()
+            instance.status = Mock()
+            instance.load_button = Mock()
+            instance._file_menu = Mock()
+            instance._load_generation = 0
+            instance._scan_in_flight = False
+            with patch.object(app.threading, "Thread") as mock_thread:
+                instance.load_data()
+            self.assertTrue(instance._scan_in_flight)
+            instance._file_menu.entryconfigure.assert_called_once_with(
+                "Sync scores from Stats.xml", state="disabled")
+            mock_thread.assert_called_once()
+
+    def test_load_failed_clears_the_scan_flag_and_re_enables_the_sync_entry(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_generation = 1
+        instance.load_button = Mock()
+        instance._file_menu = Mock()
+        instance.progress = Mock()
+        instance.status = Mock()
+        instance._scan_in_flight = True
+        with patch.object(app, "messagebox"):
+            instance._load_failed("Some error", generation=1)
+        self.assertFalse(instance._scan_in_flight)
+        instance._file_menu.entryconfigure.assert_called_once_with(
+            "Sync scores from Stats.xml", state="normal")
+
+    def test_poll_load_results_delivers_scores_synced_and_failed(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_results = queue.Queue()
+        instance._scores_synced = Mock()
+        instance._scores_sync_failed = Mock()
+        instance.root = Mock()
+        instance._load_results.put(("scores_synced", ([], 2), {"refreshed_at": "2026-02-02T10:00:00+00:00", "generation": 1}))
+        instance._load_results.put(("scores_sync_failed", "boom", 1))
+        instance._poll_load_results()
+        instance._scores_synced.assert_called_once_with(
+            [], 2, refreshed_at="2026-02-02T10:00:00+00:00", generation=1)
+        instance._scores_sync_failed.assert_called_once_with("boom", generation=1)
+        instance.root.after.assert_called_once()
+
+
 class LoadProgressTests(unittest.TestCase):
     """The scan's progress readout: determinate bar, files done, ETA."""
 
