@@ -415,7 +415,14 @@ def merge_scores(rows: list[dict], scores: dict) -> int:
         before = tuple(row.get(field) for field in _SCORE_FIELDS)
         # The parse carries the scoring description in the row; fall back to
         # the Chart field for rows from old snapshots, which lack it.
-        description = row.get("Score description") or row["Chart"]
+        # A hand-edited snapshot can carry a non-string "Score description"
+        # (the snapshot read only checks key presence). Treat it as absent
+        # so the sync falls back to the Chart field instead of failing the
+        # whole sync on one bad row.
+        score_description = row.get("Score description")
+        if not isinstance(score_description, str):
+            score_description = ""
+        description = score_description or row["Chart"]
         score = _score_for_chart(scores, base_key, row["Difficulty"], description)
         _apply_score_fields(row, score)
         if tuple(row.get(field) for field in _SCORE_FIELDS) != before:
