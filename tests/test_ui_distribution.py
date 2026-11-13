@@ -900,8 +900,6 @@ class RealChartClickTests(unittest.TestCase):
 
     def click(self, x_data, label):
         """Click at a chart position; return the search text the click applied, or None."""
-        from matplotlib.backend_bases import MouseEvent
-
         x_px, y_px = self.panel.dist_ax.transData.transform((x_data, self.row_y[label]))
         return self.click_pixels(x_px, y_px)
 
