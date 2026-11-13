@@ -344,9 +344,10 @@ def _score_for_chart(scores: dict, base_key: tuple[str, str, str],
     the value the score is keyed on: for the parse it is the chart's
     #DESCRIPTION (falling back to #CHARTNAME); for a sync it is the row's
     Chart field, which is #CHARTNAME-or-#DESCRIPTION -- the opposite
-    fallback order, so an Edit chart carrying both tags with different
-    values syncs to the shared-key score instead of the described one
-    (issue #147).
+    fallback order. So an Edit chart carrying both tags with different
+    values can blank its score, take the shared-key score, or take a
+    sibling Edit's score, depending on which Stats.xml entries exist
+    (issue #147); a full refresh repairs it.
     """
     diff = difficulty.casefold()
     chart = (description or "").strip()
@@ -397,6 +398,13 @@ def merge_scores(rows: list[dict], scores: dict) -> int:
     score fields changed. Rows are never added or removed -- a song
     added to the cache has no row to merge into and still needs a full
     refresh (issue #147).
+
+    Known edge, accepted for v1: an Edit chart carrying both #DESCRIPTION
+    and a different #CHARTNAME is keyed by the parse on its description,
+    but the row's Chart field carries the chart name, so the merge looks
+    up the wrong description. With Stats.xml unchanged it can blank the
+    score, take the shared-key score, or take a sibling Edit's score,
+    depending on which entries exist; a full refresh repairs it.
     """
     changed = 0
     for row in rows:

@@ -210,6 +210,7 @@ class LibraryApp:
         self._tree_tint = None  # the song table's SelectedRowTint, created with the table in _build
         self._load_generation = 0  # counts Load / refresh requests; a scan from an older request is dropped
         self._scan_in_flight = False  # a scan is running; the scores sync refuses to start while one is (issue #147)
+        self._sync_in_flight = False  # a scores sync is running; a second sync refuses to start while one is (issue #147)
         self._snapshot_lock = threading.Lock()  # one scan at a time may check its generation and write the snapshot
         self._load_results = queue.Queue()  # finished scans wait here; only the main thread delivers them (_poll_load_results)
         # Attributes that are filled in after this point. Declaring them here lists everything the window
@@ -1215,6 +1216,9 @@ class LibraryApp:
         if getattr(self, "_scan_in_flight", False):
             self.status.set("A library load is in progress. Wait for it to finish, then sync scores.")
             return
+        if getattr(self, "_sync_in_flight", False):
+            self.status.set("A scores sync is already in progress. Wait for it to finish, then sync again.")
+            return
         if not self.rows:
             self.status.set("No library loaded. Load / refresh first, then sync scores.")
             return
@@ -1227,6 +1231,8 @@ class LibraryApp:
             # the fix is in the dialog, so that is where the user should be.
             self.open_data_paths_dialog(note=self._invalid_paths_note(cache, stats))
             return
+        self._sync_in_flight = True
+        self._set_sync_menu_state("disabled")
         self.progress.start(12)
         self.status.set("Syncing scores from Stats.xml…")
         # Capture the rows and the generation on the main thread: a Load
@@ -1252,7 +1258,23 @@ class LibraryApp:
                                     f"Could not read the selected Stats.xml.\n\n{exc}",
                                     generation))
             return
-        changed = merge_scores(rows, scores)
+        except Exception as exc:
+            # Anything else stats_index can raise (for example a LookupError
+            # for an unsupported encoding in the XML declaration) must still
+            # reach the main thread, or the progress bar spins forever.
+            self._load_results.put(("scores_sync_failed",
+                                    f"Could not sync scores from Stats.xml.\n\n{exc}",
+                                    generation))
+            return
+        try:
+            changed = merge_scores(rows, scores)
+        except Exception as exc:
+            # A row with a non-text Course path / Type / Difficulty / Chart
+            # would otherwise end the thread silently; deliver the failure.
+            self._load_results.put(("scores_sync_failed",
+                                    f"Could not sync scores from Stats.xml.\n\n{exc}",
+                                    generation))
+            return
         # The generation check and the snapshot write happen under one lock,
         # exactly like the scan worker's: without it, a sync that passed the
         # check could still be writing after a newer scan had written its
@@ -1280,7 +1302,12 @@ class LibraryApp:
 
     def _scores_synced(self, rows, changed, refreshed_at="", cache_error="", generation=None):
         if generation is not None and self._load_is_stale(generation):
+            # A Load superseded this sync: the sync is over, so clear the
+            # flag, but the Load owns the progress bar, status line and menu.
+            self._sync_in_flight = False
             return
+        self._sync_in_flight = False
+        self._set_sync_menu_state("normal")
         self.progress.stop()
         # Back to indeterminate for the next snapshot restore, which has no
         # total to count against.
@@ -1308,7 +1335,12 @@ class LibraryApp:
 
     def _scores_sync_failed(self, message, generation=None):
         if generation is not None and self._load_is_stale(generation):
+            # A Load superseded this sync: the sync is over, so clear the
+            # flag, but the Load owns the progress bar, status line and menu.
+            self._sync_in_flight = False
             return
+        self._sync_in_flight = False
+        self._set_sync_menu_state("normal")
         self.progress.stop()
         self.progress.configure(mode="indeterminate", value=0)
         self.status.set("Could not sync scores.")

@@ -840,6 +840,185 @@ class MergeScoresTests(unittest.TestCase):
         self.assertEqual(hard_row["Plays"], 0)
         self.assertEqual(hard_row["Last played"], "")
 
+    def test_merge_scores_replay_without_improving_counts_the_chart(self):
+        # Replaying a song without beating the best changes only Plays and
+        # Last played, so the "N charts updated" count must include them:
+        # otherwise the sync reports "already up to date" for a real change.
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = self._write_cache(directory)
+            stats_a = Path(directory) / "StatsA.xml"
+            stats_a.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Hard'>"
+                "<HighScoreList><NumTimesPlayed>7</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>900000</Score><Grade>Tier01</Grade><MaxCombo>100</MaxCombo></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            stats_b = Path(directory) / "StatsB.xml"
+            stats_b.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Hard'>"
+                "<HighScoreList><NumTimesPlayed>8</NumTimesPlayed><LastPlayed>2026-02-02</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>900000</Score><Grade>Tier01</Grade><MaxCombo>100</MaxCombo></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            rows, _ = data.parse_cache_file(cache_file, data.stats_index(stats_a))
+            changed = data.merge_scores(rows, data.stats_index(stats_b))
+
+        hard_row = next(r for r in rows if r["Difficulty"] == "Hard")
+        self.assertEqual(changed, 1)
+        self.assertEqual(hard_row["Score"], 900000)
+        self.assertEqual(hard_row["Plays"], 8)
+        self.assertEqual(hard_row["Last played"], "2026-02-02")
+
+    def test_merge_scores_applies_tap_judgments_and_counts_them(self):
+        # No merge fixture had TapNoteScores, so a change to the taps alone
+        # (or Max combo) must still count as an update.
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = self._write_cache(directory)
+            stats_a = Path(directory) / "StatsA.xml"
+            stats_a.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Hard'>"
+                "<HighScoreList><NumTimesPlayed>7</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>900000</Score><Grade>Tier01</Grade><MaxCombo>100</MaxCombo>"
+                "<TapNoteScores><W1>100</W1><W2>5</W2><W3>2</W3><W4>0</W4><W5>0</W5><Miss>1</Miss></TapNoteScores>"
+                "</HighScore></HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            stats_b = Path(directory) / "StatsB.xml"
+            stats_b.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Hard'>"
+                "<HighScoreList><NumTimesPlayed>7</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>900000</Score><Grade>Tier01</Grade><MaxCombo>120</MaxCombo>"
+                "<TapNoteScores><W1>110</W1><W2>5</W2><W3>2</W3><W4>0</W4><W5>0</W5><Miss>0</Miss></TapNoteScores>"
+                "</HighScore></HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            rows, _ = data.parse_cache_file(cache_file, data.stats_index(stats_a))
+            changed = data.merge_scores(rows, data.stats_index(stats_b))
+
+        hard_row = next(r for r in rows if r["Difficulty"] == "Hard")
+        self.assertEqual(changed, 1)
+        self.assertEqual(hard_row["W1"], 110)
+        self.assertEqual(hard_row["Miss"], 0)
+        self.assertEqual(hard_row["Max combo"], 120)
+
+    def test_merge_scores_matches_a_mixed_case_type(self):
+        # The row keeps the cache's STEPSTYPE spelling ("Dance-Single")
+        # while the Stats.xml key is casefolded, so the merge must casefold
+        # the Type when it re-derives the base key.
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = Path(directory) / "song.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:Dance-Single;\n"
+                "#DIFFICULTY:Hard;\n"
+                "#METER:10;\n",
+                encoding="utf-8",
+            )
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Hard'>"
+                "<HighScoreList><NumTimesPlayed>7</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>900000</Score><Grade>Tier01</Grade></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            scores = data.stats_index(stats_file)
+            rows, _ = data.parse_cache_file(cache_file, scores)
+            self.assertEqual(rows[0]["Type"], "Dance-Single")
+            self.assertEqual(rows[0]["Score"], 900000)
+            changed = data.merge_scores(rows, scores)
+
+        self.assertEqual(changed, 0)
+        self.assertEqual(rows[0]["Score"], 900000)
+
+    def test_merge_scores_for_a_both_tags_edit_with_only_its_own_entry_blanks_the_score(self):
+        # The both-tags edge, worst outcome: the chart's own described
+        # entry is the only one, so the merge (keyed on the chart name)
+        # finds nothing and blanks a real score. A full refresh repairs it.
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Edit' Description='Real Desc'>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            cache_file = Path(directory) / "both.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Edit;\n"
+                "#DESCRIPTION:Real Desc;\n"
+                "#CHARTNAME:Other Name;\n",
+                encoding="utf-8",
+            )
+            scores = data.stats_index(stats_file)
+            rows, _ = data.parse_cache_file(cache_file, scores)
+            self.assertEqual(rows[0]["Score"], 950000)
+            changed = data.merge_scores(rows, scores)
+
+        self.assertEqual(changed, 1)
+        self.assertEqual(rows[0]["Score"], "")
+        self.assertEqual(rows[0]["Plays"], 0)
+
+    def test_merge_scores_for_a_both_tags_edit_takes_a_sibling_edit_score(self):
+        # The both-tags edge, third outcome: a sibling Edit's description
+        # equals this chart's CHARTNAME, so the merge takes the sibling's
+        # score instead of the chart's own.
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Edit' Description='Real Desc'>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "<Steps StepsType='dance-single' Difficulty='Edit' Description='Other Name'>"
+                "<HighScoreList><NumTimesPlayed>8</NumTimesPlayed><LastPlayed>2026-02-03</LastPlayed>"
+                "<HighScore><PercentDP>0.90</PercentDP><Score>900000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            cache_file = Path(directory) / "both.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Edit;\n"
+                "#DESCRIPTION:Real Desc;\n"
+                "#CHARTNAME:Other Name;\n",
+                encoding="utf-8",
+            )
+            scores = data.stats_index(stats_file)
+            rows, _ = data.parse_cache_file(cache_file, scores)
+            self.assertEqual(rows[0]["Score"], 950000)
+            changed = data.merge_scores(rows, scores)
+
+        self.assertEqual(changed, 1)
+        self.assertEqual(rows[0]["Score"], 900000)
+        self.assertEqual(rows[0]["Plays"], 8)
+
 
 class DifficultySortTests(unittest.TestCase):
     def test_difficulty_key_matches_filter_gameplay_order(self):

@@ -2377,6 +2377,116 @@ class ScoresSyncTests(unittest.TestCase):
         instance.status.set.assert_called_once_with(
             "The selected data paths differ from the loaded library. Load / refresh first, then sync scores.")
 
+    def test_sync_scores_refuses_while_a_sync_is_in_flight(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._scan_in_flight = False
+        instance._sync_in_flight = True
+        instance.rows = [{"Title": "Song"}]
+        instance.status = Mock()
+        instance.sync_scores()
+        instance.status.set.assert_called_once_with(
+            "A scores sync is already in progress. Wait for it to finish, then sync again.")
+
+    def test_sync_scores_sets_the_flag_and_disables_the_menu(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = self._write_song(root)
+            instance = object.__new__(app.LibraryApp)
+            instance._scan_in_flight = False
+            instance._sync_in_flight = False
+            instance._load_generation = 1
+            instance.rows = [{"Title": "Song"}]
+            instance.cache_var = Mock()
+            instance.cache_var.get.return_value = str(cache_dir)
+            instance.stats_var = Mock()
+            instance.stats_var.get.return_value = str(stats_file)
+            instance.progress = Mock()
+            instance.status = Mock()
+            instance._file_menu = Mock()
+            with patch.object(app.threading, "Thread") as mock_thread:
+                instance.sync_scores()
+            self.assertTrue(instance._sync_in_flight)
+            instance._file_menu.entryconfigure.assert_called_once_with(
+                "Sync scores from Stats.xml", state="disabled")
+            mock_thread.assert_called_once()
+
+    def test_scores_synced_handler_clears_the_sync_flag_and_re_enables_the_menu(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_generation = 1
+        instance._sync_in_flight = True
+        instance.progress = Mock()
+        instance.status = Mock()
+        instance.refresh_table = Mock()
+        instance._file_menu = Mock()
+        instance._scores_synced([{"Title": "Song"}], 1, refreshed_at="2026-02-02T10:00:00+00:00", generation=1)
+        self.assertFalse(instance._sync_in_flight)
+        instance._file_menu.entryconfigure.assert_called_once_with(
+            "Sync scores from Stats.xml", state="normal")
+
+    def test_scores_sync_failed_handler_clears_the_sync_flag_and_re_enables_the_menu(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_generation = 1
+        instance._sync_in_flight = True
+        instance.progress = Mock()
+        instance.status = Mock()
+        instance._file_menu = Mock()
+        with patch.object(app, "messagebox"):
+            instance._scores_sync_failed("boom", generation=1)
+        self.assertFalse(instance._sync_in_flight)
+        instance._file_menu.entryconfigure.assert_called_once_with(
+            "Sync scores from Stats.xml", state="normal")
+
+    def test_stale_scores_synced_clears_the_flag_but_leaves_the_menu_to_the_scan(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._load_generation = 5
+        instance._sync_in_flight = True
+        instance.progress = Mock()
+        instance.status = Mock()
+        instance.refresh_table = Mock()
+        instance._file_menu = Mock()
+        instance._scores_synced([], 1, generation=4)
+        self.assertFalse(instance._sync_in_flight)
+        instance._file_menu.entryconfigure.assert_not_called()
+        instance.progress.stop.assert_not_called()
+        instance.status.set.assert_not_called()
+        instance.refresh_table.assert_not_called()
+
+    def test_sync_worker_unexpected_stats_error_fails_without_changes_or_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = self._write_song(root)
+            rows, _ = library_data.parse_cache_file(
+                cache_dir / "song.cache", library_data.stats_index(stats_file))
+            # A bogus encoding in the XML declaration raises LookupError,
+            # which is neither ParseError nor OSError.
+            stats_file.write_bytes(b'<?xml version="1.0" encoding="not-a-real-codec"?><Stats/>')
+            instance = self._sync_instance(root, rows)
+            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
+
+            self.assertEqual(rows[0]["Score"], 900000)  # unchanged
+            self.assertFalse((root / "library_cache.json").exists())
+            kind, message, generation = instance._load_results.get_nowait()
+            self.assertEqual((kind, generation), ("scores_sync_failed", 1))
+            self.assertIn("Could not sync scores", message)
+            self.assertTrue(instance._load_results.empty())
+
+    def test_sync_worker_missing_stats_file_fails_without_changes_or_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = self._write_song(root)
+            rows, _ = library_data.parse_cache_file(
+                cache_dir / "song.cache", library_data.stats_index(stats_file))
+            missing = root / "Stats-gone.xml"
+            instance = self._sync_instance(root, rows)
+            instance._sync_scores_worker(cache_dir, missing, rows, generation=1)
+
+            self.assertEqual(rows[0]["Score"], 900000)  # unchanged
+            self.assertFalse((root / "library_cache.json").exists())
+            kind, message, generation = instance._load_results.get_nowait()
+            self.assertEqual((kind, generation), ("scores_sync_failed", 1))
+            self.assertIn("Could not read", message)
+            self.assertTrue(instance._load_results.empty())
+
     def test_report_newer_stats_file_hints_when_stats_is_newer(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
