@@ -2338,7 +2338,8 @@ class ScoresSyncTests(unittest.TestCase):
     def test_scores_synced_handler_with_cache_error_keeps_old_refresh_stamp(self):
         # A sync whose snapshot was skipped (Stats.xml changed mid-sync)
         # still refreshes the table, but the stamp does not move, so the
-        # startup hint fires, and the status says the snapshot was not saved.
+        # startup hint fires, and the status says the snapshot was not saved
+        # and to sync again for current scores.
         instance = object.__new__(app.LibraryApp)
         instance._load_generation = 1
         instance.progress = Mock()
@@ -2348,11 +2349,13 @@ class ScoresSyncTests(unittest.TestCase):
         instance.last_refreshed_at = "2026-01-01T00:00:00+00:00"
         instance._scores_synced(
             [{"Title": "Song"}], 1, refreshed_at="",
-            cache_error="Stats.xml changed during the sync", generation=1)
+            cache_error="Stats.xml changed during the sync. "
+            "Sync again for current scores.", generation=1)
         self.assertEqual(instance.last_refreshed_at, "2026-01-01T00:00:00+00:00")
         status = instance.status.set.call_args.args[0]
         self.assertIn(
             "Local snapshot not saved: Stats.xml changed during the sync", status)
+        self.assertIn("Sync again for current scores", status)
         instance.refresh_table.assert_called_once_with(preserve_selection=True)
 
     def test_scores_synced_handler_drops_stale_generation(self):
@@ -2525,7 +2528,7 @@ class ScoresSyncTests(unittest.TestCase):
             self.assertFalse((root / "library_cache.json").exists())
             kind, message, generation = instance._load_results.get_nowait()
             self.assertEqual((kind, generation), ("scores_sync_failed", 1))
-            self.assertIn("no scores", message)
+            self.assertIn("contains no scores", message)
             self.assertTrue(instance._load_results.empty())
 
     def test_sync_worker_empty_song_scores_fails_without_blanking_or_save(self):
@@ -2543,7 +2546,67 @@ class ScoresSyncTests(unittest.TestCase):
             self.assertFalse((root / "library_cache.json").exists())
             kind, message, generation = instance._load_results.get_nowait()
             self.assertEqual((kind, generation), ("scores_sync_failed", 1))
-            self.assertIn("no scores", message)
+            self.assertIn("contains no scores", message)
+            self.assertTrue(instance._load_results.empty())
+
+    def test_sync_worker_empty_high_score_list_fails_without_blanking_or_save(self):
+        # A HighScoreList with no HighScore entries still lands in the
+        # index (plays/last_played only), so the refusal must look for
+        # actual score records, not just a non-empty index.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = self._write_song(root)
+            rows, _ = library_data.parse_cache_file(
+                cache_dir / "song.cache", library_data.stats_index(stats_file))
+            self.assertEqual(rows[0]["Score"], 900000)
+            stats_file.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Challenge'>"
+                "<HighScoreList><NumTimesPlayed>0</NumTimesPlayed>"
+                "<LastPlayed>2026-01-01</LastPlayed>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            instance = self._sync_instance(root, rows)
+            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
+
+            self.assertEqual(rows[0]["Score"], 900000)  # unchanged, not blanked
+            self.assertFalse((root / "library_cache.json").exists())
+            kind, message, generation = instance._load_results.get_nowait()
+            self.assertEqual((kind, generation), ("scores_sync_failed", 1))
+            self.assertIn("contains no scores", message)
+            self.assertTrue(instance._load_results.empty())
+
+    def test_sync_worker_stats_with_no_matching_scores_fails_without_blanking_or_save(self):
+        # A Stats.xml with real scores, but none for the songs in this
+        # library (for example a profile from another install), would
+        # blank every score and report success. The sync refuses it
+        # instead, so nothing changes.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = self._write_song(root)
+            rows, _ = library_data.parse_cache_file(
+                cache_dir / "song.cache", library_data.stats_index(stats_file))
+            self.assertEqual(rows[0]["Score"], 900000)
+            stats_file.write_text(
+                "<Stats><SongScores><Song Dir='Songs/OtherPack/OtherSong'>"
+                "<Steps StepsType='dance-single' Difficulty='Challenge'>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+                "<LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            instance = self._sync_instance(root, rows)
+            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
+
+            self.assertEqual(rows[0]["Score"], 900000)  # unchanged, not blanked
+            self.assertFalse((root / "library_cache.json").exists())
+            kind, message, generation = instance._load_results.get_nowait()
+            self.assertEqual((kind, generation), ("scores_sync_failed", 1))
+            self.assertIn("no scores for the songs in this library", message)
             self.assertTrue(instance._load_results.empty())
 
     def test_sync_worker_stats_changed_mid_sync_skips_snapshot_but_keeps_rows(self):
@@ -2574,6 +2637,38 @@ class ScoresSyncTests(unittest.TestCase):
                 instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
 
             self.assertEqual(rows[0]["Score"], 900000)  # the pre-change score
+            self.assertFalse((root / "library_cache.json").exists())
+            kind, args, kwargs = instance._load_results.get_nowait()
+            self.assertEqual(kind, "scores_synced")
+            self.assertEqual(args[1], 0)  # nothing changed: the read saw the old scores
+            self.assertEqual(kwargs["refreshed_at"], "")
+            self.assertIn("changed during the sync", kwargs["cache_error"])
+            self.assertTrue(instance._load_results.empty())
+
+    def test_sync_worker_stats_vanished_mid_sync_skips_snapshot_but_keeps_rows(self):
+        # Stats.xml deleted between the worker's read and the snapshot
+        # write: the re-check stat fails, so the snapshot is not saved
+        # (its stamp stays put, so the startup hint fires), but the rows
+        # in memory still carry the scores from the read.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = self._write_song(root)
+            rows, _ = library_data.parse_cache_file(
+                cache_dir / "song.cache", library_data.stats_index(stats_file))
+            self.assertEqual(rows[0]["Score"], 900000)
+
+            real_stats_index = library_data.stats_index
+
+            def stats_index_then_delete(stats_path):
+                scores = real_stats_index(stats_path)
+                Path(stats_path).unlink()
+                return scores
+
+            instance = self._sync_instance(root, rows)
+            with patch.object(app, "stats_index", side_effect=stats_index_then_delete):
+                instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
+
+            self.assertEqual(rows[0]["Score"], 900000)  # the read score
             self.assertFalse((root / "library_cache.json").exists())
             kind, args, kwargs = instance._load_results.get_nowait()
             self.assertEqual(kind, "scores_synced")

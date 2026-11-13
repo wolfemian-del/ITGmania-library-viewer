@@ -39,6 +39,7 @@ from library_data import (
     _settings_file_path,
     _valid_column_width,
     _valid_window_geometry,
+    any_scores_match,
     bpm_sort_key,
     cache_dir_candidates,
     declare_dpi_awareness,
@@ -1273,12 +1274,25 @@ class LibraryApp:
                                     f"Could not sync scores from Stats.xml.\n\n{exc}",
                                     generation))
             return
-        if not scores:
-            # A Stats.xml with no scores at all (a fresh profile, or the
-            # wrong file) would blank every score and report success.
-            # Refuse the sync instead, so nothing is changed.
+        if not any("PercentDP" in entry for entry in scores.values()):
+            # A Stats.xml with no actual scores (a fresh profile, the
+            # wrong file, or HighScoreLists with no HighScore entries)
+            # would blank every score and report success. Refuse the
+            # sync instead, so nothing is changed.
             self._load_results.put(("scores_sync_failed",
                                     "The selected Stats.xml contains no scores.\n\n"
+                                    "Check that you picked the right file — "
+                                    "no scores were changed.",
+                                    generation))
+            return
+        if not any_scores_match(rows, scores):
+            # The Stats.xml has scores, but none for the songs in this
+            # library (for example a profile from another install).
+            # Merging it would blank every score and report success.
+            # Refuse the sync instead, so nothing is changed.
+            self._load_results.put(("scores_sync_failed",
+                                    "The selected Stats.xml has no scores "
+                                    "for the songs in this library.\n\n"
                                     "Check that you picked the right file — "
                                     "no scores were changed.",
                                     generation))
@@ -1310,7 +1324,8 @@ class LibraryApp:
                 # write: the merged scores are stale. Do not persist them;
                 # the snapshot's stamp stays put, so the startup hint fires
                 # and the user re-syncs for the latest scores.
-                cache_error = "Stats.xml changed during the sync"
+                cache_error = ("Stats.xml changed during the sync. "
+                               "Sync again for current scores.")
             else:
                 try:
                     refreshed_at = self._snapshot_store.write(
