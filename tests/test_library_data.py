@@ -778,11 +778,13 @@ class MergeScoresTests(unittest.TestCase):
             stats_file.write_text(
                 "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
                 "<Steps StepsType='dance-single' Difficulty='Edit' Description='Real Desc'>"
-                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+                "<LastPlayed>2026-02-01</LastPlayed>"
                 "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
                 "</HighScoreList></Steps>"
                 "<Steps StepsType='dance-single' Difficulty='Edit'>"
-                "<HighScoreList><NumTimesPlayed>1</NumTimesPlayed><LastPlayed>2026-01-01</LastPlayed>"
+                "<HighScoreList><NumTimesPlayed>1</NumTimesPlayed>"
+                "<LastPlayed>2026-01-01</LastPlayed>"
                 "<HighScore><PercentDP>0.50</PercentDP><Score>500000</Score></HighScore>"
                 "</HighScoreList></Steps>"
                 "</Song></SongScores></Stats>",
@@ -953,7 +955,8 @@ class MergeScoresTests(unittest.TestCase):
             stats_file.write_text(
                 "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
                 "<Steps StepsType='dance-single' Difficulty='Edit' Description='Real Desc'>"
-                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+                "<LastPlayed>2026-02-01</LastPlayed>"
                 "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
                 "</HighScoreList></Steps>"
                 "</Song></SongScores></Stats>",
@@ -988,11 +991,13 @@ class MergeScoresTests(unittest.TestCase):
             stats_file.write_text(
                 "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
                 "<Steps StepsType='dance-single' Difficulty='Edit' Description='Real Desc'>"
-                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+                "<LastPlayed>2026-02-01</LastPlayed>"
                 "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
                 "</HighScoreList></Steps>"
                 "<Steps StepsType='dance-single' Difficulty='Edit' Description='Other Name'>"
-                "<HighScoreList><NumTimesPlayed>8</NumTimesPlayed><LastPlayed>2026-02-03</LastPlayed>"
+                "<HighScoreList><NumTimesPlayed>8</NumTimesPlayed>"
+                "<LastPlayed>2026-02-03</LastPlayed>"
                 "<HighScore><PercentDP>0.90</PercentDP><Score>900000</Score></HighScore>"
                 "</HighScoreList></Steps>"
                 "</Song></SongScores></Stats>",
@@ -1027,11 +1032,13 @@ class MergeScoresTests(unittest.TestCase):
             stats_file.write_text(
                 "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
                 "<Steps StepsType='dance-single' Difficulty='Edit' Description='Real Desc'>"
-                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+                "<LastPlayed>2026-02-01</LastPlayed>"
                 "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
                 "</HighScoreList></Steps>"
                 "<Steps StepsType='dance-single' Difficulty='Edit'>"
-                "<HighScoreList><NumTimesPlayed>1</NumTimesPlayed><LastPlayed>2026-01-01</LastPlayed>"
+                "<HighScoreList><NumTimesPlayed>1</NumTimesPlayed>"
+                "<LastPlayed>2026-01-01</LastPlayed>"
                 "<HighScore><PercentDP>0.50</PercentDP><Score>500000</Score></HighScore>"
                 "</HighScoreList></Steps>"
                 "</Song></SongScores></Stats>",
