@@ -53,8 +53,8 @@ __all__ = [
     "CHART_FILTER_FIELDS",
     "COURSE_UNSAFE_CHARS",
     "DIFFICULTY_ORDER",
-    "GRADE_OPTIONS",
     "GRADE_NAMES",
+    "GRADE_OPTIONS",
     "LIBRARY_CACHE_SCHEMA_VERSION",
     "NUMERIC_SEARCH_FIELDS",
     "RADAR_COUNT_FIELDS",
@@ -63,16 +63,16 @@ __all__ = [
     "TAP_FIELDS",
     "TECH_FIELDS",
     "ChartBar",
-    "SnapshotResult",
     "SettingsStore",
+    "SnapshotResult",
     "SnapshotStore",
     "aggregate_bpm_distribution",
     "aggregate_difficulty_distribution",
     "aggregate_meter_distribution",
     "any_scores_match",
     "bpm_sort_key",
-    "cache_dir_candidates",
     "build_dialog_query",
+    "cache_dir_candidates",
     "chart_bar_at",
     "chart_bars",
     "chart_clear_decision",
@@ -83,8 +83,8 @@ __all__ = [
     "course_trailing_risk",
     "declare_dpi_awareness",
     "difficulty_sort_key",
-    "dpi_scale_factor",
     "distribution_summary_stats",
+    "dpi_scale_factor",
     "filter_texts_match",
     "filter_token_text",
     "find_ambiguous_course_entries",
@@ -136,7 +136,7 @@ def format_duration(seconds) -> str:
         return ""
     if not math.isfinite(total):
         return ""
-    total = max(0, int(round(total)))
+    total = max(0, round(total))
     hours, remainder = divmod(total, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
