@@ -344,7 +344,8 @@ def _score_for_chart(scores: dict, base_key: tuple[str, str, str],
     the value the score is keyed on: for the parse it is the chart's
     #DESCRIPTION (falling back to #CHARTNAME); for a sync it is the row's
     carried "Score description" field, falling back to the Chart field
-    for rows from old snapshots, which lack it.
+    for a row that lacks it (the schema bump to 4 discards snapshots
+    written before the field existed).
     """
     diff = difficulty.casefold()
     chart = (description or "").strip()
@@ -390,17 +391,19 @@ def merge_scores(rows: list[dict], scores: dict) -> int:
     """Re-derive the score fields of already-parsed rows, in place.
 
     The score key is re-derived from each row: the base key
-    (Course path, Type, Difficulty), all casefolded, plus the row's Chart
-    field for described Edit charts. Returns the number of rows whose
-    score fields changed. Rows are never added or removed -- a song
-    added to the cache has no row to merge into and still needs a full
-    refresh (issue #147).
+    (Course path, Type, Difficulty), all casefolded, plus the scoring
+    description the parse carried in the row ("Score description"),
+    falling back to the row's Chart field for a row that lacks it.
+    Returns the number of rows whose score fields changed. Rows are
+    never added or removed -- a song added to the cache has no row to
+    merge into and still needs a full refresh (issue #147).
 
-    The parse carries the scoring description in the row ("Score
-    description"), so the merge looks up the same entry the parse did --
-    including for an Edit chart carrying both #DESCRIPTION and a different
-    #CHARTNAME. Rows from old snapshots lack the field and fall back to
-    the Chart field, keeping the v1 behaviour until the next full refresh.
+    The parse carries the scoring description in the row, so the merge
+    looks up the same entry the parse did -- including for an Edit chart
+    carrying both #DESCRIPTION and a different #CHARTNAME. The schema
+    bump to 4 discards snapshots written before this field existed, so
+    they rebuild with it; the Chart fallback is only a defensive path
+    for a row that somehow lacks the field.
     """
     changed = 0
     for row in rows:
@@ -529,7 +532,7 @@ def first_existing_directory(candidates) -> Path | None:
 
 
 # The library snapshot (proposal 0008): SnapshotStore owns library_cache.json.
-LIBRARY_CACHE_SCHEMA_VERSION = 3
+LIBRARY_CACHE_SCHEMA_VERSION = 4
 
 
 def _normalized_source_path(path):

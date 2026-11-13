@@ -1024,9 +1024,9 @@ class MergeScoresTests(unittest.TestCase):
         self.assertEqual(rows[0]["Plays"], 5)
 
     def test_merge_scores_for_a_row_without_a_score_description_falls_back_to_the_chart_field(self):
-        # Rows from old snapshots lack the carried description, so the
-        # merge falls back to the Chart field and keeps the v1 behaviour
-        # for them until the next full refresh repopulates it.
+        # A row that somehow lacks the carried description falls back to
+        # the Chart field (defensive: the schema bump to 4 discards
+        # snapshots written before the field existed).
         with tempfile.TemporaryDirectory() as directory:
             stats_file = Path(directory) / "Stats.xml"
             stats_file.write_text(
@@ -1057,7 +1057,7 @@ class MergeScoresTests(unittest.TestCase):
             )
             scores = data.stats_index(stats_file)
             rows, _ = data.parse_cache_file(cache_file, scores)
-            # Simulate an old snapshot row: drop the carried field.
+            # Simulate a row without the field: drop the carried description.
             del rows[0]["Score description"]
             self.assertEqual(rows[0]["Score"], 950000)
             changed = data.merge_scores(rows, scores)
