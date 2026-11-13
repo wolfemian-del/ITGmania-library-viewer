@@ -73,6 +73,14 @@ Run the parser and course-append regression tests with:
 python -m unittest discover -s tests
 ```
 
+Ruff is the linter for three agreed checks only — unused imports, the redundant `int()` cast, and `__all__` ordering — configured in `ruff.toml`. It is a development tool, not part of the app, so it is not in `requirements.txt`. Run it with:
+
+```powershell
+ruff check .
+```
+
+`ruff check --fix` applies the safe fixes (the unused import and the `__all__` ordering — verified: the ordering fix only swaps the inverted pairs within their groups and keeps the constants / classes / functions grouping). The `int()` cast fix is marked unsafe and is not applied by plain `--fix`; fix that one by hand, one line.
+
 `theme.py` holds the colors and fonts; `tests/test_theme.py` checks the window code uses it.
 
 The UI-independent parsing and course helpers live in `library_data.py`; `tests/test_library_data.py` exercises them without importing Tkinter. Course formatting, parsing, trailing-modifier detection, and field validation live there so CRS features can grow without pulling in the Tk UI. The snapshot and settings stores live there too, with their tests in `tests/test_snapshot_store.py` and `tests/test_settings_store.py`; the app-side wiring tests stay in `tests/test_library_visualizer.py`.
