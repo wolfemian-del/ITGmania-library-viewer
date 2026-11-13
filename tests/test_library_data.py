@@ -1067,6 +1067,186 @@ class MergeScoresTests(unittest.TestCase):
         self.assertEqual(changed, 1)
         self.assertEqual(rows[0]["Score"], 500000)
 
+    def test_merge_scores_with_a_non_string_score_description_falls_back_to_the_chart_field(self):
+        # A hand-edited snapshot can carry a non-string "Score description"
+        # (the snapshot read only checks key presence). The merge must
+        # treat it as absent and fall back to the Chart field, instead of
+        # failing the whole sync on one bad row.
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Edit' Description='Real Desc'>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+                "<LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "<Steps StepsType='dance-single' Difficulty='Edit'>"
+                "<HighScoreList><NumTimesPlayed>1</NumTimesPlayed>"
+                "<LastPlayed>2026-01-01</LastPlayed>"
+                "<HighScore><PercentDP>0.50</PercentDP><Score>500000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            cache_file = Path(directory) / "both.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Edit;\n"
+                "#DESCRIPTION:Real Desc;\n"
+                "#CHARTNAME:Other Name;\n",
+                encoding="utf-8",
+            )
+            scores = data.stats_index(stats_file)
+            rows, _ = data.parse_cache_file(cache_file, scores)
+            # Simulate a hand-edited snapshot row: a non-string value.
+            rows[0]["Score description"] = 5
+            self.assertEqual(rows[0]["Score"], 950000)
+            changed = data.merge_scores(rows, scores)
+
+        # The bad field is treated as absent, so the merge keys on the
+        # Chart field and falls back to the shared-key score, as in v1.
+        self.assertEqual(changed, 1)
+        self.assertEqual(rows[0]["Score"], 500000)
+
+    def test_merge_scores_with_a_non_string_score_description_selects_the_chart_keyed_score(self):
+        # The fallback keys on the Chart field, so when a Stats.xml entry
+        # is described by that Chart value, its score wins — not the
+        # shared-key score. This pins the Chart-keyed behaviour the
+        # fallback test above does not (it has no Chart-keyed entry).
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Edit' Description='Real Desc'>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+                "<LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "<Steps StepsType='dance-single' Difficulty='Edit' Description='Other Name'>"
+                "<HighScoreList><NumTimesPlayed>3</NumTimesPlayed>"
+                "<LastPlayed>2026-02-02</LastPlayed>"
+                "<HighScore><PercentDP>0.70</PercentDP><Score>700000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "<Steps StepsType='dance-single' Difficulty='Edit'>"
+                "<HighScoreList><NumTimesPlayed>1</NumTimesPlayed>"
+                "<LastPlayed>2026-01-01</LastPlayed>"
+                "<HighScore><PercentDP>0.50</PercentDP><Score>500000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            cache_file = Path(directory) / "both.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Edit;\n"
+                "#DESCRIPTION:Real Desc;\n"
+                "#CHARTNAME:Other Name;\n",
+                encoding="utf-8",
+            )
+            scores = data.stats_index(stats_file)
+            rows, _ = data.parse_cache_file(cache_file, scores)
+            # Simulate a hand-edited snapshot row: a non-string value.
+            rows[0]["Score description"] = 5
+            self.assertEqual(rows[0]["Score"], 950000)
+            changed = data.merge_scores(rows, scores)
+
+        # The bad field is treated as absent, so the merge keys on the
+        # Chart field ("Other Name") and selects that entry's score.
+        self.assertEqual(changed, 1)
+        self.assertEqual(rows[0]["Score"], 700000)
+
+    def test_any_scores_match_true_when_a_row_finds_a_score(self):
+        # The Stats.xml holds a real score for a song in the library.
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Hard'>"
+                "<HighScoreList><NumTimesPlayed>7</NumTimesPlayed>"
+                "<LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>900000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            cache_file = Path(directory) / "song.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Hard;\n"
+                "#METER:10;\n",
+                encoding="utf-8",
+            )
+            scores = data.stats_index(stats_file)
+            rows, _ = data.parse_cache_file(cache_file, scores)
+            self.assertTrue(data.any_scores_match(rows, scores))
+
+    def test_any_scores_match_false_when_scores_belong_to_another_install(self):
+        # The Stats.xml holds a real score, but for a song that is not
+        # in the library: no row finds it.
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores><Song Dir='Songs/OtherPack/OtherSong'>"
+                "<Steps StepsType='dance-single' Difficulty='Challenge'>"
+                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
+                "<LastPlayed>2026-02-01</LastPlayed>"
+                "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            cache_file = Path(directory) / "song.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Hard;\n"
+                "#METER:10;\n",
+                encoding="utf-8",
+            )
+            scores = data.stats_index(stats_file)
+            rows, _ = data.parse_cache_file(cache_file, {})
+            self.assertFalse(data.any_scores_match(rows, scores))
+
+    def test_any_scores_match_false_when_the_only_entry_has_no_score(self):
+        # A row whose only Stats.xml entry is an empty HighScoreList
+        # (plays/last_played, no PercentDP) does not count as matching.
+        with tempfile.TemporaryDirectory() as directory:
+            stats_file = Path(directory) / "Stats.xml"
+            stats_file.write_text(
+                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
+                "<Steps StepsType='dance-single' Difficulty='Hard'>"
+                "<HighScoreList><NumTimesPlayed>0</NumTimesPlayed>"
+                "<LastPlayed>2026-01-01</LastPlayed>"
+                "</HighScoreList></Steps>"
+                "</Song></SongScores></Stats>",
+                encoding="utf-8",
+            )
+            cache_file = Path(directory) / "song.cache"
+            cache_file.write_text(
+                "#TITLE:Song;\n"
+                "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
+                "#NOTEDATA:;\n"
+                "#STEPSTYPE:dance-single;\n"
+                "#DIFFICULTY:Hard;\n"
+                "#METER:10;\n",
+                encoding="utf-8",
+            )
+            scores = data.stats_index(stats_file)
+            rows, _ = data.parse_cache_file(cache_file, {})
+            self.assertFalse(data.any_scores_match(rows, scores))
+
 
 class DifficultySortTests(unittest.TestCase):
     def test_difficulty_key_matches_filter_gameplay_order(self):
@@ -1999,6 +2179,13 @@ class SearchQueryTests(unittest.TestCase):
         self.assertTrue(data.match_chart_query(played_s, "grade:>=A"))
         self.assertTrue(data.match_chart_query(played_s, "grade:<★★★★"))
         self.assertFalse(data.match_chart_query(played_s, "grade:<=B"))
+
+        # The top grade (★★★★) matches itself and sits above every other grade
+        self.assertTrue(data.match_chart_query(played_star, "grade:★★★★"))
+        self.assertTrue(data.match_chart_query(played_star, "grade:>=★★★★"))
+        self.assertTrue(data.match_chart_query(played_star, "grade:>S"))
+        self.assertFalse(data.match_chart_query(played_star, "grade:<★★★★"))
+        self.assertFalse(data.match_chart_query(played_star, "grade:>★★★★"))
 
         # Tier notation works identically
         self.assertTrue(data.match_chart_query(played_s, "grade:>=Tier06"))

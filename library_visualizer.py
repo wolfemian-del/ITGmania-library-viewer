@@ -39,6 +39,7 @@ from library_data import (
     _settings_file_path,
     _valid_column_width,
     _valid_window_geometry,
+    any_scores_match,
     bpm_sort_key,
     cache_dir_candidates,
     declare_dpi_awareness,
@@ -1247,10 +1248,17 @@ class LibraryApp:
         # A sync whose generation is no longer the latest stops quietly: a
         # Load pressed during it owns the rows and the snapshot now.
         try:
+            # Stats.xml is the worker's input; if the game rewrites it
+            # after the read, the merged scores are stale. Capture the
+            # mtime before the read and check it again before persisting,
+            # so a mid-sync change never lands in the snapshot silently.
+            stats_mtime = Path(stats_file).stat().st_mtime
             scores = stats_index(stats_file)
         except ET.ParseError as exc:
             self._load_results.put(("scores_sync_failed",
-                                    f"Stats.xml is malformed or incomplete and could not be parsed.\n\n{exc}",
+                                    "Stats.xml is malformed or incomplete and "
+                                    "could not be parsed.\n\n"
+                                    f"{exc}",
                                     generation))
             return
         except OSError as exc:
@@ -1264,6 +1272,29 @@ class LibraryApp:
             # reach the main thread, or the progress bar spins forever.
             self._load_results.put(("scores_sync_failed",
                                     f"Could not sync scores from Stats.xml.\n\n{exc}",
+                                    generation))
+            return
+        if not any("PercentDP" in entry for entry in scores.values()):
+            # A Stats.xml with no actual scores (a fresh profile, the
+            # wrong file, or HighScoreLists with no HighScore entries)
+            # would blank every score and report success. Refuse the
+            # sync instead, so nothing is changed.
+            self._load_results.put(("scores_sync_failed",
+                                    "The selected Stats.xml contains no scores.\n\n"
+                                    "Check that you picked the right file — "
+                                    "no scores were changed.",
+                                    generation))
+            return
+        if not any_scores_match(rows, scores):
+            # The Stats.xml has scores, but none for the songs in this
+            # library (for example a profile from another install).
+            # Merging it would blank every score and report success.
+            # Refuse the sync instead, so nothing is changed.
+            self._load_results.put(("scores_sync_failed",
+                                    "The selected Stats.xml has no scores "
+                                    "for the songs in this library.\n\n"
+                                    "Check that you picked the right file — "
+                                    "no scores were changed.",
                                     generation))
             return
         try:
@@ -1280,20 +1311,33 @@ class LibraryApp:
         # check could still be writing after a newer scan had written its
         # own snapshot, leaving the older data on disk.
         cache_error = ""
+        refreshed_at = ""
         with self._snapshot_lock:
             if self._load_is_stale(generation):
                 return
             try:
-                refreshed_at = self._snapshot_store.write(
-                    cache, stats_file, rows,
-                    getattr(self, "_snapshot_files", 0),
-                    getattr(self, "_snapshot_skipped_files", 0),
-                    getattr(self, "_snapshot_files_without_charts", 0),
-                    getattr(self, "_snapshot_nested_song_tree", False),
-                    getattr(self, "_snapshot_skipped_blocks", 0))
-            except (OSError, TypeError, ValueError) as exc:
-                refreshed_at = ""
-                cache_error = str(exc)
+                current_mtime = Path(stats_file).stat().st_mtime
+            except OSError:
+                current_mtime = None
+            if current_mtime != stats_mtime:
+                # Stats.xml changed between the read and the snapshot
+                # write: the merged scores are stale. Do not persist them;
+                # the snapshot's stamp stays put, so the startup hint fires
+                # and the user re-syncs for the latest scores.
+                cache_error = ("Stats.xml changed during the sync. "
+                               "Sync again for current scores.")
+            else:
+                try:
+                    refreshed_at = self._snapshot_store.write(
+                        cache, stats_file, rows,
+                        getattr(self, "_snapshot_files", 0),
+                        getattr(self, "_snapshot_skipped_files", 0),
+                        getattr(self, "_snapshot_files_without_charts", 0),
+                        getattr(self, "_snapshot_nested_song_tree", False),
+                        getattr(self, "_snapshot_skipped_blocks", 0))
+                except (OSError, TypeError, ValueError) as exc:
+                    refreshed_at = ""
+                    cache_error = str(exc)
         self._load_results.put(("scores_synced", (rows, changed), {
             "refreshed_at": refreshed_at,
             "cache_error": cache_error,

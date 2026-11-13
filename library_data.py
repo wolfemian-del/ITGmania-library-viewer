@@ -69,6 +69,7 @@ __all__ = [
     "aggregate_bpm_distribution",
     "aggregate_difficulty_distribution",
     "aggregate_meter_distribution",
+    "any_scores_match",
     "bpm_sort_key",
     "cache_dir_candidates",
     "build_dialog_query",
@@ -387,6 +388,45 @@ _SCORE_FIELDS = ("Score", "Grade", "Best %", "Plays", "Last played",
                  *TAP_FIELDS, "Max combo")
 
 
+def _score_for_row(scores: dict, row: dict) -> dict:
+    """Return the Stats.xml entry for one already-parsed row.
+
+    The score key is re-derived from the row: the base key
+    (Course path, Type, Difficulty), all casefolded, plus the scoring
+    description the parse carried in the row ("Score description"),
+    falling back to the row's Chart field for a row that lacks it.
+    A hand-edited snapshot can carry a non-string "Score description"
+    (the snapshot read only checks key presence). Treat it as absent
+    so the lookup falls back to the Chart field instead of failing
+    the whole sync on one bad row.
+    """
+    base_key = (
+        row["Course path"].casefold(),
+        row["Type"].casefold(),
+        row["Difficulty"].casefold(),
+    )
+    score_description = row.get("Score description")
+    if not isinstance(score_description, str):
+        score_description = ""
+    description = score_description or row["Chart"]
+    return _score_for_chart(scores, base_key, row["Difficulty"], description)
+
+
+def any_scores_match(rows: list[dict], scores: dict) -> bool:
+    """True if at least one row finds a Stats.xml entry with an actual score.
+
+    A Stats.xml can hold real scores that belong to another install:
+    the index is non-empty and at least one entry carries a score, so
+    the empty-scores refusal does not catch it, yet merging it would
+    blank every score. The sync checks this first, so a file with no
+    scores for this library is refused instead of merged. A row only
+    counts as matching when its entry carries a PercentDP record: an
+    entry with only plays/last_played (an empty HighScoreList) is not
+    a score for the chart.
+    """
+    return any("PercentDP" in _score_for_row(scores, row) for row in rows)
+
+
 def merge_scores(rows: list[dict], scores: dict) -> int:
     """Re-derive the score fields of already-parsed rows, in place.
 
@@ -407,16 +447,8 @@ def merge_scores(rows: list[dict], scores: dict) -> int:
     """
     changed = 0
     for row in rows:
-        base_key = (
-            row["Course path"].casefold(),
-            row["Type"].casefold(),
-            row["Difficulty"].casefold(),
-        )
         before = tuple(row.get(field) for field in _SCORE_FIELDS)
-        # The parse carries the scoring description in the row; fall back to
-        # the Chart field for rows from old snapshots, which lack it.
-        description = row.get("Score description") or row["Chart"]
-        score = _score_for_chart(scores, base_key, row["Difficulty"], description)
+        score = _score_for_row(scores, row)
         _apply_score_fields(row, score)
         if tuple(row.get(field) for field in _SCORE_FIELDS) != before:
             changed += 1
