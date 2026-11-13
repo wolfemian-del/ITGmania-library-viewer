@@ -21,7 +21,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # The release number, shown in Help > About. Keep it equal to the newest heading in CHANGELOG.md (a test checks).
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 import row_tints
 import theme

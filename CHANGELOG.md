@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.2.1 - 2026-11-12
+
+### Library table
+- A song with a non-finite tempo (`#BPMS` of `inf`, `#DISPLAYBPM` of `nan`/`inf`) no longer fails the whole library load; its BPM cell is blank instead. A snapshot row with a non-finite `Time` (`"nan"`/`"1e999"`) no longer crashes the table build; its Time cell is blank.
+- The distribution panel no longer prints `Mean: inf` or `Mean: nan` for a corrupt cache; summary stats use finite values only, and all NaN meters form a single bar with the true count.
+
+### Startup and loading
+- The cache path field now fills in with the usual ITGmania cache location for your platform when it exists, instead of always guessing a Windows-shaped path; on a fresh install with no cache folder yet, the field starts empty.
+- When `settings.json` exists but can't be read, the status line says so and that defaults are being used, instead of silently discarding the file.
+- When a restored snapshot's saved cache folder or Stats.xml no longer exists, the status line says so and points at File → Data paths…, instead of failing silently on the next refresh.
+- The Data paths dialog is now a single modal window titled 'Where is your library?'; it opens once per session at startup when no snapshot was restored and the paths are not both usable, and Load / refresh opens it when the paths are invalid.
+- Load / refresh now shows a determinate progress bar with a files-done count and an ETA, and a 'Saving snapshot…' phase at the end.
+
+### Other
+- The app is now DPI-aware on Windows, so it renders at the right physical size on 125% and 150% displays; stored window geometry and column widths are in canonical 100% units.
+- A failed settings save no longer leaves a `settings.tmp` file behind.
+- The snapshot and settings persistence now live in their own components in `library_data.py` (`SnapshotStore` and `SettingsStore`); these moves were not intended to change behavior.
+
 ## 1.2.0 - 2026-11-11
 
 ### Library table
