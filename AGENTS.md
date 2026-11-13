@@ -17,6 +17,13 @@ them in a sortable, filterable table, and can build .CRS course files. Read READ
 - Keep logic that does not need the window in library_data.py (no Tkinter) with tests in tests/.
 - Prefer small, single-purpose functions and clear names. Comment only where a passage's purpose or
   ordering could be misread. Documentation lives in README.md; update it when behavior changes.
+- Line length: aim for 88 characters or fewer; 100 is the hard limit — a line
+  over 100 must be shortened. Existing lines are grandfathered: do not go
+  reformatting old code for its own sake. But a line you change must comply,
+  and so must the other over-limit lines in the block you are changing — don't
+  leave a long line standing in the middle of a block you just edited. For a
+  long string, split the literal across lines rather than rewording it — never
+  change user-facing text just to shorten a line.
 - Features that need data most users lack (for example the notes repo's modeled-difficulty JSON)
   must be optional, toggleable or a plugin.
 - If more than one reasonable approach exists, describe the options briefly (what it is, effect on
