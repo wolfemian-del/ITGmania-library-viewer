@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import csv
-from datetime import datetime
-import queue
 import sys
-import threading
 import time
 try:
     import tkinter as tk
@@ -17,7 +14,6 @@ except ImportError:
     filedialog = None
     messagebox = None
     ttk = None
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # The release number, shown in Help > About. Keep it equal to the newest heading in CHANGELOG.md (a test checks).
@@ -28,6 +24,7 @@ import theme
 from advanced_search import AdvancedSearch
 from course_builder import CourseBuilder
 from data_paths_dialog import DataPathsDialog
+from library_loader import LibraryLoader
 from distribution_panel import DistributionPanel
 from library_data import (
     TAP_FIELDS,
@@ -36,11 +33,9 @@ from library_data import (
     LIBRARY_CACHE_SCHEMA_VERSION,
     SettingsStore,
     SnapshotStore,
-    _normalized_source_path,
     _settings_file_path,
     _valid_column_width,
     _valid_window_geometry,
-    any_scores_match,
     bpm_sort_key,
     cache_dir_candidates,
     declare_dpi_awareness,
@@ -49,18 +44,12 @@ from library_data import (
     find_unreadable_directives,
     first_existing_directory,
     format_duration,
-    format_refresh_time,
     grade_sort_key,
-    invalid_paths_note,
-    looks_like_song_tree,
     match_chart_query,
-    merge_scores,
     number,
-    parse_cache_file,
     parse_search_query,
     scale_geometry,
     scale_pixels,
-    stats_index,
 )
 
 SEARCH_DEBOUNCE_MS = 200
@@ -95,7 +84,6 @@ class LibraryApp:
     # Defaults for state that is only set later, so every instance has these attributes.
     _search_refresh_after_id = None
     _batching_filter_changes = False
-    _load_started_at = None
     # The display scale factor (1.0 at 100% DPI): bare instances in tests
     # have no window to measure, so they read canonical units as-is.
     _dpi_scale = 1.0
@@ -111,8 +99,6 @@ class LibraryApp:
         self.root.minsize(scale_pixels(theme.WINDOW_MIN_SIZE[0], self._dpi_scale),
                           scale_pixels(theme.WINDOW_MIN_SIZE[1], self._dpi_scale))
         self.root.configure(bg=theme.BG_WINDOW)
-        self.rows: list[dict] = []
-        self.loaded_source_paths = None
         self.settings_path = self._settings_file_path()
         # The snapshot store owns library_cache.json (proposal 0008); its
         # path is derived once here from the settings path, and it is built
@@ -202,11 +188,6 @@ class LibraryApp:
             value=saved_metric if saved_metric in ("Meter", "Difficulty", "BPM") else "Meter"
         )
         self._tree_tint = None  # the song table's SelectedRowTint, created with the table in _build
-        self._load_generation = 0  # counts Load / refresh requests; a scan from an older request is dropped
-        self._scan_in_flight = False  # a scan is running; the scores sync refuses to start while one is (issue #147)
-        self._sync_in_flight = False  # a scores sync is running; a second sync refuses to start while one is (issue #147)
-        self._snapshot_lock = threading.Lock()  # one scan at a time may check its generation and write the snapshot
-        self._load_results = queue.Queue()  # finished scans wait here; only the main thread delivers them (_poll_load_results)
         # Attributes that are filled in after this point. Declaring them here lists everything the window
         # holds in one place; the comments name where each one is filled in.
         # Widgets and variables created by _build(); None until then:
@@ -223,7 +204,6 @@ class LibraryApp:
         self.count_label = None
         self.load_button = None
         # Working state that starts empty:
-        self.last_refreshed_at = ""  # when the saved snapshot was written (set by _loaded)
         self._render_generation = 0  # counts table redraws, so an unfinished older redraw stops (refresh_table)
         self.tree_item_rows = {}  # table row id -> its chart row (refresh_table)
         self._dragged_column = None  # heading being dragged, and where the drag began (_column_drag_start)
@@ -244,20 +224,32 @@ class LibraryApp:
         # once the loader exists (Step 4).
         self._data_paths_dialog = DataPathsDialog(
             self.root, self.cache_var, self.stats_var,
-            load_callback=lambda: self.load_data(),
+            load_callback=lambda: self._loader.load_data(),
             save_settings=self._save_settings,
             button_factory=self._button, entry_factory=self._entry,
             dpi_scale=self._dpi_scale,
-            paths_match_loaded=lambda: self._current_paths_match_loaded())
+            paths_match_loaded=lambda: self._loader._current_paths_match_loaded())
         self._style()
         self._build()
+        # The loader (proposal 0009 Step 4): built once the status
+        # widgets exist. The dialog was built first, with late-bound
+        # lambdas, so it can take the loader's methods here.
+        saved = self.saved_settings
+        self._loader = LibraryLoader(
+            self._snapshot_store, self.cache_var, self.stats_var,
+            self.status, self.progress, self.load_button,
+            self._set_sync_menu_state, self._on_library_changed,
+            self._on_nothing_loaded, self._data_paths_dialog,
+            self._save_settings, self.root,
+            self._report_discarded_settings,
+            "cache_dir" in saved or "stats_file" in saved)
         self._report_discarded_settings()
         self.search_var.trace_add("write", lambda *_: self._schedule_search_refresh())
         for var in (self.pack_var, self.type_var, self.diff_var, self.scored_var):
             var.trace_add("write", lambda *_: self._refresh_unless_batching())
         for var in (self.cache_var, self.stats_var):
-            var.trace_add("write", lambda *_: self._source_paths_changed())
-        self.root.after(75, self._poll_load_results)
+            var.trace_add("write", lambda *_: self._loader._source_paths_changed())
+        self.root.after(75, self._loader._poll_load_results)
         # The saved snapshot is loaded once the window has painted, not here:
         # reading and rendering it can take a moment at library scale, and doing
         # it before the event loop starts would leave the user watching the
@@ -265,7 +257,7 @@ class LibraryApp:
         if self.library_cache_path.is_file():
             self.status.set("Loading saved library…")
             self.progress.start(12)
-        self.root.after(50, self._load_initial_snapshot)
+        self.root.after(50, self._loader._load_initial_snapshot)
 
     def _style(self):
         style = ttk.Style()
@@ -527,84 +519,6 @@ class LibraryApp:
     def library_cache_path(self):
         return self.settings_path.with_name("library_cache.json")
 
-    def _load_initial_snapshot(self):
-        """Load the saved snapshot (scheduled from __init__ so the window paints first)."""
-        if self._load_generation:
-            # A Load / refresh pressed inside the deferral window supersedes
-            # the startup restore: the scan owns the progress bar, the Load
-            # button, and the status line until it delivers, and its result
-            # replaces whatever the restore would have shown.
-            return
-        try:
-            self.load_cached_data()
-        finally:
-            self.progress.stop()
-            # The snapshot load rewrites the status line, so a discarded
-            # settings file reported at build time would be erased here;
-            # appending it again keeps the notice visible after startup.
-            self._report_discarded_settings()
-        # Last startup step: if no snapshot restored and the paths are not
-        # both usable, ask where the library is before leaving an empty table.
-        self._maybe_show_first_run_paths_dialog()
-
-    def load_cached_data(self):
-        # The store reads and validates; this method only maps the result
-        # onto the status line and delivers the rows (proposal 0008).
-        result = self._snapshot_store.read(self.cache_var.get(), self.stats_var.get())
-        if result.loaded:
-            self._loaded(
-                result.rows, result.files, result.skipped_files,
-                result.files_without_charts, result.skipped_blocks,
-                result.nested_song_tree,
-                refreshed_at=result.refreshed_at,
-                from_cache=True,
-                source_paths=result.source_paths,
-            )
-            self._report_moved_source_paths(*result.source_paths)
-            self._report_newer_stats_file()
-            return
-        if result.reason == "missing":
-            self.status.set("No saved library yet. Choose File → Data paths…, then Load / refresh.")
-        elif result.reason == "unreadable":
-            self.status.set(f"Saved library snapshot could not be read ({result.detail}). Click Load / refresh to rebuild it.")
-        elif result.reason == "invalid":
-            self.status.set("Saved library snapshot is invalid or outdated. Click Load / refresh to rebuild it.")
-        else:  # paths_mismatch
-            self.status.set("Saved library snapshot is for different data paths. Click Load / refresh to rebuild it.")
-        self.refresh_table()
-
-    def _source_paths_changed(self):
-        if not self.loaded_source_paths:
-            return
-        if self._current_paths_match_loaded():
-            stamp = format_refresh_time(self.last_refreshed_at)
-            self.status.set(f"Showing saved library snapshot · {len(self.rows):,} charts · last refreshed {stamp}.")
-        else:
-            self.status.set("Displayed library uses different data paths. Click Load / refresh to show the selected sources.")
-        # While the Data paths dialog is open, the same news shows inside it
-        # (the conditional note), not only on the status line behind the modal.
-        # At first run there is no snapshot loaded, so the early return above
-        # leaves the dialog's first-run note alone.
-        self._data_paths_dialog.set_note(self._data_paths_dialog.paths_changed())
-
-    def _current_paths_match_loaded(self):
-        """Whether the current paths match the loaded snapshot's sources.
-
-        True when no snapshot is loaded: there is nothing to differ from.
-        Bare test instances without path state report True the same way.
-        """
-        loaded = getattr(self, "loaded_source_paths", None)
-        if not loaded:
-            return True
-        cache_var = getattr(self, "cache_var", None)
-        stats_var = getattr(self, "stats_var", None)
-        if cache_var is None or stats_var is None:
-            return True
-        current = (cache_var.get(), stats_var.get())
-        return all(
-            _normalized_source_path(saved) == _normalized_source_path(selected)
-            for saved, selected in zip(loaded, current))
-
     @staticmethod
     def _valid_course_geometry(value):
         """The canonical geometry string to restore the course window with, or None (issue #25)."""
@@ -634,74 +548,6 @@ class LibraryApp:
             return
         message = f"Settings file could not be read ({reason}); using defaults."
         current = self.status.get()
-        if message in current:
-            return
-        self.status.set(f"{current} {message}" if current else message)
-
-    def _report_moved_source_paths(self, cache_dir: str, stats_file: str) -> None:
-        """Append a note when a restored snapshot's saved paths no longer exist.
-
-        The snapshot restores on a string match only, so a moved ITGmania
-        folder is invisible until the next refresh fails. The note names the
-        missing side and points at File → Data paths…, where replacements
-        are picked.
-        """
-        missing = []
-        if cache_dir and not Path(cache_dir).is_dir():
-            missing.append("cache folder")
-        if stats_file and not Path(stats_file).is_file():
-            missing.append("Stats.xml")
-        if not missing:
-            return
-        if len(missing) == 2:
-            message = ("The saved cache folder and Stats.xml no longer exist. "
-                       "Choose File → Data paths…, then Load / refresh.")
-        elif missing[0] == "cache folder":
-            message = ("The saved cache folder no longer exists. "
-                       "Choose File → Data paths…, then Load / refresh.")
-        else:
-            message = ("The saved Stats.xml no longer exists. "
-                       "Choose File → Data paths…, then Load / refresh.")
-        # A bare instance built for a snapshot test may carry a Mock status
-        # whose get() is not a string; that is "no status line", not an error.
-        current = self.status.get()
-        if not isinstance(current, str):
-            current = ""
-        if message in current:
-            return
-        self.status.set(f"{current} {message}" if current else message)
-
-    def _report_newer_stats_file(self):
-        """Append a hint when Stats.xml is newer than the restored snapshot (issue #147).
-
-        A play session changes Stats.xml without touching the cache, so the
-        saved scores can go stale while the snapshot still restores fine.
-        The hint compares the *selected* Stats.xml path against the
-        snapshot's refreshed_at -- that is the file a sync would read. One
-        benign wrinkle: a Stats.xml change during a scan reads as newer
-        than the snapshot just written, so the hint can fire for a sync
-        that changes nothing.
-        """
-        refreshed_at = getattr(self, "last_refreshed_at", "")
-        if not refreshed_at:
-            return
-        stats = Path(self.stats_var.get())
-        if not stats.is_file():
-            return
-        try:
-            mtime = stats.stat().st_mtime
-            stamp = datetime.fromisoformat(refreshed_at).timestamp()
-        except (OSError, ValueError, TypeError):
-            return
-        if mtime <= stamp:
-            return
-        message = ("Stats.xml is newer than the saved library. "
-                   "Choose File → Sync scores from Stats.xml to refresh scores.")
-        # A bare instance built for a snapshot test may carry a Mock status
-        # whose get() is not a string; that is "no status line", not an error.
-        current = self.status.get()
-        if not isinstance(current, str):
-            current = ""
         if message in current:
             return
         self.status.set(f"{current} {message}" if current else message)
@@ -756,7 +602,7 @@ class LibraryApp:
 
     def _library_rows_for_course(self):
         """Every chart row in the loaded library (for the course builder's ambiguity check)."""
-        return self.rows
+        return self._loader.rows
 
     def _dialog_is_open(self):
         for window in (self.advanced_search.window if self.advanced_search is not None else None,
@@ -930,422 +776,26 @@ class LibraryApp:
         """
         self._data_paths_dialog.open(note)
 
-    def _maybe_show_first_run_paths_dialog(self):
-        """Open the Data paths dialog once at startup when there is nothing to show.
-
-        A thin delegation to the DataPathsDialog component: the two facts the
-        dialog cannot derive from its inputs arrive as arguments — whether a
-        snapshot is loaded, and whether saved settings contained path keys.
-        """
-        dialog = getattr(self, "_data_paths_dialog", None)
-        if dialog is None:
-            return
-        snapshot_loaded = getattr(self, "loaded_source_paths", None) is not None
-        saved = getattr(self, "saved_settings", None) or {}
-        had_saved_paths = "cache_dir" in saved or "stats_file" in saved
-        dialog.maybe_show_first_run(snapshot_loaded, had_saved_paths)
-
-    def _set_sync_menu_state(self, state):
-        """Enable or disable the File -> Sync scores entry (issue #147).
-
-        A bare instance built for a load test may have no menubar; that is
-        "no menu to update", not an error.
-        """
-        file_menu = getattr(self, "_file_menu", None)
-        if file_menu is None:
-            return
-        file_menu.entryconfigure("Sync scores from Stats.xml", state=state)
-
     def load_data(self):
-        cache, stats = Path(self.cache_var.get()), Path(self.stats_var.get())
-        if not cache.is_dir() or not stats.is_file():
-            # Invalid paths open the Data paths dialog instead of an error box:
-            # the fix is in the dialog, so that is where the user should be.
-            self.open_data_paths_dialog(note=invalid_paths_note(cache, stats))
-            return
-        self._save_settings()
-        self.progress.start(12)
-        self.status.set("Reading chart cache and player scores…")
-        # Disabled until the scan's result is delivered, so a second click cannot
-        # pile up scans; the File menu entry still starts a newer scan, which
-        # supersedes this one by generation and owns re-enabling the button.
-        self.load_button.configure(state="disabled")
-        self._load_generation += 1
-        generation = self._load_generation
-        # A scan is in flight until its result is delivered; the scores sync
-        # refuses to start while one is, and its menu entry is disabled.
-        self._scan_in_flight = True
-        self._set_sync_menu_state("disabled")
-        # The scan's clock for its time-remaining estimate (see _show_load_progress).
-        self._load_started_at = time.monotonic()
-        threading.Thread(target=self._load_worker, args=(cache, stats, generation), daemon=True).start()
-
-    def _load_is_stale(self, generation):
-        return self._load_generation != generation
-
-    def _load_worker(self, cache: Path, stats_file: Path, generation: int):
-        # A scan whose generation is no longer the latest stops quietly. The newer scan keeps the
-        # progress bar running, and _loaded / _load_failed ignore anything from an older generation.
-        try:
-            scores = stats_index(stats_file)
-            rows = []
-            files = [p for p in cache.iterdir() if p.is_file()]
-            total = len(files)
-            if self._load_is_stale(generation):
-                # Superseded before the first file: queue nothing, not even
-                # the progress report below.
-                return
-            # The total is known before any file is parsed: report it at once
-            # so the bar can go determinate, then report as the loop goes.
-            self._load_results.put(("progress", 0, total, generation))
-            skipped_files = 0
-            files_without_charts = 0
-            skipped_blocks = 0
-            for index, path in enumerate(files, start=1):
-                if self._load_is_stale(generation):
-                    return
-                try:
-                    chart_rows, blocks = parse_cache_file(path, scores)
-                    skipped_blocks += blocks
-                    if not chart_rows:
-                        files_without_charts += 1
-                    rows.extend(chart_rows)
-                except (OSError, UnicodeError):
-                    skipped_files += 1
-                # Every 25 files, and on the last one: often enough for the
-                # bar to move smoothly, rarely enough to churn the queue.
-                # A scan superseded mid-loop stops reporting with it.
-                if (index % 25 == 0 or index == total) and not self._load_is_stale(generation):
-                    self._load_results.put(("progress", index, total, generation))
-
-            nested_song_tree = looks_like_song_tree(cache) if not files else False
-            cache_error = ""
-            # The generation check and the snapshot write happen under one lock. Without it, an older
-            # scan that passed the check could still be writing after a newer scan had written its
-            # own snapshot, leaving the older data on disk.
-            with self._snapshot_lock:
-                if self._load_is_stale(generation):
-                    return
-                # The bar is already full here; name the phase so the tail
-                # of the load does not look like a stall.
-                self._load_results.put(("phase", "Saving snapshot…", generation))
-                try:
-                    refreshed_at = self._snapshot_store.write(
-                        cache, stats_file, rows, len(files), skipped_files,
-                        files_without_charts, nested_song_tree, skipped_blocks)
-                except (OSError, TypeError, ValueError) as exc:
-                    refreshed_at = ""
-                    cache_error = str(exc)
-
-            # Hand the result to the main thread through the queue. Calling Tk
-            # (root.after) from this worker thread is not guaranteed safe.
-            self._load_results.put(("loaded", (rows, len(files)), {
-                "skipped_files": skipped_files,
-                "files_without_charts": files_without_charts,
-                "skipped_blocks": skipped_blocks,
-                "nested_song_tree": nested_song_tree,
-                "refreshed_at": refreshed_at,
-                "cache_error": cache_error,
-                "source_paths": (str(cache), str(stats_file)),
-                "generation": generation,
-            }))
-        except ET.ParseError as exc:
-            self._load_results.put(("failed",
-                                    f"Stats.xml is malformed or incomplete and could not be parsed.\n\n{exc}",
-                                    generation))
-        except OSError as exc:
-            self._load_results.put(("failed",
-                                    f"Could not read the selected cache folder or Stats.xml.\n\n{exc}",
-                                    generation))
-        except Exception as exc:
-            self._load_results.put(("failed", str(exc), generation))
+        """Start a library load (thin delegation to the loader)."""
+        self._loader.load_data()
 
     def sync_scores(self):
-        """Re-read Stats.xml and refresh the score fields of the loaded rows (issue #147).
+        """Start a scores-only sync (thin delegation to the loader)."""
+        self._loader.sync_scores()
 
-        A manual File -> Sync scores action: the cache is not re-parsed, so
-        a sync is ~4-5 s at 35k charts in the sandbox against ~20 s for a
-        full Load / refresh. New songs still need a full refresh -- there
-        is no row to merge their scores into.
+    def _on_library_changed(self, rows, preserve_selection):
+        """The app-side part of a finished load or sync (Q2).
+
+        preserve_selection distinguishes a sync from a load: a sync
+        re-scores the same rows, so only the table refreshes (keeping
+        the selection); a load brings fresh rows, so the dropdowns
+        reset (batched, so the table refreshes exactly once) and the
+        Course Builder is told the library changed.
         """
-        if getattr(self, "_scan_in_flight", False):
-            self.status.set("A library load is in progress. Wait for it to finish, then sync scores.")
+        if preserve_selection:
+            self.refresh_table(preserve_selection=True)
             return
-        if getattr(self, "_sync_in_flight", False):
-            self.status.set("A scores sync is already in progress. Wait for it to finish, then sync again.")
-            return
-        if not self.rows:
-            self.status.set("No library loaded. Load / refresh first, then sync scores.")
-            return
-        if not self._current_paths_match_loaded():
-            self.status.set("The selected data paths differ from the loaded library. Load / refresh first, then sync scores.")
-            return
-        cache, stats = Path(self.cache_var.get()), Path(self.stats_var.get())
-        if not stats.is_file():
-            # Invalid paths open the Data paths dialog instead of an error box:
-            # the fix is in the dialog, so that is where the user should be.
-            self.open_data_paths_dialog(note=invalid_paths_note(cache, stats))
-            return
-        self._sync_in_flight = True
-        self._set_sync_menu_state("disabled")
-        self.progress.start(12)
-        self.status.set("Syncing scores from Stats.xml…")
-        # Capture the rows and the generation on the main thread: a Load
-        # pressed during the sync replaces self.rows and bumps the
-        # generation, which the worker and the delivery both check.
-        threading.Thread(
-            target=self._sync_scores_worker,
-            args=(cache, stats, self.rows, self._load_generation),
-            daemon=True).start()
-
-    def _sync_scores_worker(self, cache, stats_file, rows, generation):
-        # A sync whose generation is no longer the latest stops quietly: a
-        # Load pressed during it owns the rows and the snapshot now.
-        try:
-            # Stats.xml is the worker's input; if the game rewrites it
-            # after the read, the merged scores are stale. Capture the
-            # mtime before the read and check it again before persisting,
-            # so a mid-sync change never lands in the snapshot silently.
-            stats_mtime = Path(stats_file).stat().st_mtime
-            scores = stats_index(stats_file)
-        except ET.ParseError as exc:
-            self._load_results.put(("scores_sync_failed",
-                                    "Stats.xml is malformed or incomplete and "
-                                    "could not be parsed.\n\n"
-                                    f"{exc}",
-                                    generation))
-            return
-        except OSError as exc:
-            self._load_results.put(("scores_sync_failed",
-                                    f"Could not read the selected Stats.xml.\n\n{exc}",
-                                    generation))
-            return
-        except Exception as exc:
-            # Anything else stats_index can raise (for example a LookupError
-            # for an unsupported encoding in the XML declaration) must still
-            # reach the main thread, or the progress bar spins forever.
-            self._load_results.put(("scores_sync_failed",
-                                    f"Could not sync scores from Stats.xml.\n\n{exc}",
-                                    generation))
-            return
-        if not any("PercentDP" in entry for entry in scores.values()):
-            # A Stats.xml with no actual scores (a fresh profile, the
-            # wrong file, or HighScoreLists with no HighScore entries)
-            # would blank every score and report success. Refuse the
-            # sync instead, so nothing is changed.
-            self._load_results.put(("scores_sync_failed",
-                                    "The selected Stats.xml contains no scores.\n\n"
-                                    "Check that you picked the right file — "
-                                    "no scores were changed.",
-                                    generation))
-            return
-        if not any_scores_match(rows, scores):
-            # The Stats.xml has scores, but none for the songs in this
-            # library (for example a profile from another install).
-            # Merging it would blank every score and report success.
-            # Refuse the sync instead, so nothing is changed.
-            self._load_results.put(("scores_sync_failed",
-                                    "The selected Stats.xml has no scores "
-                                    "for the songs in this library.\n\n"
-                                    "Check that you picked the right file — "
-                                    "no scores were changed.",
-                                    generation))
-            return
-        try:
-            changed = merge_scores(rows, scores)
-        except Exception as exc:
-            # A row with a non-text Course path / Type / Difficulty / Chart
-            # would otherwise end the thread silently; deliver the failure.
-            self._load_results.put(("scores_sync_failed",
-                                    f"Could not sync scores from Stats.xml.\n\n{exc}",
-                                    generation))
-            return
-        # The generation check and the snapshot write happen under one lock,
-        # exactly like the scan worker's: without it, a sync that passed the
-        # check could still be writing after a newer scan had written its
-        # own snapshot, leaving the older data on disk.
-        cache_error = ""
-        refreshed_at = ""
-        with self._snapshot_lock:
-            if self._load_is_stale(generation):
-                return
-            try:
-                current_mtime = Path(stats_file).stat().st_mtime
-            except OSError:
-                current_mtime = None
-            if current_mtime != stats_mtime:
-                # Stats.xml changed between the read and the snapshot
-                # write: the merged scores are stale. Do not persist them;
-                # the snapshot's stamp stays put, so the startup hint fires
-                # and the user re-syncs for the latest scores.
-                cache_error = ("Stats.xml changed during the sync. "
-                               "Sync again for current scores.")
-            else:
-                try:
-                    refreshed_at = self._snapshot_store.write(
-                        cache, stats_file, rows,
-                        getattr(self, "_snapshot_files", 0),
-                        getattr(self, "_snapshot_skipped_files", 0),
-                        getattr(self, "_snapshot_files_without_charts", 0),
-                        getattr(self, "_snapshot_nested_song_tree", False),
-                        getattr(self, "_snapshot_skipped_blocks", 0))
-                except (OSError, TypeError, ValueError) as exc:
-                    refreshed_at = ""
-                    cache_error = str(exc)
-        self._load_results.put(("scores_synced", (rows, changed), {
-            "refreshed_at": refreshed_at,
-            "cache_error": cache_error,
-            "generation": generation,
-        }))
-
-    def _scores_synced(self, rows, changed, refreshed_at="", cache_error="", generation=None):
-        if generation is not None and self._load_is_stale(generation):
-            # A Load superseded this sync: the sync is over, so clear the
-            # flag, but the Load owns the progress bar, status line and menu.
-            self._sync_in_flight = False
-            return
-        self._sync_in_flight = False
-        self._set_sync_menu_state("normal")
-        self.progress.stop()
-        # Back to indeterminate for the next snapshot restore, which has no
-        # total to count against.
-        self.progress.configure(mode="indeterminate", value=0)
-        self.rows = rows
-        # The snapshot's stamp only moves when the save succeeded; a failed
-        # save leaves the in-memory scores fresh but the snapshot stale.
-        if refreshed_at:
-            self.last_refreshed_at = refreshed_at
-        if changed:
-            noun = "chart" if changed == 1 else "charts"
-            message = f"Scores synced · {changed:,} {noun} updated"
-        else:
-            message = "Scores are already up to date"
-        if refreshed_at:
-            message += f" · last refreshed {format_refresh_time(refreshed_at)}"
-        self.status.set(message + ".")
-        if cache_error:
-            self.status.set(self.status.get() + f" Local snapshot not saved: {cache_error}")
-        # Full re-insert for v1 (issue #147): the merge is the fast part,
-        # and a targeted cell patch would have to decide what to do about
-        # the scored-only filter and the count label. Preserve the
-        # selection, which a full reload currently drops.
-        self.refresh_table(preserve_selection=True)
-
-    def _scores_sync_failed(self, message, generation=None):
-        if generation is not None and self._load_is_stale(generation):
-            # A Load superseded this sync: the sync is over, so clear the
-            # flag, but the Load owns the progress bar, status line and menu.
-            self._sync_in_flight = False
-            return
-        self._sync_in_flight = False
-        self._set_sync_menu_state("normal")
-        self.progress.stop()
-        self.progress.configure(mode="indeterminate", value=0)
-        self.status.set("Could not sync scores.")
-        messagebox.showerror("Could not sync scores", message)
-
-    def _poll_load_results(self):
-        # Runs on the main thread for the life of the window: deliver whatever
-        # finished scans queued, then schedule the next poll. _loaded and
-        # _load_failed drop results from superseded generations themselves.
-        try:
-            while True:
-                result = self._load_results.get_nowait()
-                if result[0] == "loaded":
-                    _, args, kwargs = result
-                    self._loaded(*args, **kwargs)
-                elif result[0] == "scores_synced":
-                    _, args, kwargs = result
-                    self._scores_synced(*args, **kwargs)
-                elif result[0] == "scores_sync_failed":
-                    _, message, generation = result
-                    self._scores_sync_failed(message, generation=generation)
-                elif result[0] == "progress":
-                    _, done, total, generation = result
-                    self._show_load_progress(done, total, generation)
-                elif result[0] == "phase":
-                    _, text, generation = result
-                    self._show_load_phase(text, generation)
-                else:
-                    _, message, generation = result
-                    self._load_failed(message, generation=generation)
-        except queue.Empty:
-            pass
-        finally:
-            try:
-                self.root.after(75, self._poll_load_results)
-            except tk.TclError:
-                pass  # the window is gone; stop polling
-
-    def _show_load_progress(self, done, total, generation):
-        """Show a scan's progress on the main thread: determinate bar, files done, ETA.
-
-        The first message of a scan carries the total, which is when the bar
-        can go determinate — until then it bounced while Stats.xml parsed.
-        The ETA is a straight line from the average rate so far; it only
-        appears once 50 files are done, so the first few files cannot make
-        it jump around.
-        """
-        if generation is not None and self._load_is_stale(generation):
-            return
-        if total > 0:
-            # ["mode"] comes back as a Tcl index object, not a str, so the
-            # comparison needs str() — a bare == "determinate" never matches.
-            if str(self.progress["mode"]) != "determinate":
-                self.progress.stop()
-                self.progress.configure(mode="determinate", maximum=total, value=0)
-            self.progress["value"] = done
-        text = f"Reading chart cache… {done:,} / {total:,} files"
-        started = self._load_started_at
-        if started is not None and done >= 50 and done < total:
-            elapsed = time.monotonic() - started
-            if elapsed > 0:
-                remaining = elapsed * (total - done) / done
-                text += f" · about {max(1, round(remaining))} s left"
-        self.status.set(text)
-
-    def _show_load_phase(self, text, generation):
-        """Name a scan phase on the status line (e.g. the snapshot write)."""
-        if generation is not None and self._load_is_stale(generation):
-            return
-        self.status.set(text)
-
-    def _load_failed(self, message, generation=None):
-        if generation is not None and self._load_is_stale(generation):
-            return
-        self.load_button.configure(state="normal")
-        self._scan_in_flight = False
-        self._set_sync_menu_state("normal")
-        self.progress.stop()
-        # Back to indeterminate for the next snapshot restore, which has no
-        # total to count against.
-        self.progress.configure(mode="indeterminate", value=0)
-        self.status.set("Could not load library.")
-        messagebox.showerror("Could not load library", message)
-
-    def _loaded(self, rows, files, skipped_files=0, files_without_charts=0, skipped_blocks=0,
-                nested_song_tree=False,
-                refreshed_at="", cache_error="", from_cache=False, source_paths=None, generation=None):
-        if generation is not None and self._load_is_stale(generation):
-            return
-        self.load_button.configure(state="normal")
-        self._scan_in_flight = False
-        self._set_sync_menu_state("normal")
-        self.progress.stop()
-        # Back to indeterminate for the next snapshot restore, which has no
-        # total to count against.
-        self.progress.configure(mode="indeterminate", value=0)
-        self.rows = rows
-        # The scores sync re-saves the snapshot with the merged rows, so it
-        # needs the scan's summary values; keep them alongside the rows.
-        self._snapshot_files = files
-        self._snapshot_skipped_files = skipped_files
-        self._snapshot_files_without_charts = files_without_charts
-        self._snapshot_nested_song_tree = nested_song_tree
-        self._snapshot_skipped_blocks = skipped_blocks
-        if source_paths:
-            self.loaded_source_paths = source_paths
-        self.last_refreshed_at = refreshed_at
         with self._batched_filter_changes():
             for combo, var, label, key in ((self.pack_filter, self.pack_var, "All packs", "Pack"),
                                            (self.type_filter, self.type_var, "All types", "Type")):
@@ -1361,32 +811,25 @@ class LibraryApp:
             self.diff_filter.configure(values=difficulty_values)
             if self.diff_var.get() not in difficulty_values:
                 self.diff_var.set("All difficulties")
-        if from_cache:
-            stamp = format_refresh_time(refreshed_at)
-            self.status.set(f"Showing saved library snapshot · {len(rows):,} charts · last refreshed {stamp}.")
-        elif files == 0:
-            hint = " This looks like a regular Songs tree; select the flat Cache/Songs folder instead." \
-                if nested_song_tree else " Select the flat Cache/Songs folder."
-            self.status.set("No files found at this folder level." + hint)
-        else:
-            summary = f"Scanned {files:,} files · parsed {len(rows):,} charts"
-            if skipped_files:
-                summary += f" · skipped {skipped_files:,} unreadable"
-            if files_without_charts:
-                summary += f" · {files_without_charts:,} with no charts"
-            if skipped_blocks:
-                summary += f" · {skipped_blocks:,} chart blocks skipped (missing metadata)"
-            self.status.set(summary + ".")
-        if not from_cache and refreshed_at:
-            self.status.set(
-                self.status.get()
-                + f" Snapshot refreshed {format_refresh_time(refreshed_at)}.")
-        if not from_cache and cache_error:
-            self.status.set(self.status.get() + f" Local snapshot not saved: {cache_error}")
         if self.course_builder is not None:
             # A fresh library may no longer match a course queue built from the old
             # one; the builder asks the user what to do with it (issue #82).
             self.course_builder.on_library_reloaded()
+
+    def _on_nothing_loaded(self):
+        """The initial refresh when no snapshot was restored."""
+        self.refresh_table()
+
+    def _set_sync_menu_state(self, state):
+        """Enable or disable the File -> Sync scores entry (issue #147).
+
+        A bare instance built for a load test may have no menubar; that is
+        "no menu to update", not an error.
+        """
+        file_menu = getattr(self, "_file_menu", None)
+        if file_menu is None:
+            return
+        file_menu.entryconfigure("Sync scores from Stats.xml", state=state)
 
     def _filter_rows(self, ignore_metric=None):
         """Return the rows that pass the pack, type, difficulty, scored and search filters.
@@ -1405,7 +848,7 @@ class LibraryApp:
         if ignore_metric == "Difficulty":
             diff = "All difficulties"
         rows = []
-        for row in self.rows:
+        for row in self._loader.rows:
             if pack != "All packs" and row["Pack"] != pack:
                 continue
             if chart_type != "All types" and row["Type"] != chart_type:
@@ -1497,7 +940,7 @@ class LibraryApp:
             self.count_label.set(f"Loading {stop:,} of {len(rows):,} charts…")
             self.root.after(1, lambda: self._insert_batch(rows, stop, generation, selected_rows))
         else:
-            count_text = f"{len(rows):,} charts shown · {len(self.rows):,} total"
+            count_text = f"{len(rows):,} charts shown · {len(self._loader.rows):,} total"
             hint = self._unreadable_search_hint()
             if hint:
                 count_text += f" — {hint}"
@@ -1570,7 +1013,7 @@ class LibraryApp:
         self._save_settings()
 
     def export_csv(self):
-        if not self.rows:
+        if not self._loader.rows:
             messagebox.showinfo("No charts", "Load a library before exporting.")
             return
         path = filedialog.asksaveasfilename(title="Export chart library", defaultextension=".csv",
@@ -1582,8 +1025,8 @@ class LibraryApp:
             with open(path, "w", newline="", encoding="utf-8-sig") as handle:
                 writer = csv.DictWriter(handle, fieldnames=HEADERS, extrasaction="ignore")
                 writer.writeheader()
-                writer.writerows(self.rows)
-            self.status.set(f"Exported {len(self.rows):,} charts to {path}")
+                writer.writerows(self._loader.rows)
+            self.status.set(f"Exported {len(self._loader.rows):,} charts to {path}")
         except OSError as exc:
             self.status.set(f"Could not export CSV: {exc}")
             messagebox.showerror("Export failed", f"Could not write to {path}:\n\n{exc}")

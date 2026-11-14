@@ -186,7 +186,7 @@ class FixtureChainTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             out_file = Path(directory) / "edits.csv"
             instance = object.__new__(app.LibraryApp)
-            instance.rows = edits
+            instance._loader = Mock(rows=edits)
             instance.status = Mock()
             with patch.object(app, "filedialog",
                               Mock(asksaveasfilename=Mock(return_value=str(out_file)))), \

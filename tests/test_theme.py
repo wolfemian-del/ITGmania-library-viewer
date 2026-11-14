@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parent.parent
 WINDOW_SOURCES = tuple(
     (ROOT / name).read_text(encoding="utf-8")
     for name in ("library_visualizer.py", "course_builder.py", "row_tints.py",
-                 "advanced_search.py", "distribution_panel.py", "data_paths_dialog.py")
+                 "advanced_search.py", "distribution_panel.py", "data_paths_dialog.py",
+                 "library_loader.py")
 )
 WINDOW_SOURCE = "\n".join(WINDOW_SOURCES)
 HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}\b")

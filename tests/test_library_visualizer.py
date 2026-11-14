@@ -1,12 +1,8 @@
 import contextlib
 import json
-import os
-import queue
 import re
-import shutil
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from pathlib import Path
@@ -290,248 +286,8 @@ class LibrarySnapshotTests(unittest.TestCase):
     def sample_row():
         return {key: "" for key in (*app.HEADERS, "Course path")}
 
-    def test_snapshot_round_trip_preserves_loaded_fields(self):
-        # One delegate test pins the complete positional mapping from the
-        # snapshot into _loaded: every field gets a distinct value, so a
-        # swap in the delegate's argument order fails.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache" / "Songs"
-            stats_file = root / "Stats.xml"
-            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            rows = [self.sample_row()]
-            instance._snapshot_store.write(cache_dir, stats_file, rows, 2, 1, 3, True, skipped_blocks=4)
-
-            instance.load_cached_data()
-
-        instance._loaded.assert_called_once()
-        args, kwargs = instance._loaded.call_args
-        # _loaded's positional args: rows, files, skipped_files,
-        # files_without_charts, skipped_blocks, nested_song_tree.
-        self.assertEqual(args, (rows, 2, 1, 3, 4, True))
-
-    def test_snapshot_restores_when_source_paths_match(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache" / "Songs"
-            stats_file = root / "Stats.xml"
-            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            rows = [self.sample_row()]
-            instance._snapshot_store.write(cache_dir, stats_file, rows, 1, 0, 0, False)
-
-            instance.load_cached_data()
-
-        instance._loaded.assert_called_once()
-        args, kwargs = instance._loaded.call_args
-        self.assertEqual(args[0], rows)
-        self.assertTrue(kwargs["from_cache"])
-        self.assertEqual(kwargs["source_paths"], (str(cache_dir), str(stats_file)))
-
-    def test_snapshot_restores_but_notes_a_moved_cache_folder(self):
-        # The snapshot restores on a string match only, so a moved folder is
-        # invisible until the next refresh fails; the status line must say so.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache" / "Songs"
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>")
-            cache_dir.mkdir(parents=True)
-            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
-            shutil.rmtree(root / "Cache")
-            instance.status = _StubStatus(
-                "Showing saved library snapshot · 1 charts · last refreshed 2026-11-10 08:00.")
-
-            instance.load_cached_data()
-            instance.load_cached_data()  # a second restore must not duplicate the note
-
-            instance._loaded.assert_called()
-            self.assertTrue(instance.status.get().startswith("Showing saved library snapshot"))
-            self.assertEqual(instance.status.get().count("no longer exists"), 1)
-            self.assertIn("The saved cache folder no longer exists.", instance.status.get())
-            self.assertIn("Choose File → Data paths…, then Load / refresh.", instance.status.get())
-
-    def test_snapshot_restores_but_notes_a_moved_stats_file(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache" / "Songs"
-            stats_file = root / "Stats.xml"
-            cache_dir.mkdir(parents=True)
-            stats_file.write_text("<Stats/>")
-            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
-            stats_file.unlink()
-            instance.status = _StubStatus(
-                "Showing saved library snapshot · 1 charts · last refreshed 2026-11-10 08:00.")
-
-            instance.load_cached_data()
-
-            self.assertIn("The saved Stats.xml no longer exists.", instance.status.get())
-            self.assertIn("Choose File → Data paths…, then Load / refresh.", instance.status.get())
-
-    def test_snapshot_restores_but_notes_both_paths_moved(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache" / "Songs"
-            stats_file = root / "Stats.xml"
-            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
-            # Neither path was ever created on disk.
-            instance.status = _StubStatus(
-                "Showing saved library snapshot · 1 charts · last refreshed 2026-11-10 08:00.")
-
-            instance.load_cached_data()
-
-            self.assertIn("The saved cache folder and Stats.xml no longer exist.", instance.status.get())
-            self.assertIn("Choose File → Data paths…, then Load / refresh.", instance.status.get())
-
-    def test_snapshot_restores_quietly_when_both_paths_exist(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache" / "Songs"
-            stats_file = root / "Stats.xml"
-            cache_dir.mkdir(parents=True)
-            stats_file.write_text("<Stats/>")
-            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
-            success = "Showing saved library snapshot · 1 charts · last refreshed 2026-11-10 08:00."
-            instance.status = _StubStatus(success)
-
-            instance.load_cached_data()
-
-            self.assertEqual(instance.status.get(), success)
-
-    def test_snapshot_is_not_restored_for_different_source_paths(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            instance = self.make_app(root / "settings.json", root / "CacheB", root / "Stats.xml")
-            instance._snapshot_store.write(
-                root / "CacheA", root / "Stats.xml", [self.sample_row()], 1, 0, 0, False)
-
-            instance.load_cached_data()
-
-        instance._loaded.assert_not_called()
-        instance.refresh_table.assert_called_once()
-        self.assertIn("different data paths", instance.status.set.call_args.args[0])
-
-    def test_snapshot_with_deeply_nested_json_reports_could_not_be_read(self):
-        # Issue #122: a snapshot nested far past the recursion limit raises
-        # RecursionError out of json.load; it must be reported like any
-        # other unreadable snapshot instead of escaping the callback.
-        # The depth is 1,000,000 because the limit is version-dependent:
-        # 10,000 levels raise on 3.12 but parse on 3.14 (whose C recursion
-        # limit is higher), so the depth must exceed every supported
-        # version's limit. json.load fails fast at the limit.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            instance = self.make_app(root / "settings.json", root / "Cache" / "Songs", root / "Stats.xml")
-            instance.library_cache_path.write_text("[" * 1000000 + "]" * 1000000, encoding="utf-8")
-
-            instance.load_cached_data()
-
-        instance._loaded.assert_not_called()
-        instance.refresh_table.assert_called_once()
-        self.assertIn("could not be read", instance.status.set.call_args.args[0])
-        # The detail pin (proposal 0008, Revision 3): the status text
-        # carries the exception, not just the reason kind. Python 3.14's
-        # JSON scanner reports the overflow as "Stack overflow ..."; earlier
-        # versions raise RecursionError ("maximum recursion depth exceeded").
-        if sys.version_info >= (3, 14):
-            self.assertIn("Stack overflow", instance.status.set.call_args.args[0])
-        else:
-            self.assertIn("recursion", instance.status.set.call_args.args[0])
-
     @unittest.skipIf(sys.version_info < (3, 11),
                      "the int-string conversion limit is 3.11+")
-    def test_snapshot_with_oversized_integer_reports_could_not_be_read(self):
-        # Issue #122: an integer past the 4,300-digit conversion limit
-        # raises ValueError out of json.load; same handling as above.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            instance = self.make_app(root / "settings.json", root / "Cache" / "Songs", root / "Stats.xml")
-            instance.library_cache_path.write_text("[" + "9" * 5000 + "]", encoding="utf-8")
-
-            instance.load_cached_data()
-
-        instance._loaded.assert_not_called()
-        instance.refresh_table.assert_called_once()
-        self.assertIn("could not be read", instance.status.set.call_args.args[0])
-        # The detail pin (proposal 0008, Revision 3): the status text
-        # carries the exception, not just the reason kind.
-        self.assertIn("integer string conversion", instance.status.set.call_args.args[0])
-
-    def test_snapshot_with_invalid_utf8_reports_could_not_be_read(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            instance = self.make_app(root / "settings.json", root / "Cache" / "Songs", root / "Stats.xml")
-            instance.library_cache_path.write_bytes(b"\xff\xfe not utf-8")
-
-            instance.load_cached_data()
-
-        instance._loaded.assert_not_called()
-        instance.refresh_table.assert_called_once()
-        self.assertIn("could not be read", instance.status.set.call_args.args[0])
-        # The detail pin (proposal 0008, Revision 3): the status text
-        # carries the exception, not just the reason kind.
-        self.assertIn("codec can't decode", instance.status.set.call_args.args[0])
-
-    def test_snapshot_is_not_restored_with_an_unsupported_schema(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = root / "Cache", root / "Stats.xml"
-            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
-            with instance.library_cache_path.open("r+", encoding="utf-8") as handle:
-                payload = json.load(handle)
-                payload["schema_version"] = library_data.LIBRARY_CACHE_SCHEMA_VERSION + 1
-                handle.seek(0)
-                json.dump(payload, handle)
-                handle.truncate()
-
-            instance.load_cached_data()
-
-        instance._loaded.assert_not_called()
-        instance.refresh_table.assert_called_once()
-        self.assertIn("invalid or outdated", instance.status.set.call_args.args[0])
-
-    def test_snapshot_schema_version_2_is_rejected_as_outdated(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = root / "Cache", root / "Stats.xml"
-            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
-            with instance.library_cache_path.open("r+", encoding="utf-8") as handle:
-                payload = json.load(handle)
-                payload["schema_version"] = 2
-                handle.seek(0)
-                json.dump(payload, handle)
-                handle.truncate()
-
-            instance.load_cached_data()
-
-        instance._loaded.assert_not_called()
-        self.assertIn("invalid or outdated", instance.status.set.call_args.args[0])
-
-    def test_snapshot_row_missing_a_column_is_rejected_as_outdated(self):
-        # Issue #49: the HEADERS check independently invalidates a snapshot
-        # whose rows predate a new column, even at the current schema version.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = root / "Cache", root / "Stats.xml"
-            instance = self.make_app(root / "settings.json", cache_dir, stats_file)
-            instance._snapshot_store.write(cache_dir, stats_file, [self.sample_row()], 1, 0, 0, False)
-            with instance.library_cache_path.open("r+", encoding="utf-8") as handle:
-                payload = json.load(handle)
-                del payload["rows"][0]["Subtitle"]
-                handle.seek(0)
-                json.dump(payload, handle)
-                handle.truncate()
-
-            instance.load_cached_data()
-
-        instance._loaded.assert_not_called()
-        self.assertIn("invalid or outdated", instance.status.set.call_args.args[0])
-
     def test_distribution_settings_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -900,7 +656,7 @@ class RowTintTests(unittest.TestCase):
             {"Title": "Song C", "Difficulty": "CustomUnknown", "Time": 60},
         ]
         # Song B is pre-selected
-        instance.rows = rows
+        instance._loader = Mock(rows=rows)
         instance._insert_batch(rows, 0, 1, selected_rows={id(rows[1])})
 
         self.assertEqual(instance.tree.insert.call_count, 3)
@@ -936,9 +692,9 @@ class LibraryRowsForCourseTests(unittest.TestCase):
         # The course builder's save-time ambiguity check compares its queue against
         # this list, so it must be the app's current rows, not a snapshot copy.
         instance = object.__new__(app.LibraryApp)
-        instance.rows = [{"Title": "A"}, {"Title": "B"}]
+        instance._loader = Mock(rows=[{"Title": "A"}, {"Title": "B"}])
 
-        self.assertIs(instance._library_rows_for_course(), instance.rows)
+        self.assertIs(instance._library_rows_for_course(), instance._loader.rows)
 
 class InsertBatchProgressTests(unittest.TestCase):
     """_insert_batch fills the table in time-boxed batches, and the count
@@ -955,7 +711,7 @@ class InsertBatchProgressTests(unittest.TestCase):
         instance._tree_tint = row_tints.SelectedRowTint(instance.tree)
         instance.root = Mock()
         rows = [{"Title": f"Song {i}", "Difficulty": "Hard", "Time": 60} for i in range(row_count)]
-        instance.rows = rows
+        instance._loader = Mock(rows=rows)
         return instance, rows
 
     def test_a_zero_budget_inserts_one_row_and_reports_progress(self):
@@ -984,13 +740,13 @@ class InsertBatchProgressTests(unittest.TestCase):
         # Issue #123: a snapshot row whose Time is "nan" or "1e999" used to
         # raise inside _insert_batch; now the cell is blank and the batch lands.
         instance, _rows = self.make_instance()
-        instance.rows = [
+        instance._loader.rows = [
             {"Title": "Song A", "Difficulty": "Hard", "Time": "nan"},
             {"Title": "Song B", "Difficulty": "Hard", "Time": "1e999"},
             {"Title": "Song C", "Difficulty": "Hard", "Time": 120},
         ]
         with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
-            instance._insert_batch(instance.rows, 0, 1)
+            instance._insert_batch(instance._loader.rows, 0, 1)
         self.assertEqual(instance.tree.insert.call_count, 3)
         time_index = list(app.HEADERS).index("Time")
         inserted = [kwargs["values"][time_index]
@@ -1090,60 +846,6 @@ class FilterPersistenceTests(unittest.TestCase):
         instance._settings_store = library_data.SettingsStore(instance.settings_path)
         instance._settings_store.load()
 
-    def test_loaded_keeps_values_that_are_in_the_new_library(self):
-        instance = self.make_loaded_instance(pack="Pack2", type_="dance-single", difficulty="Challenge")
-        rows = self.rows(("Pack1", "dance-single", "Hard"), ("Pack2", "dance-double", "Challenge"))
-
-        instance._loaded(rows, len(rows), from_cache=True, refreshed_at="2026-01-01T00:00:00")
-
-        self.assertEqual(instance.pack_var.get(), "Pack2")
-        self.assertEqual(instance.type_var.get(), "dance-single")
-        self.assertEqual(instance.diff_var.get(), "Challenge")
-        instance.refresh_table.assert_called_once()
-
-    def test_loaded_reports_skipped_chart_blocks_in_the_summary(self):
-        instance = self.make_loaded_instance()
-        rows = self.rows(("Pack1", "dance-single", "Hard"), ("Pack2", "dance-single", "Hard"))
-
-        instance._loaded(rows, len(rows), skipped_blocks=2)
-
-        status = instance.status.set.call_args.args[0]
-        self.assertTrue(status.startswith("Scanned 2 files · parsed 2 charts"))
-        self.assertIn(" · 2 chart blocks skipped (missing metadata)", status)
-
-    def test_loaded_omits_the_skipped_blocks_fragment_when_zero(self):
-        instance = self.make_loaded_instance()
-        rows = self.rows(("Pack1", "dance-single", "Hard"))
-
-        instance._loaded(rows, len(rows))
-
-        self.assertNotIn("chart blocks skipped", instance.status.set.call_args.args[0])
-
-    def test_loaded_falls_back_for_values_missing_from_the_new_library(self):
-        instance = self.make_loaded_instance(pack="Gone", type_="gone-type", difficulty="Gone")
-        rows = self.rows(("Pack1", "dance-single", "Hard"))
-
-        instance._loaded(rows, len(rows), from_cache=True, refreshed_at="2026-01-01T00:00:00")
-
-        self.assertEqual(instance.pack_var.get(), "All packs")
-        self.assertEqual(instance.type_var.get(), "All types")
-        self.assertEqual(instance.diff_var.get(), "All difficulties")
-        instance.refresh_table.assert_called_once()
-
-    def test_successive_loads_keep_a_selection_then_fall_back(self):
-        instance = self.make_loaded_instance()
-        first = self.rows(("Pack1", "dance-single", "Hard"), ("Pack2", "dance-single", "Hard"))
-        instance._loaded(first, len(first), from_cache=True, refreshed_at="2026-01-01T00:00:00")
-        instance.pack_var.set("Pack2")
-
-        second = self.rows(("Pack2", "dance-single", "Hard"), ("Pack3", "dance-single", "Hard"))
-        instance._loaded(second, len(second), from_cache=True, refreshed_at="2026-01-01T00:00:00")
-        self.assertEqual(instance.pack_var.get(), "Pack2")
-
-        third = self.rows(("Pack3", "dance-single", "Hard"))
-        instance._loaded(third, len(third), from_cache=True, refreshed_at="2026-01-01T00:00:00")
-        self.assertEqual(instance.pack_var.get(), "All packs")
-
     def test_save_settings_writes_the_filter_keys_and_never_search_text(self):
         with tempfile.TemporaryDirectory() as directory:
             settings_path = Path(directory) / "settings.json"
@@ -1176,49 +878,6 @@ class FilterPersistenceTests(unittest.TestCase):
             saved = json.loads(settings_path.read_text(encoding="utf-8"))
         self.assertEqual(saved["filter_difficulty"], "Hard")
 
-    def test_fallback_replaces_the_stored_value_on_the_next_save(self):
-        with tempfile.TemporaryDirectory() as directory:
-            settings_path = Path(directory) / "settings.json"
-            settings_path.write_text(json.dumps({"filter_pack": "Gone Pack"}), encoding="utf-8")
-            instance = self.make_loaded_instance()
-            # Seed the variable from the real settings file through the
-            # real reader, the way __init__ seeds it at startup.
-            instance.settings_path = settings_path
-            instance._settings_store = library_data.SettingsStore(settings_path)
-            seeded = instance._settings_store.load()
-            instance.pack_var = _ValueVar(seeded.get("filter_pack", "All packs"),
-                                          on_set=instance._refresh_unless_batching)
-            rows = self.rows(("Pack1", "dance-single", "Hard"))
-            instance._loaded(rows, len(rows), from_cache=True, refreshed_at="2026-01-01T00:00:00")
-            self.assertEqual(instance.pack_var.get(), "All packs")
-            self.add_save_machinery(instance, settings_path)
-
-            instance._save_settings()
-
-            saved = json.loads(settings_path.read_text(encoding="utf-8"))
-        self.assertEqual(saved["filter_pack"], "All packs")
-
-    def test_seeded_value_survives_a_startup_that_never_loads(self):
-        with tempfile.TemporaryDirectory() as directory:
-            instance = self.make_loaded_instance(type_="dance-double")
-            instance.settings_path = Path(directory) / "settings.json"
-            instance._loaded = Mock()
-            # load_cached_data reads through the snapshot store (proposal
-            # 0008); the missing file returns before the paths are compared,
-            # so the variables can stay empty.
-            instance.cache_var = Mock()
-            instance.cache_var.get.return_value = ""
-            instance.stats_var = Mock()
-            instance.stats_var.get.return_value = ""
-            instance._snapshot_store = library_data.SnapshotStore(
-                instance.library_cache_path, app.HEADERS, library_data.LIBRARY_CACHE_SCHEMA_VERSION)
-
-            instance.load_cached_data()
-
-            instance._loaded.assert_not_called()
-            self.assertEqual(instance.type_var.get(), "dance-double")
-            instance.refresh_table.assert_called_once()
-
 
 class FilterVariableWiringTests(unittest.TestCase):
     """_filter_rows reads the app's five filter variables: each variable
@@ -1233,14 +892,14 @@ class FilterVariableWiringTests(unittest.TestCase):
         instance.type_var = _ValueVar("All types")
         instance.diff_var = _ValueVar("All difficulties")
         instance.scored_var = _ValueVar(False)
-        instance.rows = [
+        instance._loader = Mock(rows=[
             {"Title": "Song A", "Pack": "Pack1", "Type": "dance-single",
              "Difficulty": "Hard", "Grade": "AAA", "Meter": 10},
             {"Title": "Song B", "Pack": "Pack2", "Type": "dance-double",
              "Difficulty": "Challenge", "Grade": "", "Meter": 12},
             {"Title": "Song C", "Pack": "Pack1", "Type": "dance-single",
              "Difficulty": "Challenge", "Grade": "AA", "Meter": 11},
-        ]
+        ])
         return instance
 
     @staticmethod
@@ -1304,13 +963,13 @@ class RefreshDeliversRowsTests(unittest.TestCase):
         instance.diff_var = _ValueVar("All difficulties")
         instance.scored_var = _ValueVar(False)
         instance.sort_keys = []
-        instance.rows = [
+        instance._loader = Mock(rows=[
             {"Title": "Song A", "Pack": "Pack1", "Type": "dance-single",
              "Difficulty": "Hard", "Grade": "AAA", "Meter": 10, "Time": 60},
             {"Title": "Song B", "Pack": "Pack2", "Type": "dance-double",
              "Difficulty": "Challenge", "Grade": "", "Meter": 12,
              "Time": 90},
-        ]
+        ])
         return instance
 
     def test_refresh_table_inserts_the_rows_and_pushes_them_to_the_panel(self):
@@ -1324,75 +983,11 @@ class RefreshDeliversRowsTests(unittest.TestCase):
                     for _args, kwargs in instance.tree.insert.call_args_list]
         self.assertEqual(inserted, ["Song A", "Song B"])
         instance.distribution_panel.show_rows.assert_called_once_with(
-            instance.rows)
-        instance.count_label.set.assert_called_once_with(
-            "2 charts shown · 2 total")
-
-    def test_loaded_delivers_the_rows_through_the_real_refresh(self):
-        # Codex (PR #163 review): the direct refresh_table pin above
-        # would still pass if the load completion path stopped
-        # refreshing the table. Call _loaded with the real refresh
-        # wired up, so the _loaded -> _batched_filter_changes ->
-        # refresh_table handoff is pinned end to end.
-        instance = self.make_instance()
-        instance.load_button = Mock()
-        instance._set_sync_menu_state = Mock()
-        instance.progress = Mock()
-        instance.pack_filter = Mock()
-        instance.type_filter = Mock()
-        instance.diff_filter = Mock()
-        instance.status = Mock()
-        instance.course_builder = None
-        instance._batched_filter_changes = (
-            app.LibraryApp._batched_filter_changes.__get__(instance))
-        instance._batching_filter_changes = False
-        instance._search_refresh_after_id = None
-
-        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
-            instance._loaded(instance.rows, 2)
-
-        self.assertEqual(instance.tree.insert.call_count, 2)
-        title_index = list(app.HEADERS).index("Title")
-        inserted = [kwargs["values"][title_index]
-                    for _args, kwargs in instance.tree.insert.call_args_list]
-        self.assertEqual(inserted, ["Song A", "Song B"])
-        instance.distribution_panel.show_rows.assert_called_once_with(
-            instance.rows)
+            instance._loader.rows)
         instance.count_label.set.assert_called_once_with(
             "2 charts shown · 2 total")
 
 
-class InitialSnapshotTests(unittest.TestCase):
-    """The deferred startup load (startup polish): _load_initial_snapshot is
-    the after() callback __init__ schedules so the window paints first."""
-
-    @staticmethod
-    def make_instance():
-        instance = object.__new__(app.LibraryApp)
-        instance.progress = Mock()
-        instance.load_cached_data = Mock()
-        instance._load_generation = 0
-        return instance
-
-    def test_it_loads_and_stops_the_progress_bar(self):
-        instance = self.make_instance()
-        instance._load_initial_snapshot()
-        instance.load_cached_data.assert_called_once_with()
-        instance.progress.stop.assert_called_once_with()
-
-    def test_it_does_nothing_when_a_user_scan_has_already_started(self):
-        instance = self.make_instance()
-        instance._load_generation = 1
-        instance._load_initial_snapshot()
-        instance.load_cached_data.assert_not_called()
-        instance.progress.stop.assert_not_called()
-
-    def test_it_stops_the_progress_bar_even_when_loading_fails(self):
-        instance = self.make_instance()
-        instance.load_cached_data.side_effect = RuntimeError("boom")
-        with self.assertRaises(RuntimeError):
-            instance._load_initial_snapshot()
-        instance.progress.stop.assert_called_once_with()
 
 
 
@@ -1400,110 +995,8 @@ class InitialSnapshotTests(unittest.TestCase):
 
 
 
-class SourcePathsChangedTests(unittest.TestCase):
-    """The loader's _current_paths_match_loaded and _source_paths_changed:
-    whether the selected paths match the loaded snapshot's sources, and the
-    status line and dialog note that report the answer."""
-
-    @staticmethod
-    def make_instance(cache, stats, loaded=None, rows=(), refreshed_at=""):
-        instance = object.__new__(app.LibraryApp)
-        instance.loaded_source_paths = loaded
-        instance.cache_var = Mock()
-        instance.cache_var.get.return_value = cache
-        instance.stats_var = Mock()
-        instance.stats_var.get.return_value = stats
-        instance.rows = list(rows)
-        instance.last_refreshed_at = refreshed_at
-        instance.status = Mock()
-        # A real dialog so paths_changed() computes the note from the app's
-        # _current_paths_match_loaded; set_note is mocked to record the call
-        # (the dialog was never opened, so a real set_note would be a no-op).
-        instance._data_paths_dialog = dialog.DataPathsDialog(
-            parent=Mock(), cache_var=instance.cache_var,
-            stats_var=instance.stats_var, load_callback=Mock(),
-            save_settings=Mock(), button_factory=Mock(), entry_factory=Mock(),
-            dpi_scale=1.0,
-            paths_match_loaded=lambda: instance._current_paths_match_loaded())
-        instance._data_paths_dialog.set_note = Mock()
-        return instance
-
-    def test_no_loaded_snapshot_reports_match(self):
-        instance = self.make_instance("/cache", "/stats.xml")
-        self.assertTrue(instance._current_paths_match_loaded())
-
-    def test_matching_paths_report_match(self):
-        instance = self.make_instance(
-            "/cache", "/stats.xml", loaded=("/cache", "/stats.xml"))
-        self.assertTrue(instance._current_paths_match_loaded())
-
-    def test_spelling_difference_still_matches(self):
-        # _normalized_source_path runs abspath: a "." component in the
-        # selected path is the same folder as the saved one. [CODE]
-        instance = self.make_instance(
-            "/cache/.", "/stats.xml", loaded=("/cache", "/stats.xml"))
-        self.assertTrue(instance._current_paths_match_loaded())
-
-    def test_different_cache_path_reports_mismatch(self):
-        instance = self.make_instance(
-            "/other", "/stats.xml", loaded=("/cache", "/stats.xml"))
-        self.assertFalse(instance._current_paths_match_loaded())
-
-    def test_different_stats_path_reports_mismatch(self):
-        instance = self.make_instance(
-            "/cache", "/other.xml", loaded=("/cache", "/stats.xml"))
-        self.assertFalse(instance._current_paths_match_loaded())
-
-    def test_missing_path_variables_report_match(self):
-        # A bare instance without path state reports True the same way.
-        instance = object.__new__(app.LibraryApp)
-        instance.loaded_source_paths = ("/cache", "/stats.xml")
-        self.assertTrue(instance._current_paths_match_loaded())
-
-    def test_no_loaded_snapshot_leaves_status_and_note_alone(self):
-        instance = self.make_instance("/cache", "/stats.xml")
-
-        instance._source_paths_changed()
-
-        instance.status.set.assert_not_called()
-        instance._data_paths_dialog.set_note.assert_not_called()
-
-    def test_matching_paths_show_the_snapshot_line_and_clear_the_note(self):
-        instance = self.make_instance(
-            "/cache", "/stats.xml", loaded=("/cache", "/stats.xml"),
-            rows=[{}, {}, {}])
-
-        instance._source_paths_changed()
-
-        instance.status.set.assert_called_once_with(
-            "Showing saved library snapshot · 3 charts · "
-            "last refreshed unknown.")
-        instance._data_paths_dialog.set_note.assert_called_once_with("")
-
-    def test_differing_paths_show_the_moved_paths_line_and_the_differ_note(self):
-        instance = self.make_instance(
-            "/other", "/stats.xml", loaded=("/cache", "/stats.xml"),
-            rows=[{}])
-
-        instance._source_paths_changed()
-
-        instance.status.set.assert_called_once_with(
-            "Displayed library uses different data paths. Click Load / "
-            "refresh to show the selected sources.")
-        instance._data_paths_dialog.set_note.assert_called_once_with(
-            dialog.DataPathsDialog._DATA_PATHS_DIFFER_NOTE)
 
 
-
-
-
-class FirstRunPopupWrapperTests(unittest.TestCase):
-    """The app-side _maybe_show_first_run_paths_dialog wrapper returns
-    silently on a bare instance (no dialog constructed yet)."""
-
-    def test_bare_instance_without_path_state_returns_silently(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._maybe_show_first_run_paths_dialog()  # no error, no dialog
 
 
 class _StubStatus:
@@ -1546,41 +1039,6 @@ class DiscardedSettingsStatusTests(unittest.TestCase):
 
         self.assertEqual(instance.status.get(),
                          "Choose your cache's Songs folder and player Stats.xml, then click Load / refresh.")
-
-    def test_deferred_load_reports_discarded_settings_after_the_snapshot_status(self):
-        instance = object.__new__(app.LibraryApp)
-        instance.progress = Mock()
-        instance._load_generation = 0
-        instance._settings_store = library_data.SettingsStore(Path("settings.json"))
-        instance._settings_store.last_read_error = "Expecting value: line 1 column 1 (char 0)"
-        instance.status = _StubStatus()
-
-        def load():
-            instance.status.set("No saved library snapshot yet. Choose your paths, then click Load / refresh.")
-
-        instance.load_cached_data = load
-
-        instance._load_initial_snapshot()
-
-        self.assertIn("No saved library snapshot yet.", instance.status.get())
-        self.assertIn("Settings file could not be read", instance.status.get())
-        instance.progress.stop.assert_called_once_with()
-
-    def test_deferred_load_does_not_report_when_a_user_scan_supersedes_it(self):
-        # A Load / refresh pressed inside the deferral window owns the
-        # status line; the startup notice must not scribble over its scan.
-        instance = object.__new__(app.LibraryApp)
-        instance.progress = Mock()
-        instance.load_cached_data = Mock()
-        instance._load_generation = 1
-        instance._settings_store = library_data.SettingsStore(Path("settings.json"))
-        instance._settings_store.last_read_error = "Expecting value: line 1 column 1 (char 0)"
-        instance.status = _StubStatus("Loading…")
-
-        instance._load_initial_snapshot()
-
-        self.assertEqual(instance.status.get(), "Loading…")
-        instance.progress.stop.assert_not_called()
 
 
 class LiveDiscardedSettingsTests(unittest.TestCase):
@@ -1701,14 +1159,14 @@ class LiveStartupSnapshotTests(unittest.TestCase):
 
         application = app.LibraryApp(root)
         # Nothing has been read yet: the load is scheduled, not done.
-        self.assertEqual(application.rows, [])
+        self.assertEqual(application._loader.rows, [])
         self.assertEqual(application.status.get(), "Loading saved library…")
         # Pump the event loop until the deferred load lands and the rows fill in.
         deadline = time.monotonic() + 10
         while len(application.tree.get_children()) < 3 and time.monotonic() < deadline:
             root.update()
             time.sleep(0.02)
-        self.assertEqual(len(application.rows), 3)
+        self.assertEqual(len(application._loader.rows), 3)
         self.assertTrue(application.status.get().startswith("Showing saved library snapshot"))
         self.assertEqual(len(application.tree.get_children()), 3)
 
@@ -1749,7 +1207,7 @@ class LiveStartupSnapshotTests(unittest.TestCase):
         while len(application.tree.get_children()) < 3 and time.monotonic() < deadline:
             root.update()
             time.sleep(0.02)
-        self.assertEqual(len(application.rows), 3)
+        self.assertEqual(len(application._loader.rows), 3)
         self.assertIn("The saved cache folder no longer exists.", application.status.get())
         self.assertIn("Choose File → Data paths…, then Load / refresh.", application.status.get())
 
@@ -2058,7 +1516,7 @@ class LiveFilterPersistenceTests(unittest.TestCase):
         self.assertEqual(application.type_var.get(), "dance-single")
         self.assertEqual(application.diff_var.get(), "Challenge")
 
-        self.pump_until(root, lambda: len(application.rows) == 4)
+        self.pump_until(root, lambda: len(application._loader.rows) == 4)
         self.pump_until(root, lambda: len(application.tree.get_children()) >= 1)
         for _ in range(10):
             root.update()
@@ -2127,7 +1585,7 @@ class LiveFilterPersistenceTests(unittest.TestCase):
         )
         root = self.make_root()
         application = self.construct(root, settings_path)
-        self.pump_until(root, lambda: len(application.rows) == 2)
+        self.pump_until(root, lambda: len(application._loader.rows) == 2)
         # The saved Pack is not in this library: the load falls back.
         self.assertEqual(application.pack_var.get(), "All packs")
 
@@ -2142,7 +1600,7 @@ class LiveFilterPersistenceTests(unittest.TestCase):
         # load falls back again, and nothing errors.
         root2 = self.make_root()
         relaunched = self.construct(root2, settings_path)
-        self.pump_until(root2, lambda: len(relaunched.rows) == 2)
+        self.pump_until(root2, lambda: len(relaunched._loader.rows) == 2)
         self.assertEqual(relaunched.pack_var.get(), "All packs")
         self.assertTrue(relaunched.status.get().startswith("Showing saved library snapshot"))
 
@@ -2224,7 +1682,7 @@ class LiveSelectAllTests(unittest.TestCase):
 
 class CourseReloadNotificationTests(unittest.TestCase):
     def _run_loaded(self, course_builder):
-        """Run the real _loaded for an empty library on a fake window."""
+        """Run the real _on_library_changed for an empty library on a fake window."""
         instance = object.__new__(app.LibraryApp)
         instance.load_button = Mock()
         instance.progress = Mock()
@@ -2237,7 +1695,7 @@ class CourseReloadNotificationTests(unittest.TestCase):
         instance.diff_var = Mock()
         instance.status = Mock()
         instance.course_builder = course_builder
-        instance._loaded([], 0)
+        instance._on_library_changed([], preserve_selection=False)
 
     def test_loaded_tells_the_course_builder_the_library_reloaded(self):
         builder = Mock()
@@ -2248,845 +1706,27 @@ class CourseReloadNotificationTests(unittest.TestCase):
         self._run_loaded(None)  # the pre-_build state: no builder yet, no error
 
 
-class RefreshGenerationTests(unittest.TestCase):
-    def test_load_worker_ignores_superseded_generation(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache"
-            cache_dir.mkdir()
-            (cache_dir / "test.cache").write_text("#SONGFILENAME:Songs/P/S/a.ogg;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n", encoding="utf-8")
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>", encoding="utf-8")
 
-            instance = object.__new__(app.LibraryApp)
-            instance._load_generation = 2
-            instance._load_results = queue.Queue()
-            instance._snapshot_store = Mock()
-            instance.root = Mock()
 
-            # Run worker with stale generation 1
-            instance._load_worker(cache_dir, stats_file, generation=1)
+class LoaderDelegationTests(unittest.TestCase):
+    """The app's thin load_data / sync_scores delegation (proposal 0009
+    Step 4): the File menu and startup paths call the app, which hands off
+    to the loader — the engine methods are not duplicated in LibraryApp."""
 
-            instance._snapshot_store.write.assert_not_called()
-            instance.root.after.assert_not_called()
-            # Superseded before the first file: nothing is queued at all,
-            # not even the progress report.
-            self.assertTrue(instance._load_results.empty())
-
-    def test_load_worker_superseded_after_scan_does_not_save(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache"
-            cache_dir.mkdir()
-            (cache_dir / "test.cache").write_text("#SONGFILENAME:Songs/P/S/a.ogg;\n", encoding="utf-8")
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>", encoding="utf-8")
-
-            instance = object.__new__(app.LibraryApp)
-            instance._load_generation = 1
-            instance._snapshot_lock = threading.Lock()
-            instance._load_results = queue.Queue()
-            instance._snapshot_store = Mock()
-            instance.root = Mock()
-
-            def newer_refresh_starts_while_parsing(path, scores):
-                instance._load_generation = 2  # the only file is parsed, so the scan loop will not notice
-                return [], 0
-
-            with patch.object(app, "parse_cache_file", newer_refresh_starts_while_parsing):
-                instance._load_worker(cache_dir, stats_file, generation=1)
-
-            instance._snapshot_store.write.assert_not_called()
-            instance.root.after.assert_not_called()
-            # A scan superseded mid-loop queues no delivery. The (0, 1)
-            # progress report sent before the generation moved is dropped
-            # by the poller's own generation check.
-            kinds = []
-            while not instance._load_results.empty():
-                kinds.append(instance._load_results.get_nowait()[0])
-            self.assertNotIn("loaded", kinds)
-            self.assertNotIn("failed", kinds)
-
-    def test_older_scan_cannot_overwrite_newer_snapshot(self):
-        sample = "#SONGFILENAME:Songs/P/S/a.ogg;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n"
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            old_folder, new_folder = root / "old_folder", root / "new_folder"
-            for folder in (old_folder, new_folder):
-                folder.mkdir()
-                (folder / "a.cache").write_text(sample, encoding="utf-8")
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>", encoding="utf-8")
-
-            instance = object.__new__(app.LibraryApp)
-            instance.settings_path = root / "settings.json"
-            instance._load_generation = 1
-            instance._snapshot_lock = threading.Lock()
-            instance._load_results = queue.Queue()
-            instance.root = Mock()
-
-            # The slow-write seam re-anchors on the store's write (proposal
-            # 0008, Revision 3): the worker calls store.write, so the test
-            # wraps that method on the instance's own store.
-            store = library_data.SnapshotStore(
-                instance.library_cache_path, app.HEADERS, library_data.LIBRARY_CACHE_SCHEMA_VERSION)
-            real_write = store.write
-            old_is_saving, new_has_saved = threading.Event(), threading.Event()
-
-            def slow_write_for_old_folder(cache_dir, *args):
-                if Path(cache_dir) == old_folder:
-                    old_is_saving.set()
-                    new_has_saved.wait(0.3)  # long enough for an unlocked newer scan to finish first
-                refreshed_at = real_write(cache_dir, *args)
-                if Path(cache_dir) == new_folder:
-                    new_has_saved.set()
-                return refreshed_at
-
-            store.write = slow_write_for_old_folder
-            instance._snapshot_store = store
-            old_scan = threading.Thread(target=instance._load_worker, args=(old_folder, stats_file, 1))
-            old_scan.start()
-            self.assertTrue(old_is_saving.wait(5))
-            instance._load_generation = 2  # a newer Load / refresh is requested during the old save
-            new_scan = threading.Thread(target=instance._load_worker, args=(new_folder, stats_file, 2))
-            new_scan.start()
-            old_scan.join(5)
-            new_scan.join(5)
-
-            snapshot = json.loads((root / "library_cache.json").read_text(encoding="utf-8"))
-            self.assertEqual(Path(snapshot["cache_dir"]), new_folder)
-
-            # Both scans queued their results for the main thread (the older
-            # one's delivery is dropped by _loaded's generation check).
-            # Progress and phase reports share the queue; only the
-            # deliveries are collected here.
-            queued = []
-            while not instance._load_results.empty():
-                item = instance._load_results.get_nowait()
-                if item[0] == "loaded":
-                    queued.append((item[0], item[2]["generation"]))
-            self.assertEqual(queued, [("loaded", 1), ("loaded", 2)])
-
-    def test_loaded_and_load_failed_ignore_stale_generation(self):
+    def test_load_data_and_sync_scores_reach_the_loader(self):
         instance = object.__new__(app.LibraryApp)
-        instance._load_generation = 5
-        instance.progress = Mock()
-        instance.status = Mock()
-        instance.refresh_table = Mock()
-        instance.load_button = Mock()
-        mock_mb = Mock()
+        instance._loader = Mock()
 
-        with patch.object(app, "messagebox", mock_mb):
-            # Stale _loaded call (generation 4 < 5)
-            instance._loaded([], 0, generation=4)
-            instance.progress.stop.assert_not_called()
-            instance.refresh_table.assert_not_called()
+        instance.load_data()
+        instance._loader.load_data.assert_called_once_with()
 
-            # Stale _load_failed call: a superseded scan must not stop the
-            # progress bar or re-enable the Load button the newer scan owns.
-            instance._load_failed("Some error", generation=4)
-            instance.progress.stop.assert_not_called()
-            instance.load_button.configure.assert_not_called()
-            mock_mb.showerror.assert_not_called()
-
-            # Current generation works
-            instance._load_failed("Real error", generation=5)
-            instance.progress.stop.assert_called_once()
-            instance.load_button.configure.assert_called_once_with(state="normal")
-            mock_mb.showerror.assert_called_once_with("Could not load library", "Real error")
-
-    def test_load_worker_queues_results_instead_of_calling_tk(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache"
-            cache_dir.mkdir()
-            (cache_dir / "test.cache").write_text("#SONGFILENAME:Songs/P/S/a.ogg;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n", encoding="utf-8")
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>", encoding="utf-8")
-
-            instance = object.__new__(app.LibraryApp)
-            instance._load_generation = 1
-            instance._snapshot_lock = threading.Lock()
-            instance._load_results = queue.Queue()
-            instance._snapshot_store = Mock()
-            instance._snapshot_store.write.return_value = "2026-01-01T00:00:00"
-            instance.root = Mock()
-
-            instance._load_worker(cache_dir, stats_file, generation=1)
-
-            # The worker thread hands results over through the queue; it never
-            # calls root.after (Tk) from its own thread. Progress reports
-            # share the queue, so the delivery is found by kind.
-            instance.root.after.assert_not_called()
-            queued = []
-            while not instance._load_results.empty():
-                queued.append(instance._load_results.get_nowait())
-            loaded = [item for item in queued if item[0] == "loaded"]
-            self.assertEqual(len(loaded), 1)
-            kind, args, kwargs = loaded[0]
-            self.assertEqual(args[1], 1)  # one cache file scanned
-            self.assertEqual(kwargs["generation"], 1)
-
-            # A malformed Stats.xml queues a failure the same way.
-            stats_file.write_text("<Stats><SongScores>", encoding="utf-8")
-            instance._load_worker(cache_dir, stats_file, generation=1)
-            kind, message, generation = instance._load_results.get_nowait()
-            self.assertEqual((kind, generation), ("failed", 1))
-            self.assertIn("malformed", message)
-
-    def test_load_worker_passes_scan_results_to_store_write_in_order(self):
-        # The worker calls store.write with eight positional arguments; the
-        # store's own field-order pin calls write directly, so this test pins
-        # the call site. skipped_blocks=3 and nested_song_tree=False are
-        # distinguishable only by identity (0 == False), so the bool is
-        # asserted with assertIs: a swap of the last two arguments fails.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache"
-            cache_dir.mkdir()
-            (cache_dir / "test.cache").write_text("#SONGFILENAME:Songs/P/S/a.ogg;\n#NOTEDATA:;\n#STEPSTYPE:dance-single;\n#DIFFICULTY:Hard;\n", encoding="utf-8")
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>", encoding="utf-8")
-
-            instance = object.__new__(app.LibraryApp)
-            instance._load_generation = 1
-            instance._snapshot_lock = threading.Lock()
-            instance._load_results = queue.Queue()
-            instance._snapshot_store = Mock()
-            instance._snapshot_store.write.return_value = "2026-01-01T00:00:00"
-            instance.root = Mock()
-
-            row = {"Title": "a"}
-            with patch.object(app, "parse_cache_file", return_value=([row], 3)):
-                instance._load_worker(cache_dir, stats_file, generation=1)
-
-            args = instance._snapshot_store.write.call_args.args
-            self.assertEqual(args[0], cache_dir)
-            self.assertEqual(args[1], stats_file)
-            self.assertEqual(args[2], [row])
-            self.assertEqual(args[3], 1)  # one cache file scanned
-            self.assertEqual(args[4], 0)  # skipped_files
-            self.assertEqual(args[5], 0)  # files_without_charts
-            self.assertIs(args[6], False)  # nested_song_tree
-            self.assertEqual(args[7], 3)  # skipped_blocks
-
-    def test_poll_load_results_delivers_queued_results_and_reschedules(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._load_results = queue.Queue()
-        instance._loaded = Mock()
-        instance._load_failed = Mock()
-        instance.root = Mock()
-        instance._load_results.put(("loaded", ([], 3), {"generation": 2}))
-        instance._load_results.put(("failed", "boom", 2))
-
-        instance._poll_load_results()
-
-        instance._loaded.assert_called_once_with([], 3, generation=2)
-        instance._load_failed.assert_called_once_with("boom", generation=2)
-        instance.root.after.assert_called_once()
-        delay, callback = instance.root.after.call_args[0]
-        self.assertEqual(delay, 75)
-        self.assertEqual(callback, instance._poll_load_results)
-
-    def test_load_data_disables_the_load_button_and_starts_the_worker(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache"
-            cache_dir.mkdir()
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>", encoding="utf-8")
-
-            instance = object.__new__(app.LibraryApp)
-            instance.cache_var = Mock()
-            instance.cache_var.get.return_value = str(cache_dir)
-            instance.stats_var = Mock()
-            instance.stats_var.get.return_value = str(stats_file)
-            instance._save_settings = Mock()
-            instance.progress = Mock()
-            instance.status = Mock()
-            instance.load_button = Mock()
-            instance._load_generation = 0
-
-            with patch.object(app.threading, "Thread") as mock_thread:
-                instance.load_data()
-
-            instance.load_button.configure.assert_called_once_with(state="disabled")
-            self.assertEqual(instance._load_generation, 1)
-            mock_thread.assert_called_once()
-            self.assertEqual(mock_thread.call_args.kwargs["args"][2], 1)
-
-
-class WorkerWiringTests(unittest.TestCase):
-    """load_data and sync_scores hand off to the app's own workers, with the
-    current generation captured on the main thread: the wiring the
-    LibraryLoader move must preserve."""
-
-    def test_load_data_hands_the_scan_to_the_apps_load_worker(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache"
-            cache_dir.mkdir()
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>", encoding="utf-8")
-
-            instance = object.__new__(app.LibraryApp)
-            instance.cache_var = Mock()
-            instance.cache_var.get.return_value = str(cache_dir)
-            instance.stats_var = Mock()
-            instance.stats_var.get.return_value = str(stats_file)
-            instance._save_settings = Mock()
-            instance.progress = Mock()
-            instance.status = Mock()
-            instance.load_button = Mock()
-            instance._load_generation = 0
-
-            with patch.object(app.threading, "Thread") as mock_thread:
-                instance.load_data()
-
-            self.assertEqual(instance._load_generation, 1)
-            mock_thread.assert_called_once()
-            target = mock_thread.call_args.kwargs["target"]
-            self.assertIs(target.__self__, instance)
-            self.assertIs(target.__func__,
-                          app.LibraryApp._load_worker)
-            self.assertEqual(mock_thread.call_args.kwargs["args"],
-                             (cache_dir, stats_file, 1))
-
-    def test_sync_scores_hands_the_sync_to_the_apps_sync_worker(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache"
-            cache_dir.mkdir()
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>", encoding="utf-8")
-
-            instance = object.__new__(app.LibraryApp)
-            instance._scan_in_flight = False
-            instance._sync_in_flight = False
-            instance._load_generation = 1
-            instance.rows = [{"Title": "Song"}]
-            instance.cache_var = Mock()
-            instance.cache_var.get.return_value = str(cache_dir)
-            instance.stats_var = Mock()
-            instance.stats_var.get.return_value = str(stats_file)
-            instance.progress = Mock()
-            instance.status = Mock()
-            instance._file_menu = Mock()
-
-            with patch.object(app.threading, "Thread") as mock_thread:
-                instance.sync_scores()
-
-            self.assertTrue(instance._sync_in_flight)
-            mock_thread.assert_called_once()
-            target = mock_thread.call_args.kwargs["target"]
-            self.assertIs(target.__self__, instance)
-            self.assertIs(target.__func__,
-                          app.LibraryApp._sync_scores_worker)
-            self.assertEqual(mock_thread.call_args.kwargs["args"],
-                             (cache_dir, stats_file, instance.rows, 1))
-
-
-class ScoresSyncTests(unittest.TestCase):
-    """The scores-only sync (issue #147): re-read Stats.xml, no cache re-parse."""
-
-    def _write_song(self, root):
-        cache_dir = root / "Cache"
-        cache_dir.mkdir()
-        (cache_dir / "song.cache").write_text(
-            "#TITLE:Song;\n"
-            "#SONGFILENAME:Songs/Pack/Song/audio.ogg;\n"
-            "#NOTEDATA:;\n"
-            "#STEPSTYPE:dance-single;\n"
-            "#DIFFICULTY:Hard;\n"
-            "#METER:10;\n",
-            encoding="utf-8")
-        stats_file = root / "Stats.xml"
-        stats_file.write_text(
-            "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
-            "<Steps StepsType='dance-single' Difficulty='Hard'>"
-            "<HighScoreList><NumTimesPlayed>7</NumTimesPlayed><LastPlayed>2026-02-01</LastPlayed>"
-            "<HighScore><PercentDP>0.95</PercentDP><Score>900000</Score><Grade>Tier01</Grade></HighScore>"
-            "</HighScoreList></Steps>"
-            "</Song></SongScores></Stats>",
-            encoding="utf-8")
-        return cache_dir, stats_file
-
-    def _fresh_stats(self, stats_file):
-        stats_file.write_text(
-            "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
-            "<Steps StepsType='dance-single' Difficulty='Hard'>"
-            "<HighScoreList><NumTimesPlayed>8</NumTimesPlayed><LastPlayed>2026-02-02</LastPlayed>"
-            "<HighScore><PercentDP>0.975</PercentDP><Score>975000</Score><Grade>Tier02</Grade></HighScore>"
-            "</HighScoreList></Steps>"
-            "</Song></SongScores></Stats>",
-            encoding="utf-8")
-
-    def _sync_instance(self, root, rows):
-        instance = object.__new__(app.LibraryApp)
-        instance._load_generation = 1
-        instance._snapshot_lock = threading.Lock()
-        instance._load_results = queue.Queue()
-        instance._snapshot_store = library_data.SnapshotStore(
-            root / "library_cache.json", app.HEADERS,
-            library_data.LIBRARY_CACHE_SCHEMA_VERSION)
-        instance.root = Mock()
-        instance.rows = rows
-        return instance
-
-    def test_sync_worker_merges_scores_saves_snapshot_and_delivers(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = self._write_song(root)
-            rows, _ = library_data.parse_cache_file(
-                cache_dir / "song.cache", library_data.stats_index(stats_file))
-            self.assertEqual(rows[0]["Score"], 900000)
-            self._fresh_stats(stats_file)
-            instance = self._sync_instance(root, rows)
-            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
-
-            # The rows carry the fresh scores, the snapshot on disk does too,
-            # and the delivery reports one changed chart.
-            self.assertEqual(rows[0]["Score"], 975000)
-            self.assertEqual(rows[0]["Best %"], 97.5)
-            snapshot = json.loads((root / "library_cache.json").read_text(encoding="utf-8"))
-            self.assertEqual(snapshot["rows"][0]["Score"], 975000)
-            queued = []
-            while not instance._load_results.empty():
-                queued.append(instance._load_results.get_nowait())
-            synced = [item for item in queued if item[0] == "scores_synced"]
-            self.assertEqual(len(synced), 1)
-            kind, args, kwargs = synced[0]
-            self.assertEqual(args[1], 1)  # one chart changed
-            self.assertEqual(kwargs["generation"], 1)
-            self.assertTrue(kwargs["refreshed_at"])
-
-    def test_sync_worker_superseded_does_not_save_or_deliver(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = self._write_song(root)
-            rows, _ = library_data.parse_cache_file(
-                cache_dir / "song.cache", library_data.stats_index(stats_file))
-            self._fresh_stats(stats_file)
-            instance = self._sync_instance(root, rows)
-            instance._load_generation = 2  # a newer Load / refresh exists
-            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
-
-            self.assertFalse((root / "library_cache.json").exists())
-            self.assertTrue(instance._load_results.empty())
-
-    def test_sync_worker_malformed_stats_fails_without_changes_or_save(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = self._write_song(root)
-            rows, _ = library_data.parse_cache_file(
-                cache_dir / "song.cache", library_data.stats_index(stats_file))
-            stats_file.write_text("<Stats><SongScores>", encoding="utf-8")
-            instance = self._sync_instance(root, rows)
-            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
-
-            self.assertEqual(rows[0]["Score"], 900000)  # unchanged
-            self.assertFalse((root / "library_cache.json").exists())
-            kind, message, generation = instance._load_results.get_nowait()
-            self.assertEqual((kind, generation), ("scores_sync_failed", 1))
-            self.assertIn("malformed", message)
-            self.assertTrue(instance._load_results.empty())
-
-    def test_scores_synced_handler_reports_count_and_refreshes_preserving_selection(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._load_generation = 1
-        instance.progress = Mock()
-        instance.status = Mock()
-        instance.refresh_table = Mock()
-        rows = [{"Title": "Song"}]
-        instance._scores_synced(rows, 2, refreshed_at="2026-02-02T10:00:00+00:00", generation=1)
-
-        self.assertIs(instance.rows, rows)
-        self.assertEqual(instance.last_refreshed_at, "2026-02-02T10:00:00+00:00")
-        status = instance.status.set.call_args.args[0]
-        self.assertIn("Scores synced · 2 charts updated", status)
-        instance.refresh_table.assert_called_once_with(preserve_selection=True)
-
-    def test_scores_synced_handler_reports_up_to_date_when_nothing_changed(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._load_generation = 1
-        instance.progress = Mock()
-        instance.status = Mock()
-        instance.refresh_table = Mock()
-        instance._scores_synced([], 0, refreshed_at="2026-02-02T10:00:00+00:00", generation=1)
-        status = instance.status.set.call_args.args[0]
-        self.assertIn("Scores are already up to date", status)
-        instance.refresh_table.assert_called_once_with(preserve_selection=True)
-
-    def test_scores_synced_handler_with_cache_error_keeps_old_refresh_stamp(self):
-        # A sync whose snapshot was skipped (Stats.xml changed mid-sync)
-        # still refreshes the table, but the stamp does not move, so the
-        # startup hint fires, and the status says the snapshot was not saved
-        # and to sync again for current scores.
-        instance = object.__new__(app.LibraryApp)
-        instance._load_generation = 1
-        instance.progress = Mock()
-        instance.status = Mock()
-        instance.status.get.return_value = "Scores synced · 1 chart updated."
-        instance.refresh_table = Mock()
-        instance.last_refreshed_at = "2026-01-01T00:00:00+00:00"
-        instance._scores_synced(
-            [{"Title": "Song"}], 1, refreshed_at="",
-            cache_error="Stats.xml changed during the sync. "
-            "Sync again for current scores.", generation=1)
-        self.assertEqual(instance.last_refreshed_at, "2026-01-01T00:00:00+00:00")
-        status = instance.status.set.call_args.args[0]
-        self.assertIn(
-            "Local snapshot not saved: Stats.xml changed during the sync", status)
-        self.assertIn("Sync again for current scores", status)
-        instance.refresh_table.assert_called_once_with(preserve_selection=True)
-
-    def test_scores_synced_handler_drops_stale_generation(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._load_generation = 5
-        instance.progress = Mock()
-        instance.status = Mock()
-        instance.refresh_table = Mock()
-        instance._scores_synced([], 1, generation=4)
-        instance.progress.stop.assert_not_called()
-        instance.status.set.assert_not_called()
-        instance.refresh_table.assert_not_called()
-
-    def test_sync_scores_refuses_while_a_scan_is_in_flight(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._scan_in_flight = True
-        instance.rows = [{"Title": "Song"}]
-        instance.status = Mock()
         instance.sync_scores()
-        instance.status.set.assert_called_once_with(
-            "A library load is in progress. Wait for it to finish, then sync scores.")
+        instance._loader.sync_scores.assert_called_once_with()
 
-    def test_sync_scores_refuses_with_no_library_loaded(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._scan_in_flight = False
-        instance.rows = []
-        instance.status = Mock()
-        instance.sync_scores()
-        instance.status.set.assert_called_once_with(
-            "No library loaded. Load / refresh first, then sync scores.")
 
-    def test_sync_scores_refuses_when_the_selected_paths_differ(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._scan_in_flight = False
-        instance.rows = [{"Title": "Song"}]
-        instance.status = Mock()
-        instance.loaded_source_paths = ("/old/cache", "/old/Stats.xml")
-        instance.cache_var = Mock()
-        instance.cache_var.get.return_value = "/new/cache"
-        instance.stats_var = Mock()
-        instance.stats_var.get.return_value = "/new/Stats.xml"
-        instance.sync_scores()
-        instance.status.set.assert_called_once_with(
-            "The selected data paths differ from the loaded library. Load / refresh first, then sync scores.")
-
-    def test_sync_scores_refuses_while_a_sync_is_in_flight(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._scan_in_flight = False
-        instance._sync_in_flight = True
-        instance.rows = [{"Title": "Song"}]
-        instance.status = Mock()
-        instance.sync_scores()
-        instance.status.set.assert_called_once_with(
-            "A scores sync is already in progress. Wait for it to finish, then sync again.")
-
-    def test_sync_scores_sets_the_flag_and_disables_the_menu(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = self._write_song(root)
-            instance = object.__new__(app.LibraryApp)
-            instance._scan_in_flight = False
-            instance._sync_in_flight = False
-            instance._load_generation = 1
-            instance.rows = [{"Title": "Song"}]
-            instance.cache_var = Mock()
-            instance.cache_var.get.return_value = str(cache_dir)
-            instance.stats_var = Mock()
-            instance.stats_var.get.return_value = str(stats_file)
-            instance.progress = Mock()
-            instance.status = Mock()
-            instance._file_menu = Mock()
-            with patch.object(app.threading, "Thread") as mock_thread:
-                instance.sync_scores()
-            self.assertTrue(instance._sync_in_flight)
-            instance._file_menu.entryconfigure.assert_called_once_with(
-                "Sync scores from Stats.xml", state="disabled")
-            mock_thread.assert_called_once()
-
-    def test_scores_synced_handler_clears_the_sync_flag_and_re_enables_the_menu(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._load_generation = 1
-        instance._sync_in_flight = True
-        instance.progress = Mock()
-        instance.status = Mock()
-        instance.refresh_table = Mock()
-        instance._file_menu = Mock()
-        instance._scores_synced([{"Title": "Song"}], 1, refreshed_at="2026-02-02T10:00:00+00:00", generation=1)
-        self.assertFalse(instance._sync_in_flight)
-        instance._file_menu.entryconfigure.assert_called_once_with(
-            "Sync scores from Stats.xml", state="normal")
-
-    def test_scores_sync_failed_handler_clears_the_sync_flag_and_re_enables_the_menu(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._load_generation = 1
-        instance._sync_in_flight = True
-        instance.progress = Mock()
-        instance.status = Mock()
-        instance._file_menu = Mock()
-        with patch.object(app, "messagebox"):
-            instance._scores_sync_failed("boom", generation=1)
-        self.assertFalse(instance._sync_in_flight)
-        instance._file_menu.entryconfigure.assert_called_once_with(
-            "Sync scores from Stats.xml", state="normal")
-
-    def test_stale_scores_synced_clears_the_flag_but_leaves_the_menu_to_the_scan(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._load_generation = 5
-        instance._sync_in_flight = True
-        instance.progress = Mock()
-        instance.status = Mock()
-        instance.refresh_table = Mock()
-        instance._file_menu = Mock()
-        instance._scores_synced([], 1, generation=4)
-        self.assertFalse(instance._sync_in_flight)
-        instance._file_menu.entryconfigure.assert_not_called()
-        instance.progress.stop.assert_not_called()
-        instance.status.set.assert_not_called()
-        instance.refresh_table.assert_not_called()
-
-    def test_sync_worker_unexpected_stats_error_fails_without_changes_or_save(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = self._write_song(root)
-            rows, _ = library_data.parse_cache_file(
-                cache_dir / "song.cache", library_data.stats_index(stats_file))
-            # A bogus encoding in the XML declaration raises LookupError,
-            # which is neither ParseError nor OSError.
-            stats_file.write_bytes(b'<?xml version="1.0" encoding="not-a-real-codec"?><Stats/>')
-            instance = self._sync_instance(root, rows)
-            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
-
-            self.assertEqual(rows[0]["Score"], 900000)  # unchanged
-            self.assertFalse((root / "library_cache.json").exists())
-            kind, message, generation = instance._load_results.get_nowait()
-            self.assertEqual((kind, generation), ("scores_sync_failed", 1))
-            self.assertIn("Could not sync scores", message)
-            self.assertTrue(instance._load_results.empty())
-
-    def test_sync_worker_missing_stats_file_fails_without_changes_or_save(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = self._write_song(root)
-            rows, _ = library_data.parse_cache_file(
-                cache_dir / "song.cache", library_data.stats_index(stats_file))
-            missing = root / "Stats-gone.xml"
-            instance = self._sync_instance(root, rows)
-            instance._sync_scores_worker(cache_dir, missing, rows, generation=1)
-
-            self.assertEqual(rows[0]["Score"], 900000)  # unchanged
-            self.assertFalse((root / "library_cache.json").exists())
-            kind, message, generation = instance._load_results.get_nowait()
-            self.assertEqual((kind, generation), ("scores_sync_failed", 1))
-            self.assertIn("Could not read", message)
-            self.assertTrue(instance._load_results.empty())
-
-    def test_sync_worker_empty_stats_fails_without_blanking_or_save(self):
-        # A Stats.xml with no scores at all would blank every score and
-        # report success. The sync refuses it instead, so nothing changes.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = self._write_song(root)
-            rows, _ = library_data.parse_cache_file(
-                cache_dir / "song.cache", library_data.stats_index(stats_file))
-            self.assertEqual(rows[0]["Score"], 900000)
-            stats_file.write_text("<Stats/>", encoding="utf-8")
-            instance = self._sync_instance(root, rows)
-            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
-
-            self.assertEqual(rows[0]["Score"], 900000)  # unchanged, not blanked
-            self.assertFalse((root / "library_cache.json").exists())
-            kind, message, generation = instance._load_results.get_nowait()
-            self.assertEqual((kind, generation), ("scores_sync_failed", 1))
-            self.assertIn("contains no scores", message)
-            self.assertTrue(instance._load_results.empty())
-
-    def test_sync_worker_empty_song_scores_fails_without_blanking_or_save(self):
-        # An empty <SongScores> element is the same shape: no scores.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = self._write_song(root)
-            rows, _ = library_data.parse_cache_file(
-                cache_dir / "song.cache", library_data.stats_index(stats_file))
-            stats_file.write_text("<Stats><SongScores/></Stats>", encoding="utf-8")
-            instance = self._sync_instance(root, rows)
-            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
-
-            self.assertEqual(rows[0]["Score"], 900000)  # unchanged, not blanked
-            self.assertFalse((root / "library_cache.json").exists())
-            kind, message, generation = instance._load_results.get_nowait()
-            self.assertEqual((kind, generation), ("scores_sync_failed", 1))
-            self.assertIn("contains no scores", message)
-            self.assertTrue(instance._load_results.empty())
-
-    def test_sync_worker_empty_high_score_list_fails_without_blanking_or_save(self):
-        # A HighScoreList with no HighScore entries still lands in the
-        # index (plays/last_played only), so the refusal must look for
-        # actual score records, not just a non-empty index.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = self._write_song(root)
-            rows, _ = library_data.parse_cache_file(
-                cache_dir / "song.cache", library_data.stats_index(stats_file))
-            self.assertEqual(rows[0]["Score"], 900000)
-            stats_file.write_text(
-                "<Stats><SongScores><Song Dir='Songs/Pack/Song'>"
-                "<Steps StepsType='dance-single' Difficulty='Challenge'>"
-                "<HighScoreList><NumTimesPlayed>0</NumTimesPlayed>"
-                "<LastPlayed>2026-01-01</LastPlayed>"
-                "</HighScoreList></Steps>"
-                "</Song></SongScores></Stats>",
-                encoding="utf-8",
-            )
-            instance = self._sync_instance(root, rows)
-            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
-
-            self.assertEqual(rows[0]["Score"], 900000)  # unchanged, not blanked
-            self.assertFalse((root / "library_cache.json").exists())
-            kind, message, generation = instance._load_results.get_nowait()
-            self.assertEqual((kind, generation), ("scores_sync_failed", 1))
-            self.assertIn("contains no scores", message)
-            self.assertTrue(instance._load_results.empty())
-
-    def test_sync_worker_stats_with_no_matching_scores_fails_without_blanking_or_save(self):
-        # A Stats.xml with real scores, but none for the songs in this
-        # library (for example a profile from another install), would
-        # blank every score and report success. The sync refuses it
-        # instead, so nothing changes.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = self._write_song(root)
-            rows, _ = library_data.parse_cache_file(
-                cache_dir / "song.cache", library_data.stats_index(stats_file))
-            self.assertEqual(rows[0]["Score"], 900000)
-            stats_file.write_text(
-                "<Stats><SongScores><Song Dir='Songs/OtherPack/OtherSong'>"
-                "<Steps StepsType='dance-single' Difficulty='Challenge'>"
-                "<HighScoreList><NumTimesPlayed>5</NumTimesPlayed>"
-                "<LastPlayed>2026-02-01</LastPlayed>"
-                "<HighScore><PercentDP>0.95</PercentDP><Score>950000</Score></HighScore>"
-                "</HighScoreList></Steps>"
-                "</Song></SongScores></Stats>",
-                encoding="utf-8",
-            )
-            instance = self._sync_instance(root, rows)
-            instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
-
-            self.assertEqual(rows[0]["Score"], 900000)  # unchanged, not blanked
-            self.assertFalse((root / "library_cache.json").exists())
-            kind, message, generation = instance._load_results.get_nowait()
-            self.assertEqual((kind, generation), ("scores_sync_failed", 1))
-            self.assertIn("no scores for the songs in this library", message)
-            self.assertTrue(instance._load_results.empty())
-
-    def test_sync_worker_stats_changed_mid_sync_skips_snapshot_but_keeps_rows(self):
-        # Stats.xml rewritten between the worker's read and the snapshot
-        # write: the merged scores are stale, so the snapshot is not
-        # saved (its stamp stays put, so the startup hint fires), but the
-        # rows in memory still carry the scores from the read.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = self._write_song(root)
-            rows, _ = library_data.parse_cache_file(
-                cache_dir / "song.cache", library_data.stats_index(stats_file))
-            self.assertEqual(rows[0]["Score"], 900000)
-
-            real_stats_index = library_data.stats_index
-
-            def stats_index_then_rewrite(stats_path):
-                scores = real_stats_index(stats_path)
-                self._fresh_stats(stats_path)
-                # Force a distinct mtime: the rewrite alone might land in
-                # the same filesystem timestamp.
-                new_mtime = Path(stats_path).stat().st_mtime + 10
-                os.utime(stats_path, (new_mtime, new_mtime))
-                return scores
-
-            instance = self._sync_instance(root, rows)
-            with patch.object(app, "stats_index", side_effect=stats_index_then_rewrite):
-                instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
-
-            self.assertEqual(rows[0]["Score"], 900000)  # the pre-change score
-            self.assertFalse((root / "library_cache.json").exists())
-            kind, args, kwargs = instance._load_results.get_nowait()
-            self.assertEqual(kind, "scores_synced")
-            self.assertEqual(args[1], 0)  # nothing changed: the read saw the old scores
-            self.assertEqual(kwargs["refreshed_at"], "")
-            self.assertIn("changed during the sync", kwargs["cache_error"])
-            self.assertTrue(instance._load_results.empty())
-
-    def test_sync_worker_stats_vanished_mid_sync_skips_snapshot_but_keeps_rows(self):
-        # Stats.xml deleted between the worker's read and the snapshot
-        # write: the re-check stat fails, so the snapshot is not saved
-        # (its stamp stays put, so the startup hint fires), but the rows
-        # in memory still carry the scores from the read.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = self._write_song(root)
-            rows, _ = library_data.parse_cache_file(
-                cache_dir / "song.cache", library_data.stats_index(stats_file))
-            self.assertEqual(rows[0]["Score"], 900000)
-
-            real_stats_index = library_data.stats_index
-
-            def stats_index_then_delete(stats_path):
-                scores = real_stats_index(stats_path)
-                Path(stats_path).unlink()
-                return scores
-
-            instance = self._sync_instance(root, rows)
-            with patch.object(app, "stats_index", side_effect=stats_index_then_delete):
-                instance._sync_scores_worker(cache_dir, stats_file, rows, generation=1)
-
-            self.assertEqual(rows[0]["Score"], 900000)  # the read score
-            self.assertFalse((root / "library_cache.json").exists())
-            kind, args, kwargs = instance._load_results.get_nowait()
-            self.assertEqual(kind, "scores_synced")
-            self.assertEqual(args[1], 0)  # nothing changed: the read saw the old scores
-            self.assertEqual(kwargs["refreshed_at"], "")
-            self.assertIn("changed during the sync", kwargs["cache_error"])
-            self.assertTrue(instance._load_results.empty())
-
-    def test_report_newer_stats_file_hints_when_stats_is_newer(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>", encoding="utf-8")
-            instance = object.__new__(app.LibraryApp)
-            instance.last_refreshed_at = "2026-01-01T00:00:00+00:00"
-            instance.stats_var = Mock()
-            instance.stats_var.get.return_value = str(stats_file)
-            instance.status = Mock()
-            instance.status.get.return_value = "Showing saved library snapshot."
-            instance._report_newer_stats_file()
-            status = instance.status.set.call_args.args[0]
-            self.assertIn("Stats.xml is newer than the saved library", status)
-            self.assertIn("Sync scores from Stats.xml", status)
-
-    def test_report_newer_stats_file_stays_quiet_when_stats_is_older(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>", encoding="utf-8")
-            instance = object.__new__(app.LibraryApp)
-            instance.last_refreshed_at = "2999-01-01T00:00:00+00:00"
-            instance.stats_var = Mock()
-            instance.stats_var.get.return_value = str(stats_file)
-            instance.status = Mock()
-            instance._report_newer_stats_file()
-            instance.status.set.assert_not_called()
+class SyncMenuStateTests(unittest.TestCase):
+    """The app-side _set_sync_menu_state (it stays in the shell: it touches
+    the File menu). The engine half of the sync lives in the loader now."""
 
     def test_set_sync_menu_state_configures_the_entry(self):
         instance = object.__new__(app.LibraryApp)
@@ -3095,155 +1735,6 @@ class ScoresSyncTests(unittest.TestCase):
         instance._file_menu.entryconfigure.assert_called_once_with(
             "Sync scores from Stats.xml", state="disabled")
 
-    def test_load_data_marks_a_scan_in_flight_and_disables_the_sync_entry(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache"
-            cache_dir.mkdir()
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>", encoding="utf-8")
-            instance = object.__new__(app.LibraryApp)
-            instance.cache_var = Mock()
-            instance.cache_var.get.return_value = str(cache_dir)
-            instance.stats_var = Mock()
-            instance.stats_var.get.return_value = str(stats_file)
-            instance._save_settings = Mock()
-            instance.progress = Mock()
-            instance.status = Mock()
-            instance.load_button = Mock()
-            instance._file_menu = Mock()
-            instance._load_generation = 0
-            instance._scan_in_flight = False
-            with patch.object(app.threading, "Thread") as mock_thread:
-                instance.load_data()
-            self.assertTrue(instance._scan_in_flight)
-            instance._file_menu.entryconfigure.assert_called_once_with(
-                "Sync scores from Stats.xml", state="disabled")
-            mock_thread.assert_called_once()
-
-    def test_load_failed_clears_the_scan_flag_and_re_enables_the_sync_entry(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._load_generation = 1
-        instance.load_button = Mock()
-        instance._file_menu = Mock()
-        instance.progress = Mock()
-        instance.status = Mock()
-        instance._scan_in_flight = True
-        with patch.object(app, "messagebox"):
-            instance._load_failed("Some error", generation=1)
-        self.assertFalse(instance._scan_in_flight)
-        instance._file_menu.entryconfigure.assert_called_once_with(
-            "Sync scores from Stats.xml", state="normal")
-
-    def test_poll_load_results_delivers_scores_synced_and_failed(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._load_results = queue.Queue()
-        instance._scores_synced = Mock()
-        instance._scores_sync_failed = Mock()
-        instance.root = Mock()
-        instance._load_results.put(("scores_synced", ([], 2), {"refreshed_at": "2026-02-02T10:00:00+00:00", "generation": 1}))
-        instance._load_results.put(("scores_sync_failed", "boom", 1))
-        instance._poll_load_results()
-        instance._scores_synced.assert_called_once_with(
-            [], 2, refreshed_at="2026-02-02T10:00:00+00:00", generation=1)
-        instance._scores_sync_failed.assert_called_once_with("boom", generation=1)
-        instance.root.after.assert_called_once()
-
-
-class LoadProgressTests(unittest.TestCase):
-    """The scan's progress readout: determinate bar, files done, ETA."""
-
-    def make_progress_app(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._load_generation = 1
-        instance._load_started_at = None
-        instance.status = _StubStatus()
-        instance.progress = MagicMock()
-        instance.progress.__getitem__.return_value = "indeterminate"
-        return instance
-
-    def test_first_progress_switches_the_bar_to_determinate_and_counts_files(self):
-        instance = self.make_progress_app()
-
-        instance._show_load_progress(0, 7000, 1)
-
-        instance.progress.stop.assert_called_once()
-        instance.progress.configure.assert_called_once_with(
-            mode="determinate", maximum=7000, value=0)
-        instance.progress.__setitem__.assert_called_once_with("value", 0)
-        self.assertEqual(instance.status.get(), "Reading chart cache… 0 / 7,000 files")
-
-    def test_later_progress_does_not_reconfigure_the_bar(self):
-        instance = self.make_progress_app()
-        instance.progress.__getitem__.return_value = "determinate"
-
-        instance._show_load_progress(25, 7000, 1)
-
-        instance.progress.stop.assert_not_called()
-        instance.progress.configure.assert_not_called()
-        instance.progress.__setitem__.assert_called_once_with("value", 25)
-        self.assertEqual(instance.status.get(), "Reading chart cache… 25 / 7,000 files")
-
-    def test_eta_appears_once_fifty_files_are_done(self):
-        instance = self.make_progress_app()
-        instance._load_started_at = time.monotonic() - 10
-
-        instance._show_load_progress(100, 1000, 1)
-
-        # Ten seconds for 100 of 1,000 files: 90 seconds left.
-        self.assertEqual(
-            instance.status.get(),
-            "Reading chart cache… 100 / 1,000 files · about 90 s left")
-
-    def test_no_eta_before_fifty_files_or_at_the_total(self):
-        instance = self.make_progress_app()
-        instance._load_started_at = time.monotonic() - 10
-
-        instance._show_load_progress(25, 1000, 1)
-        self.assertNotIn("s left", instance.status.get())
-
-        instance._show_load_progress(1000, 1000, 1)
-        self.assertNotIn("s left", instance.status.get())
-
-    def test_stale_progress_and_phase_are_ignored(self):
-        instance = self.make_progress_app()
-        instance._load_generation = 2
-
-        instance._show_load_progress(25, 100, 1)
-        instance._show_load_phase("Saving snapshot…", 1)
-
-        instance.progress.stop.assert_not_called()
-        instance.progress.configure.assert_not_called()
-        self.assertEqual(instance.status.get(), "")
-
-    def test_phase_sets_the_status_line(self):
-        instance = self.make_progress_app()
-
-        instance._show_load_phase("Saving snapshot…", 1)
-
-        self.assertEqual(instance.status.get(), "Saving snapshot…")
-
-    def test_poll_load_results_routes_progress_and_phase(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._load_results = queue.Queue()
-        instance._show_load_progress = Mock()
-        instance._show_load_phase = Mock()
-        instance._loaded = Mock()
-        instance._load_failed = Mock()
-        instance.root = Mock()
-        instance._load_results.put(("progress", 25, 100, 1))
-        instance._load_results.put(("phase", "Saving snapshot…", 1))
-
-        instance._poll_load_results()
-
-        instance._show_load_progress.assert_called_once_with(25, 100, 1)
-        instance._show_load_phase.assert_called_once_with("Saving snapshot…", 1)
-        instance._loaded.assert_not_called()
-        instance._load_failed.assert_not_called()
-        instance.root.after.assert_called_once()
-        delay, callback = instance.root.after.call_args[0]
-        self.assertEqual(delay, 75)
-        self.assertEqual(callback, instance._poll_load_results)
 
 
 class LiveLoadProgressTests(unittest.TestCase):
@@ -3290,10 +1781,10 @@ class LiveLoadProgressTests(unittest.TestCase):
 
         application.load_data()
         deadline = time.monotonic() + 15
-        while len(application.rows) == 0 and time.monotonic() < deadline:
+        while len(application._loader.rows) == 0 and time.monotonic() < deadline:
             root.update()
             time.sleep(0.02)
-        self.assertEqual(len(application.rows), 120)  # 60 files, 2 charts each
+        self.assertEqual(len(application._loader.rows), 120)  # 60 files, 2 charts each
         # The initial report (0 of 60) and the first loop report (25 of 60)
         # pin the two different progress puts in the worker.
         self.assertIn("Reading chart cache… 0 / 60 files", seen)
@@ -3434,42 +1925,6 @@ class VersionStringTests(unittest.TestCase):
 
 
 class PerformanceAndExportTests(unittest.TestCase):
-    def test_loaded_batches_filter_changes_and_refreshes_once(self):
-        instance = object.__new__(app.LibraryApp)
-        instance.load_button = Mock()
-        instance.progress = Mock()
-        instance.status = Mock()
-        instance.refresh_table = Mock()
-        instance.pack_filter = Mock()
-        instance.type_filter = Mock()
-        instance.diff_filter = Mock()
-        instance.pack_var = Mock()
-        instance.type_var = Mock()
-        instance.diff_var = Mock()
-        instance._batched_filter_changes = app.LibraryApp._batched_filter_changes.__get__(instance)
-        instance._batching_filter_changes = False
-        instance.course_builder = None  # declared in __init__ since the split; this fake predates it
-
-        # When setting diff_var/pack_var/type_var, Tk would run traces. Simulate that write traces call _refresh_unless_batching:
-        instance._refresh_unless_batching = app.LibraryApp._refresh_unless_batching.__get__(instance)
-        instance.diff_var.set.side_effect = lambda *args: instance._refresh_unless_batching()
-        instance.pack_var.set.side_effect = lambda *args: instance._refresh_unless_batching()
-        instance.type_var.set.side_effect = lambda *args: instance._refresh_unless_batching()
-
-        rows = [
-            {"Pack": "Pack1", "Type": "dance-single", "Difficulty": "Hard", "Title": "Song1"},
-            {"Pack": "Pack2", "Type": "dance-single", "Difficulty": "Challenge", "Title": "Song2"},
-        ]
-
-        instance._loaded(rows, len(rows), from_cache=True, refreshed_at="2026-01-01T00:00:00")
-
-        instance.load_button.configure.assert_called_once_with(state="normal")
-        # Must refresh table exactly once despite setting pack_var, type_var, and diff_var
-        instance.refresh_table.assert_called_once()
-        instance.pack_var.set.assert_called_with("All packs")
-        instance.type_var.set.assert_called_with("All types")
-        instance.diff_var.set.assert_called_with("All difficulties")
-
     def test_save_settings_skips_disk_write_when_unchanged(self):
         with tempfile.TemporaryDirectory() as directory:
             settings_path = Path(directory) / "settings.json"
@@ -3583,7 +2038,7 @@ class PerformanceAndExportTests(unittest.TestCase):
 
     def test_export_csv_handles_unwritable_file_error(self):
         instance = object.__new__(app.LibraryApp)
-        instance.rows = [{"Title": "Test Song", "Artist": "Artist"}]
+        instance._loader = Mock(rows=[{"Title": "Test Song", "Artist": "Artist"}])
         instance.status = Mock()
 
         mock_filedialog = Mock(asksaveasfilename=Mock(return_value="/unwritable/path/library.csv"))
@@ -3603,7 +2058,8 @@ class PerformanceAndExportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             out_file = Path(directory) / "export.csv"
             instance = object.__new__(app.LibraryApp)
-            instance.rows = [{"Title": "My Song", "Pack": "My Pack", "Subtitle": "(Sunset Mix)"}]
+            instance._loader = Mock(rows=[{"Title": "My Song", "Pack": "My Pack",
+                                          "Subtitle": "(Sunset Mix)"}])
             instance.status = Mock()
 
             mock_filedialog = Mock(asksaveasfilename=Mock(return_value=str(out_file)))
