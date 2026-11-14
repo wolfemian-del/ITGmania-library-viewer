@@ -35,9 +35,9 @@ class LibraryFilter:
     root: for after() scheduling of the search debounce.
 
     The filter holds the rows it filters (set via set_rows(rows)). It
-    exposes set_rows(rows), filter_rows(ignore_metric=None), search_hint(),
-    batch(), apply_chart_filter, focus_search, clear_search, and
-    subscribe(callback) — the callback is invoked when something changed,
+    exposes set_rows(rows), set_choices(rows), filter_rows(ignore_metric=None),
+    search_hint(), batch(), apply_chart_filter, focus_search, clear_search,
+    and subscribe(callback) — the callback is invoked when something changed,
     so the table refreshes. The filter installs the variable traces
     itself: a dropdown or scored pick refreshes at once, a search
     keystroke refreshes after a short pause (the debounce).
@@ -83,7 +83,8 @@ class LibraryFilter:
         A choice that is no longer in the library falls back to its "All …"
         value; one that is still there is kept. Called inside batch() by
         the app's on_library_changed, so the table refreshes exactly once
-        for the whole reset.
+        for the whole reset. set_choices does not batch itself: outside a
+        batch each stale pick refreshes at once.
         """
         for combo, var, label, key in (
                 (self.pack_filter, self.pack_var, "All packs", "Pack"),
@@ -153,7 +154,9 @@ class LibraryFilter:
         Each filter variable refreshes the table by itself when it changes (the search box after a
         short delay), so one chart click that sets two of them would rebuild the table and the chart
         several times. Inside this block those automatic refreshes are skipped, and one refresh runs
-        when the block ends.
+        when the block ends. The flag is on/off, not a depth count: a batch
+        started inside another refreshes when the inner block ends, so
+        nested batches refresh more than once.
         """
         self._batching_filter_changes = True
         try:

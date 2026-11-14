@@ -932,6 +932,58 @@ class ScoresSyncTests(unittest.TestCase):
             self.assertEqual(kwargs["generation"], 1)
             self.assertTrue(kwargs["refreshed_at"])
 
+    def test_sync_keeps_the_filter_on_the_loaders_rows(self):
+        """Claude, PR #167 review, finding 1 (option A): the sync path
+        relies on the filter and the loader holding the same rows list
+        (Resolution 3). A real merge_scores plus the real
+        _on_library_changed(rows, True) must leave the filter's rows
+        identical to the loader's, and the scored-only filter must see
+        the chart the sync just scored."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = self._write_song(root)
+            # No scores yet: the chart parses unscored.
+            stats_file.write_text("<Stats/>", encoding="utf-8")
+            rows, _ = library_data.parse_cache_file(
+                cache_dir / "song.cache",
+                library_data.stats_index(stats_file))
+            self.assertEqual(rows[0]["Grade"], "")
+            self._fresh_stats(stats_file)
+            # A bare app with a real filter, wired to a loader holding
+            # the same rows — the load path's set_rows put them there.
+            instance = LoadDeliversRowsTests.make_instance()
+            instance.load_button = Mock()
+            instance.progress = Mock()
+            instance.pack_filter = Mock()
+            instance.type_filter = Mock()
+            instance.diff_filter = Mock()
+            instance.search_entry = Mock()
+            instance.status = Mock()
+            instance.course_builder = None
+            instance.tree.selection.return_value = []
+            instance._filter = app.LibraryFilter(
+                instance.search_var, instance.pack_var, instance.type_var,
+                instance.diff_var, instance.scored_var,
+                instance.search_entry, instance.pack_filter,
+                instance.type_filter, instance.diff_filter, instance.root)
+            instance._filter.set_rows(rows)
+            instance._filter.subscribe(instance.refresh_table)
+            loaded = _make_wired_loader(instance)
+            loaded.rows = rows
+            # Scored-only shows nothing before the sync: the chart has
+            # no grade yet.
+            instance.scored_var.set(True)
+            self.assertEqual(instance._filter.filter_rows(), [])
+            # The real merge, then the real sync branch of the handoff.
+            changed = library_data.merge_scores(
+                rows, library_data.stats_index(stats_file))
+            self.assertEqual(changed, 1)
+            instance._on_library_changed(rows, True)
+            # The filter still holds the loader's list, and the
+            # scored-only filter now sees the chart the sync scored.
+            self.assertIs(instance._filter._rows, loaded.rows)
+            self.assertEqual(instance._filter.filter_rows(), rows)
+
     def test_sync_worker_superseded_does_not_save_or_deliver(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1759,16 +1811,22 @@ class LoadDeliversRowsTests(unittest.TestCase):
         instance._filter.subscribe(instance.refresh_table)
         loaded = _make_wired_loader(instance)
 
+        # Deliver fresh copies, not the list the setup seeded: only a real
+        # set_rows in the load path puts these rows in the filter (GLM,
+        # PR #167 review). The identity assertion below is the pin — the
+        # titles and counts are the same either way.
+        delivered = [dict(row) for row in instance.rows]
         with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
-            loaded._loaded(instance.rows, 2)
+            loaded._loaded(delivered, 2)
 
+        self.assertIs(instance._filter._rows, delivered)
         self.assertEqual(instance.tree.insert.call_count, 2)
         title_index = list(app.HEADERS).index("Title")
         inserted = [kwargs["values"][title_index]
                     for _args, kwargs in instance.tree.insert.call_args_list]
         self.assertEqual(inserted, ["Song A", "Song B"])
         instance.distribution_panel.show_rows.assert_called_once_with(
-            instance.rows)
+            delivered)
         instance.count_label.set.assert_called_once_with(
             "2 charts shown · 2 total")
 

@@ -186,6 +186,9 @@ class LibraryApp:
         self.status = None
         self.search_entry = None
         self._filter = None  # the filter pipeline, built in _build once the search bar exists
+        # Defensive only: the loader is built below, before the filter's
+        # traces are installed, so this can never be read while None.
+        self._loader = None  # the load/sync engine, built below in __init__
         self.pack_filter = None
         self.type_filter = None
         self.diff_filter = None
@@ -750,9 +753,11 @@ class LibraryApp:
         changed.
         """
         if preserve_selection:
-            # A sync re-scores the rows object the filter already holds
-            # (merge_scores works in place), so there is nothing to
-            # re-set — only the refresh, keeping the selection.
+            # Invariant: the filter and the loader share one rows list.
+            # A sync re-scores that list in place (merge_scores never
+            # replaces it), so there is nothing to re-set — only the
+            # refresh, keeping the selection. If the sync ever built a
+            # fresh list, the filter would keep showing the old scores.
             self.refresh_table(preserve_selection=True)
             return
         with self._filter.batch():

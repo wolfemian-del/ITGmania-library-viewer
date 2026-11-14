@@ -1590,6 +1590,46 @@ class LiveFilterPersistenceTests(unittest.TestCase):
         self.assertTrue(relaunched.status.get().startswith("Showing saved library snapshot"))
 
 
+class LiveFilterWiringTests(unittest.TestCase):
+    """The Step 5 wiring guard, live (GLM, PR #167 review): the headless
+    guard builds the filter from its own variables, so only a real app
+    proves _build wired the filter to the app's variables and the panel
+    to the filter."""
+
+    def test_the_filter_and_panel_are_wired_to_the_apps_variables(self):
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                settings_path = Path(directory) / "settings.json"
+                settings_path.write_text("{}", encoding="utf-8")
+                with patch.object(app.LibraryApp, "_settings_file_path",
+                                 staticmethod(lambda: settings_path)):
+                    application = app.LibraryApp(root)
+                self.assertIs(application._filter.search_var,
+                              application.search_var)
+                self.assertIs(application._filter.pack_var,
+                              application.pack_var)
+                self.assertIs(application._filter.type_var,
+                              application.type_var)
+                self.assertIs(application._filter.diff_var,
+                              application.diff_var)
+                self.assertIs(application._filter.scored_var,
+                              application.scored_var)
+                self.assertIs(
+                    application.distribution_panel._apply_chart_filter.__self__,
+                    application._filter)
+                self.assertIs(
+                    application.distribution_panel._filter_rows.__self__,
+                    application._filter)
+        finally:
+            root.destroy()
+
+
 class LiveSelectAllTests(unittest.TestCase):
     """Ctrl+A in the results table in a real window (issue #36): the key
     event on the focused tree selects every displayed row, and the

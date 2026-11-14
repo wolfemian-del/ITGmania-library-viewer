@@ -32,6 +32,28 @@ class _ValueVar:
         return f"trace-{len(self._traces)}"
 
 
+class _FakeRoot:
+    """A root.after stand-in that tracks pending callbacks: after() records
+    them, after_cancel() drops them, and fire_pending() runs what is left."""
+
+    def __init__(self):
+        self._pending = {}
+        self._next_id = 0
+
+    def after(self, ms, callback):
+        self._next_id += 1
+        self._pending[self._next_id] = callback
+        return self._next_id
+
+    def after_cancel(self, after_id):
+        self._pending.pop(after_id, None)
+
+    def fire_pending(self):
+        pending, self._pending = self._pending, {}
+        for callback in pending.values():
+            callback()
+
+
 def make_filter(search="", pack="All packs", type_="All types",
                 difficulty="All difficulties", scored=False, rows=()):
     """A LibraryFilter on _ValueVars, holding the given rows, with a Mock
@@ -108,7 +130,7 @@ class FilterWiringGuardTests(unittest.TestCase):
     filter, and a batched change refreshes exactly once."""
 
     @staticmethod
-    def make_app_and_filter():
+    def make_app_and_filter(root=None):
         """A bare app holding the same five variables the filter was
         built from, the way __init__ shares them with _build."""
         instance = object.__new__(app.LibraryApp)
@@ -121,7 +143,7 @@ class FilterWiringGuardTests(unittest.TestCase):
         instance.pack_filter = Mock()
         instance.type_filter = Mock()
         instance.diff_filter = Mock()
-        instance.root = Mock()
+        instance.root = root if root is not None else Mock()
         instance.refresh_table = Mock()
         instance._filter = LibraryFilter(
             instance.search_var, instance.pack_var, instance.type_var,
@@ -200,6 +222,27 @@ class FilterWiringGuardTests(unittest.TestCase):
             instance.pack_var.set("Pack1")
             instance.type_var.set("dance-single")
             instance.diff_var.set("Hard")
+        instance.refresh_table.assert_called_once_with()
+
+    def test_a_pending_search_debounce_is_cancelled_by_a_batch(self):
+        """ChatGPT-6, PR #167 review: a search debounce pending when a
+        batch runs must be cancelled by the batch exit, so the old
+        callback cannot fire a second refresh."""
+        root = _FakeRoot()
+        instance = self.make_app_and_filter(root=root)
+        filt = instance._filter
+        filt.set_rows(list(ROWS))
+        instance.refresh_table.reset_mock()
+        # A search keystroke arms the debounce; nothing refreshes yet.
+        instance.search_var.set("song")
+        self.assertEqual(len(root._pending), 1)
+        instance.refresh_table.assert_not_called()
+        # A batched change cancels the pending debounce and refreshes once.
+        with filt.batch():
+            instance.pack_var.set("Pack1")
+        instance.refresh_table.assert_called_once_with()
+        # The old callback is gone: firing what is left refreshes nothing.
+        root.fire_pending()
         instance.refresh_table.assert_called_once_with()
 
 
