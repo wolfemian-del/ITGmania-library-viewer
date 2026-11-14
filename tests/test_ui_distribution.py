@@ -130,7 +130,7 @@ class DistributionUITests(unittest.TestCase):
                 {"Meter": 11, "Difficulty": "Challenge", "bpm_max": 180, "Pack": "Test", "Type": "dance-single", "Grade": "Tier06"},
             ]
             application._filter.set_rows(application._loader.rows)
-            application.refresh_table()
+            application._table.refresh_table()
 
             # Test switching metric
             application.distribution_metric.set("Difficulty")
@@ -1032,7 +1032,7 @@ class LiveDistributionStartupTests(LiveWindowCase):
         self.assertLess(slaves.index(panel.dist_panel), slaves.index(application.table_frame))
         # The chart canvas is created lazily on the first update while visible.
         if dp._load_matplotlib():
-            application.refresh_table()
+            application._table.refresh_table()
             self.assertIsNotNone(panel.dist_canvas)
             self.assertIsNotNone(panel.dist_fig)
 
@@ -1078,7 +1078,7 @@ class LiveDistributionStartupTests(LiveWindowCase):
             {"Meter": 11, "Difficulty": "Challenge", "bpm_max": 180.0, "Pack": "Test", "Type": "dance-single", "Grade": ""},
         ]
         application._filter.set_rows(application._loader.rows)
-        application.refresh_table()
+        application._table.refresh_table()
         panel.dist_canvas.draw()
         bar = next(b for b in panel._current_dist_bars if b.label == "11")
         x_px, y_px = panel.dist_ax.transData.transform((0.5, (bar.y_min + bar.y_max) / 2))
@@ -1108,9 +1108,13 @@ class LiveDistributionWiringTests(LiveWindowCase):
 
     def test_refresh_reaches_show_rows(self):
         application = self.make_live_app({"show_distribution": True})
-        panel = application.distribution_panel
-        with patch.object(panel, "show_rows", wraps=panel.show_rows) as spy:
-            application.refresh_table()
+        # The table captures the panel's show_rows at construction (proposal
+        # 0009 §4: show_rows is a constructor input), so the spy wraps the
+        # table's captured callable — patching panel.show_rows afterwards
+        # would never be called.
+        with patch.object(application._table, "_show_rows",
+                          wraps=application._table._show_rows) as spy:
+            application._table.refresh_table()
         spy.assert_called()
 
     def test_all_seven_entry_points_land_on_the_component(self):
@@ -1167,7 +1171,7 @@ class LiveDistributionWiringTests(LiveWindowCase):
 
         # 5. The banner's Clear button runs the component's Clear.
         application.search_var.set("meter:11")
-        application.refresh_table()
+        application._table.refresh_table()
         root.update()
         clear_button = next(w for w in panel.dist_banner_frame.winfo_children()
                             if isinstance(w, app.tk.Button))
@@ -1178,7 +1182,7 @@ class LiveDistributionWiringTests(LiveWindowCase):
 
         # 7. The chart click: the handler registered on the canvas is the component's.
         if dp._load_matplotlib():
-            application.refresh_table()
+            application._table.refresh_table()
             self.assertIsNotNone(panel.dist_canvas)
             handlers = [ref() for ref in
                         panel.dist_canvas.callbacks.callbacks["button_press_event"].values()]

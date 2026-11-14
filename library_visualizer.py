@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import csv
 import sys
-import time
 try:
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
@@ -18,62 +17,31 @@ from pathlib import Path
 # The release number, shown in Help > About. Keep it equal to the newest heading in CHANGELOG.md (a test checks).
 __version__ = "1.2.1"
 
-import row_tints
 import theme
 from advanced_search import AdvancedSearch
 from course_builder import CourseBuilder
 from data_paths_dialog import DataPathsDialog
 from library_filter import LibraryFilter
 from library_loader import LibraryLoader
+from library_table import LibraryTable
 from distribution_panel import DistributionPanel
 from library_data import (
-    TAP_FIELDS,
-    TECH_FIELDS,
+    COLUMN_GROUPS,
+    DEFAULT_VISIBLE_COLUMNS,
+    HEADERS,
     LIBRARY_CACHE_SCHEMA_VERSION,
     SettingsStore,
     SnapshotStore,
     _settings_file_path,
-    _valid_column_width,
     _valid_window_geometry,
-    bpm_sort_key,
     cache_dir_candidates,
     declare_dpi_awareness,
-    difficulty_sort_key,
     dpi_scale_factor,
     first_existing_directory,
-    format_duration,
-    grade_sort_key,
-    number,
     scale_geometry,
     scale_pixels,
 )
 
-# How long one batch of table-row inserts may run before yielding to the event
-# loop (see _insert_batch): long enough to fill quickly, short enough that the
-# window stays responsive while a big library streams in.
-ROW_INSERT_BUDGET_SECONDS = 0.012
-HEADERS = ("Title", "Subtitle", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart", "Score",
-           "Grade", "Best %", "Plays", "Last played", "Peak NPS", "Taps/Holds", "Jumps",
-           "Holds", "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4", "W5",
-           "Miss", "Max combo", *TECH_FIELDS)
-NUMERIC_COLUMNS = {"Meter", "Time", "Score", "Best %", "Plays", "Peak NPS", "Taps/Holds", "Jumps",
-                   "Holds", "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4",
-                   "W5", "Miss", "Max combo", *TECH_FIELDS}
-# The groups shown under View > Columns, in menu order. Every column in HEADERS belongs to exactly one group.
-COLUMN_GROUPS = {
-    "Song & chart": ("Title", "Subtitle", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart"),
-    "Score": ("Score", "Grade", "Best %", "Plays", "Last played", "Max combo"),
-    "Tap judgments": TAP_FIELDS,
-    "Chart counts": ("Peak NPS", "Taps/Holds", "Jumps", "Holds", "Rolls", "Mines", "Hands", "Lifts"),
-    "Tech counts": TECH_FIELDS,
-}
-# Groups whose columns are shown on a fresh install and after "Reset column layout".
-DEFAULT_VISIBLE_GROUPS = ("Song & chart", "Score")
-# Subtitle is the one exception to the rule that every column of a default
-# group starts shown: it belongs to "Song & chart" but starts hidden
-# (issue #49, option B), opt-in via View -> Columns.
-DEFAULT_VISIBLE_COLUMNS = frozenset(
-    column for group in DEFAULT_VISIBLE_GROUPS for column in COLUMN_GROUPS[group]) - {"Subtitle"}
 
 class LibraryApp:
     # Defaults for state that is only set later, so every instance has these attributes.
@@ -119,28 +87,6 @@ class LibraryApp:
         saved_difficulty = self.saved_settings.get("filter_difficulty")
         self.diff_var = tk.StringVar(value=saved_difficulty if isinstance(saved_difficulty, str) else "All difficulties")
         self.scored_var = tk.BooleanVar(value=False)
-        saved_order = self.saved_settings.get("column_order", [])
-        if not isinstance(saved_order, list):
-            saved_order = []
-        valid_order = []
-        for column in saved_order:
-            if column in HEADERS and column not in valid_order:
-                valid_order.append(column)
-        self.column_order = valid_order + [column for column in HEADERS if column not in valid_order]
-        if "Time" not in valid_order:
-            self.column_order.remove("Time")
-            meter_index = self.column_order.index("Meter")
-            self.column_order.insert(meter_index + 1, "Time")
-        if "BPM" not in valid_order:
-            self.column_order.remove("BPM")
-            time_index = self.column_order.index("Time")
-            self.column_order.insert(time_index + 1, "BPM")
-        if "Subtitle" not in valid_order:
-            # A saved order from before Subtitle existed appends it at the
-            # far right; put it beside Title instead, like Time/BPM above.
-            self.column_order.remove("Subtitle")
-            title_index = self.column_order.index("Title")
-            self.column_order.insert(title_index + 1, "Subtitle")
         saved_visibility = self.saved_settings.get("column_visibility", {})
         if not isinstance(saved_visibility, dict):
             saved_visibility = {}
@@ -155,23 +101,6 @@ class LibraryApp:
             self.column_visibility[HEADERS[0]].set(True)
         # One check box per group in the Columns menu; it is checked while every column of the group is shown.
         self.group_visibility = {group: tk.BooleanVar() for group in COLUMN_GROUPS}
-        self._sync_group_checks()
-        saved_widths = self.saved_settings.get("column_widths", {})
-        if not isinstance(saved_widths, dict):
-            saved_widths = {}
-        self.column_widths = {
-            column: _valid_column_width(saved_widths.get(column), column) for column in HEADERS
-        }
-        self.default_column_widths = {}
-        self.sort_keys = []
-        saved_sort_keys = self.saved_settings.get("sort_keys", [])
-        if isinstance(saved_sort_keys, list):
-            for item in saved_sort_keys:
-                if (isinstance(item, list) and len(item) == 2 and item[0] in HEADERS
-                        and isinstance(item[1], bool) and item[0] not in {col for col, _ in self.sort_keys}):
-                    self.sort_keys.append((item[0], item[1]))
-        if not self.sort_keys:
-            self.sort_keys = [("Pack", False)]
         self.show_distribution_panel = tk.BooleanVar(
             value=bool(self.saved_settings.get("show_distribution", False))
         )
@@ -179,13 +108,13 @@ class LibraryApp:
         self.distribution_metric = tk.StringVar(
             value=saved_metric if saved_metric in ("Meter", "Difficulty", "BPM") else "Meter"
         )
-        self._tree_tint = None  # the song table's SelectedRowTint, created with the table in _build
         # Attributes that are filled in after this point. Declaring them here lists everything the window
         # holds in one place; the comments name where each one is filled in.
         # Widgets and variables created by _build(); None until then:
         self.status = None
         self.search_entry = None
         self._filter = None  # the filter pipeline, built in _build once the search bar exists
+        self._table = None  # the song table, built in _build after the filter and the panel
         # Defensive only: the loader is built below, before the filter's
         # traces are installed, so this can never be read while None.
         self._loader = None  # the load/sync engine, built below in __init__
@@ -195,15 +124,9 @@ class LibraryApp:
         self.dist_button = None
         self.content_frame = None
         self.table_frame = None
-        self.tree = None  # refresh_table and _save_settings do nothing until the table exists
         self.progress = None
         self.count_label = None
         self.load_button = None
-        # Working state that starts empty:
-        self._render_generation = 0  # counts table redraws, so an unfinished older redraw stops (refresh_table)
-        self.tree_item_rows = {}  # table row id -> its chart row (refresh_table)
-        self._dragged_column = None  # heading being dragged, and where the drag began (_column_drag_start)
-        self._drag_start_x = None
         # Dialogs: a window attribute is None while that dialog is closed. The course builder is a
         # separate component (course_builder.py) that owns its window and queue; it is created in
         # _build, once the status variable exists. The Advanced Search component
@@ -349,7 +272,6 @@ class LibraryApp:
         self._filter = LibraryFilter(
             self.search_var, self.pack_var, self.type_var, self.diff_var, self.scored_var,
             self.search_entry, self.pack_filter, self.type_filter, self.diff_filter, self.root)
-        self._filter.subscribe(self.refresh_table)
         # The distribution panel component (distribution_panel.py): it owns the chart panel
         # beside the table. The four variables stay the app's own (the View menu binds one,
         # the settings save reads two), row pulls go through the filter, and the panel's
@@ -376,49 +298,24 @@ class LibraryApp:
             self.content_frame, self.dist_button, lambda: self.table_frame)
         self.table_frame = tk.Frame(self.content_frame, bg=theme.BG_WINDOW)
         self.table_frame.pack(side="left", fill="both", expand=True)
-        self.tree = ttk.Treeview(self.table_frame, columns=HEADERS, show="headings", selectmode="extended")
-        for col in HEADERS:
-            self.tree.heading(col, text=col, command=lambda c=col: self.sort_by(c))
-            width = 130 if col in ("Title", "Subtitle", "Artist", "Pack") else 92
-            if col in ("Type", "Difficulty", "Meter", "Time", "BPM", "Score", "Grade", "Best %", "Plays", "Jumps", "Holds",
-                       "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4", "W5", "Miss"):
-                width = 76
-            if col == "Last played":
-                width = 105
-            if col == "Chart":
-                width = 150
-            self.default_column_widths[col] = width
-            width = self.column_widths[col] or width
-            # Canonical widths (saved or default), scaled to this display.
-            self.tree.column(col, width=scale_pixels(width, self._dpi_scale),
-                             minwidth=scale_pixels(55, self._dpi_scale), stretch=False, anchor="w" if col in
-                             ("Title", "Subtitle", "Artist", "Pack", "Chart") else "center")
-        vs = ttk.Scrollbar(self.table_frame, orient="vertical", command=self.tree.yview)
-        hs = ttk.Scrollbar(self.table_frame, orient="horizontal", command=self.tree.xview)
-        self.tree.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        vs.grid(row=0, column=1, sticky="ns")
-        hs.grid(row=1, column=0, sticky="ew")
-        self.table_frame.grid_rowconfigure(0, weight=1)
-        self.table_frame.grid_columnconfigure(0, weight=1)
-        self.tree.bind("<ButtonPress-1>", self._column_drag_start, add="+")
-        self.tree.bind("<ButtonRelease-1>", self._column_drag_end, add="+")
-        self.tree.bind("<ButtonRelease-1>", self._shift_sort_click, add="+")
-        self.tree.bind("<ButtonRelease-1>", self._save_settings, add="+")
-        self.tree.bind("<Control-a>", self._select_all_rows, add="+")
-        self.tree.bind("<Control-A>", self._select_all_rows, add="+")
-        visible_columns = [column for column in self.column_order if self.column_visibility[column].get()]
-        if visible_columns:
-            self.tree.configure(displaycolumns=visible_columns)
-        self._update_sort_headings()
-        row_tints.configure_tree_tags(self.tree)
-        self._tree_tint = row_tints.SelectedRowTint(self.tree)
-        self.tree.bind("<<TreeviewSelect>>", self._tree_tint.on_select, add="+")
+        self.count_label = tk.StringVar(value="0 charts")
+        # The table (proposal 0009 Step 6): constructed after the filter
+        # and the Distribution Panel, taking the filter and the panel's
+        # show_rows; it subscribes its refresh to the filter's change
+        # notification, so a filter change redraws the table.
+        self._table = LibraryTable(
+            self.table_frame, self._filter, self._dpi_scale,
+            self.column_visibility, self.group_visibility,
+            {"column_order": self.saved_settings.get("column_order", []),
+             "column_widths": self.saved_settings.get("column_widths", {}),
+             "sort_keys": self.saved_settings.get("sort_keys", [])},
+            self.count_label, self._save_settings,
+            self.distribution_panel.show_rows)
+        self._filter.subscribe(self._table.refresh_table)
         self.progress = ttk.Progressbar(self.root, mode="indeterminate", style="Horizontal.TProgressbar")
         self.progress.pack(fill="x", padx=scale_pixels(18, self._dpi_scale), pady=(0, scale_pixels(4, self._dpi_scale)))
         footer = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=scale_pixels(18, self._dpi_scale), pady=scale_pixels(7, self._dpi_scale))
         footer.pack(fill="x")
-        self.count_label = tk.StringVar(value="0 charts")
         tk.Label(footer, textvariable=self.count_label, fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW,
                  font=theme.FONT_BODY).pack(side="left")
         tk.Label(footer, text="Click to sort · Shift-click adds sort keys · Drag headings to reorder · Drag dividers to resize",
@@ -480,18 +377,18 @@ class LibraryApp:
             group_menu.add_checkbutton(
                 label="Show whole group",
                 variable=self.group_visibility[group],
-                command=lambda name=group: self._group_visibility_changed(name),
+                command=lambda name=group: self._table._group_visibility_changed(name),
             )
             group_menu.add_separator()
             for column in columns:
                 group_menu.add_checkbutton(
                     label=column,
                     variable=self.column_visibility[column],
-                    command=lambda col=column: self._column_visibility_changed(col),
+                    command=lambda col=column: self._table._column_visibility_changed(col),
                 )
             columns_menu.add_cascade(label=group, menu=group_menu)
         view_menu.add_cascade(label="Columns", menu=columns_menu)
-        view_menu.add_command(label="Reset column layout", command=self.reset_column_layout)
+        view_menu.add_command(label="Reset column layout", command=self._table.reset_column_layout)
         view_menu.add_separator()
         view_menu.add_checkbutton(
             label="Show distribution panel",
@@ -555,17 +452,20 @@ class LibraryApp:
         self.status.set(f"{current} {message}" if current else message)
 
     def _save_settings(self, _event=None):
-        if self.tree is None:
+        if self._table is None:
             return
+        # The column order, widths, and sort keys come from the table's
+        # layout_state(): the table owns that state (sort_by and
+        # reset_column_layout rebind it), and the widths are read back
+        # from the tree in canonical 100% units (issue #51).
+        layout = self._table.layout_state()
         settings = {
             "cache_dir": self.cache_var.get(),
             "stats_file": self.stats_var.get(),
-            "column_order": self.column_order,
+            "column_order": layout["column_order"],
             "column_visibility": {column: variable.get() for column, variable in self.column_visibility.items()},
-            # Column widths are read back in physical pixels; divide by the
-            # factor so the file keeps canonical 100% units (issue #51).
-            "column_widths": {column: scale_pixels(self.tree.column(column, "width"), 1.0 / self._dpi_scale) for column in HEADERS},
-            "sort_keys": [[column, descending] for column, descending in self.sort_keys],
+            "column_widths": layout["column_widths"],
+            "sort_keys": layout["sort_keys"],
             "show_distribution": self.show_distribution_panel.get(),
             "distribution_metric": self.distribution_metric.get(),
             "filter_pack": self.pack_var.get(),
@@ -591,12 +491,11 @@ class LibraryApp:
 
     def _selected_rows_for_course(self):
         """The chart rows currently selected in the main table (for the course builder)."""
-        return [row for item in self.tree.selection()
-                if (row := self.tree_item_rows.get(item)) is not None]
+        return self._table.selected_rows()
 
     def _library_rows_for_course(self):
         """Every chart row in the loaded library (for the course builder's ambiguity check)."""
-        return self._loader.rows
+        return self._table.library_rows()
 
     def _dialog_is_open(self):
         for window in (self.advanced_search.window if self.advanced_search is not None else None,
@@ -611,95 +510,6 @@ class LibraryApp:
         # dialog is open, where Escape should not silently wipe the search bar.
         if not self._dialog_is_open():
             self._filter.clear_search()
-
-    def _column_visibility_changed(self, changed_column):
-        visible = [column for column in self.column_order if self.column_visibility[column].get()]
-        if not visible:
-            self.column_visibility[changed_column].set(True)
-            return
-        self._sync_group_checks()
-        self.tree.configure(displaycolumns=visible)
-        self._save_settings()
-
-    def _sync_group_checks(self):
-        for group, variable in self.group_visibility.items():
-            variable.set(all(self.column_visibility[column].get() for column in COLUMN_GROUPS[group]))
-
-    def _group_visibility_changed(self, group):
-        """Show or hide every column of a group at once, then redraw and save a single time."""
-        show = self.group_visibility[group].get()
-        previous = {column: self.column_visibility[column].get() for column in COLUMN_GROUPS[group]}
-        for column in previous:
-            self.column_visibility[column].set(show)
-        visible = [column for column in self.column_order if self.column_visibility[column].get()]
-        if not visible:
-            # Same rule as a single column: at least one column must stay on, so the click is undone.
-            for column, was_visible in previous.items():
-                self.column_visibility[column].set(was_visible)
-            self._sync_group_checks()
-            return
-        self._sync_group_checks()
-        self.tree.configure(displaycolumns=visible)
-        self._save_settings()
-
-    def reset_column_layout(self):
-        self.column_order = list(HEADERS)
-        for column, variable in self.column_visibility.items():
-            variable.set(column in DEFAULT_VISIBLE_COLUMNS)
-        self._sync_group_checks()
-        for column, width in self.default_column_widths.items():
-            self.tree.column(column, width=scale_pixels(width, self._dpi_scale))
-        visible = [column for column in self.column_order if self.column_visibility[column].get()]
-        self.tree.configure(displaycolumns=visible)
-        self._save_settings()
-
-    def _column_drag_start(self, event):
-        if self.tree.identify_region(event.x, event.y) == "heading":
-            column = self._displayed_column_at(event.x, event.y)
-            self._dragged_column = column
-            self._drag_start_x = event.x
-        else:
-            self._dragged_column = None
-            self._drag_start_x = None
-
-    def _column_drag_end(self, event):
-        source = self._dragged_column
-        start_x = self._drag_start_x
-        self._dragged_column = None
-        self._drag_start_x = None
-        if source is None or start_x is None or abs(event.x - start_x) < 5:
-            return
-        target = self._displayed_column_at(event.x, event.y)
-        if target is None or target == source:
-            return
-        visible = [column for column in self.column_order if self.column_visibility[column].get()]
-        target_index = visible.index(target)
-        bounds = self._displayed_column_bounds(target_index)
-        insert_after = bounds is not None and event.x >= (bounds[0] + bounds[1]) / 2
-        self.column_order.remove(source)
-        insert_at = self.column_order.index(target) + int(insert_after)
-        self.column_order.insert(insert_at, source)
-        visible = [column for column in self.column_order if self.column_visibility[column].get()]
-        self.tree.configure(displaycolumns=visible)
-        self._save_settings()
-        return "break"
-
-    def _displayed_column_at(self, x, y):
-        if self.tree.identify_region(x, y) != "heading":
-            return None
-        display_id = self.tree.identify_column(x)
-        try:
-            index = int(display_id[1:]) - 1
-            visible = [column for column in self.column_order if self.column_visibility[column].get()]
-            return visible[index] if 0 <= index < len(visible) else None
-        except (ValueError, IndexError):
-            return None
-
-    def _displayed_column_bounds(self, index):
-        display_id = f"#{index + 1}"
-        matches = [x for x in range(self.tree.winfo_width())
-                   if self.tree.identify_column(x) == display_id]
-        return (matches[0], matches[-1] + 1) if matches else None
 
     @staticmethod
     def _entry(parent, placeholder, variable):
@@ -758,9 +568,10 @@ class LibraryApp:
             # replaces it), so there is nothing to re-set — only the
             # refresh, keeping the selection. If the sync ever built a
             # fresh list, the filter would keep showing the old scores.
-            self.refresh_table(preserve_selection=True)
+            self._table.refresh_table(preserve_selection=True)
             return
         with self._filter.batch():
+            self._table.set_rows(rows)
             self._filter.set_rows(rows)
             self._filter.set_choices(rows)
         if self.course_builder is not None:
@@ -770,7 +581,7 @@ class LibraryApp:
 
     def _on_nothing_loaded(self):
         """The initial refresh when no snapshot was restored."""
-        self.refresh_table()
+        self._table.refresh_table()
 
     def _set_sync_menu_state(self, state):
         """Enable or disable the File -> Sync scores entry (issue #147).
@@ -782,127 +593,6 @@ class LibraryApp:
         if file_menu is None:
             return
         file_menu.entryconfigure("Sync scores from Stats.xml", state=state)
-
-    def refresh_table(self, preserve_selection=False):
-        if self.tree is None:
-            return
-        selected_rows = set()
-        if preserve_selection:
-            selected_rows = {
-                id(self.tree_item_rows[item]) for item in self.tree.selection()
-                if item in self.tree_item_rows
-            }
-        self._render_generation += 1
-        generation = self._render_generation
-        self._update_sort_headings()
-        visible = self._filter.filter_rows()
-        for column, descending in reversed(self.sort_keys):
-            present = [row for row in visible if row.get(column) not in (None, "")]
-            missing = [row for row in visible if row.get(column) in (None, "")]
-            if column in NUMERIC_COLUMNS:
-                present.sort(key=lambda row: number(str(row.get(column))), reverse=descending)
-            elif column == "Difficulty":
-                present.sort(key=lambda row: difficulty_sort_key(row.get(column, "")), reverse=descending)
-            elif column == "BPM":
-                present.sort(key=bpm_sort_key, reverse=descending)
-            elif column == "Grade":
-                present.sort(key=lambda row: grade_sort_key(row.get(column, "")), reverse=descending)
-            else:
-                present.sort(key=lambda row: str(row.get(column, "")).casefold(), reverse=descending)
-            visible = present + missing
-        self.tree.delete(*self.tree.get_children())
-        self.tree_item_rows = {}
-        self._tree_tint.reset()
-        # The count label is set by _insert_batch: a progress count while rows
-        # are still streaming in, the final totals once the last batch lands.
-        self._insert_batch(visible, 0, generation, selected_rows)
-        self.distribution_panel.show_rows(visible)
-
-    def _update_sort_headings(self):
-        priorities = {column: (index, descending) for index, (column, descending) in enumerate(self.sort_keys, 1)}
-        for column in HEADERS:
-            if column in priorities:
-                index, descending = priorities[column]
-                marker = "↓" if descending else "↑"
-                heading = f"{column} {marker}{index}"
-            else:
-                heading = column
-            self.tree.heading(column, text=heading)
-
-    def _insert_batch(self, rows, start, generation, selected_rows=None):
-        if generation != self._render_generation:
-            return
-        selected_rows = selected_rows or set()
-        # Insert for a short time budget rather than a fixed count: fast
-        # machines finish in fewer, fuller batches; slow ones stay responsive.
-        # At least one row always goes in, so the loop cannot stall.
-        deadline = time.perf_counter() + ROW_INSERT_BUDGET_SECONDS
-        stop = start
-        while stop < len(rows):
-            row = rows[stop]
-            values = []
-            for col in HEADERS:
-                value = row.get(col, "")
-                if col == "Time" and value != "":
-                    value = format_duration(value)
-                elif isinstance(value, float):
-                    value = f"{value:g}"
-                values.append(value)
-            keep_selected = id(row) in selected_rows
-            item = self.tree.insert("", "end", values=values, tags=row_tints.row_tags(row, keep_selected))
-            self.tree_item_rows[item] = row
-            if keep_selected:
-                self.tree.selection_add(item)
-                self._tree_tint.note_selected(item)
-            stop += 1
-            if time.perf_counter() >= deadline:
-                break
-        if stop < len(rows):
-            self.count_label.set(f"Loading {stop:,} of {len(rows):,} charts…")
-            self.root.after(1, lambda: self._insert_batch(rows, stop, generation, selected_rows))
-        else:
-            count_text = f"{len(rows):,} charts shown · {len(self._loader.rows):,} total"
-            hint = self._filter.search_hint()
-            if hint:
-                count_text += f" — {hint}"
-            self.count_label.set(count_text)
-
-    def _select_all_rows(self, _event=None):
-        """Ctrl+A in the table (issue #36): select every displayed row.
-
-        The tree's contents are the filtered set, so selecting all of
-        get_children() selects exactly what is shown. The selection
-        event then updates the selected-row tint like any other
-        selection change. Bound on the tree, not the root, so Ctrl+A
-        in the search box or a path entry keeps its text meaning."""
-        self.tree.selection_set(self.tree.get_children())
-
-    def _shift_sort_click(self, event):
-        if not event.state & 0x0001 or self.tree.identify_region(event.x, event.y) != "heading":
-            return
-        column = self._displayed_column_at(event.x, event.y)
-        if column is not None:
-            self.sort_by(column, additive=True)
-            return "break"
-
-    def sort_by(self, column, additive=False):
-        keys = list(self.sort_keys)
-        existing_index = next((index for index, (name, _) in enumerate(keys) if name == column), None)
-        if additive:
-            if existing_index is None:
-                keys.append((column, False))
-            else:
-                name, descending = keys[existing_index]
-                keys[existing_index] = (name, not descending)
-        else:
-            if existing_index == 0:
-                name, descending = keys[0]
-                keys[0] = (name, not descending)
-            else:
-                keys = [(column, False)]
-        self.sort_keys = keys
-        self.refresh_table(preserve_selection=True)
-        self._save_settings()
 
     def export_csv(self):
         if not self._loader.rows:

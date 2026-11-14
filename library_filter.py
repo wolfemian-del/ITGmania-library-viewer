@@ -77,6 +77,16 @@ class LibraryFilter:
         self._rows = rows
         self._refresh_unless_batching()
 
+    @property
+    def batching(self):
+        """True while a batch() block is open.
+
+        The table's set_rows reads this so a set_rows inside the load
+        batch does not refresh twice (the batch exit refreshes once);
+        a set_rows on its own refreshes at once.
+        """
+        return self._batching_filter_changes
+
     def set_choices(self, rows):
         """Rebuild the dropdown choices from the loaded rows.
 
