@@ -48,7 +48,9 @@ from library_data import (
     find_unreadable_directives,
     first_existing_directory,
     format_duration,
+    format_refresh_time,
     grade_sort_key,
+    invalid_paths_note,
     looks_like_song_tree,
     match_chart_query,
     merge_scores,
@@ -579,7 +581,7 @@ class LibraryApp:
         if not self.loaded_source_paths:
             return
         if self._current_paths_match_loaded():
-            stamp = self._format_refresh_time(self.last_refreshed_at)
+            stamp = format_refresh_time(self.last_refreshed_at)
             self.status.set(f"Showing saved library snapshot · {len(self.rows):,} charts · last refreshed {stamp}.")
         else:
             self.status.set("Displayed library uses different data paths. Click Load / refresh to show the selected sources.")
@@ -1044,22 +1046,10 @@ class LibraryApp:
         """
         cache, stats = Path(self.cache_var.get()), Path(self.stats_var.get())
         if not cache.is_dir() or not stats.is_file():
-            self._set_data_paths_note(self._invalid_paths_note(cache, stats))
+            self._set_data_paths_note(invalid_paths_note(cache, stats))
             return
         self._close_data_paths_dialog()
         self.load_data()
-
-    @staticmethod
-    def _invalid_paths_note(cache, stats):
-        """The note naming whichever of the two paths cannot be used."""
-        cache_ok, stats_ok = cache.is_dir(), stats.is_file()
-        if cache_ok and stats_ok:
-            return ""
-        if not cache_ok and not stats_ok:
-            return "The cache folder and Stats.xml were not found. Choose new paths."
-        if not cache_ok:
-            return "The cache folder was not found. Choose a new Cache / Songs folder."
-        return "The Stats.xml file was not found. Choose a new Player Stats.xml."
 
     def _maybe_show_first_run_paths_dialog(self):
         """Open the Data paths dialog once at startup when there is nothing to show.
@@ -1107,7 +1097,7 @@ class LibraryApp:
         if not cache.is_dir() or not stats.is_file():
             # Invalid paths open the Data paths dialog instead of an error box:
             # the fix is in the dialog, so that is where the user should be.
-            self.open_data_paths_dialog(note=self._invalid_paths_note(cache, stats))
+            self.open_data_paths_dialog(note=invalid_paths_note(cache, stats))
             return
         self._save_settings()
         self.progress.start(12)
@@ -1230,7 +1220,7 @@ class LibraryApp:
         if not stats.is_file():
             # Invalid paths open the Data paths dialog instead of an error box:
             # the fix is in the dialog, so that is where the user should be.
-            self.open_data_paths_dialog(note=self._invalid_paths_note(cache, stats))
+            self.open_data_paths_dialog(note=invalid_paths_note(cache, stats))
             return
         self._sync_in_flight = True
         self._set_sync_menu_state("disabled")
@@ -1367,7 +1357,7 @@ class LibraryApp:
         else:
             message = "Scores are already up to date"
         if refreshed_at:
-            message += f" · last refreshed {self._format_refresh_time(refreshed_at)}"
+            message += f" · last refreshed {format_refresh_time(refreshed_at)}"
         self.status.set(message + ".")
         if cache_error:
             self.status.set(self.status.get() + f" Local snapshot not saved: {cache_error}")
@@ -1508,7 +1498,7 @@ class LibraryApp:
             if self.diff_var.get() not in difficulty_values:
                 self.diff_var.set("All difficulties")
         if from_cache:
-            stamp = self._format_refresh_time(refreshed_at)
+            stamp = format_refresh_time(refreshed_at)
             self.status.set(f"Showing saved library snapshot · {len(rows):,} charts · last refreshed {stamp}.")
         elif files == 0:
             hint = " This looks like a regular Songs tree; select the flat Cache/Songs folder instead." \
@@ -1524,20 +1514,15 @@ class LibraryApp:
                 summary += f" · {skipped_blocks:,} chart blocks skipped (missing metadata)"
             self.status.set(summary + ".")
         if not from_cache and refreshed_at:
-            self.status.set(self.status.get() + f" Snapshot refreshed {self._format_refresh_time(refreshed_at)}.")
+            self.status.set(
+                self.status.get()
+                + f" Snapshot refreshed {format_refresh_time(refreshed_at)}.")
         if not from_cache and cache_error:
             self.status.set(self.status.get() + f" Local snapshot not saved: {cache_error}")
         if self.course_builder is not None:
             # A fresh library may no longer match a course queue built from the old
             # one; the builder asks the user what to do with it (issue #82).
             self.course_builder.on_library_reloaded()
-
-    @staticmethod
-    def _format_refresh_time(value):
-        try:
-            return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M")
-        except (TypeError, ValueError):
-            return "unknown"
 
     def _filter_rows(self, ignore_metric=None):
         """Return the rows that pass the pack, type, difficulty, scored and search filters.

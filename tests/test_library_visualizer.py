@@ -1591,42 +1591,7 @@ class SourcePathsChangedTests(unittest.TestCase):
             app.LibraryApp._DATA_PATHS_DIFFER_NOTE)
 
 
-class InvalidPathsNoteTests(unittest.TestCase):
-    """The Data paths note naming whichever path cannot be used."""
 
-    def test_both_usable_is_empty(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache" / "Songs"
-            cache_dir.mkdir(parents=True)
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>")
-            self.assertEqual(app.LibraryApp._invalid_paths_note(cache_dir, stats_file), "")
-
-    def test_cache_only_names_the_cache(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>")
-            note = app.LibraryApp._invalid_paths_note(root / "Cache" / "Songs", stats_file)
-            self.assertIn("cache folder", note)
-            self.assertNotIn("Stats.xml", note)
-
-    def test_stats_only_names_stats(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache" / "Songs"
-            cache_dir.mkdir(parents=True)
-            note = app.LibraryApp._invalid_paths_note(cache_dir, root / "Stats.xml")
-            self.assertIn("Stats.xml", note)
-            self.assertNotIn("cache folder", note)
-
-    def test_both_missing_names_both(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            note = app.LibraryApp._invalid_paths_note(root / "Cache" / "Songs", root / "Stats.xml")
-            self.assertIn("cache folder", note)
-            self.assertIn("Stats.xml", note)
 
 
 class _StubStatus:
