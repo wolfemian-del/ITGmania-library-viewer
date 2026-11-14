@@ -18,8 +18,9 @@ from unittest.mock import MagicMock, Mock, patch
 
 import library_data
 import library_loader as loader
-import row_tints
+import library_table as table_module
 import library_visualizer as app
+from library_table import LibraryTable
 import data_paths_dialog as dialog
 
 
@@ -59,6 +60,22 @@ class _ValueVar:
         """Record a write-trace callback, like tk.Variable.trace_add; set() fires it."""
         self._traces.append(callback)
         return f"trace-{len(self._traces)}"
+
+
+def _mock_table(column_width=100):
+    """A Mock table whose layout_state reports the given layout.
+
+    The table owns column order, widths, and sort keys now, so the
+    save tests use this instead of setting them on the app; the
+    returned dict is mutable, so a test can mutate it in place and
+    the next save must carry the change.
+    """
+    table = Mock()
+    table.layout_state.return_value = {
+        "column_order": list(app.HEADERS),
+        "column_widths": {col: column_width for col in app.HEADERS},
+        "sort_keys": [["Pack", False]]}
+    return table
 
 
 class LibrarySnapshotTests(unittest.TestCase):
@@ -960,14 +977,11 @@ class ScoresSyncTests(unittest.TestCase):
             instance.search_entry = Mock()
             instance.status = Mock()
             instance.course_builder = None
-            instance.tree.selection.return_value = []
-            instance._filter = app.LibraryFilter(
-                instance.search_var, instance.pack_var, instance.type_var,
-                instance.diff_var, instance.scored_var,
-                instance.search_entry, instance.pack_filter,
-                instance.type_filter, instance.diff_filter, instance.root)
+            instance._table.tree.selection.return_value = []
+            # Re-seed the table's filter with this test's rows (and
+            # the table's own list, so its count total stays honest).
             instance._filter.set_rows(rows)
-            instance._filter.subscribe(instance.refresh_table)
+            instance._table._rows = rows
             loaded = _make_wired_loader(instance)
             loaded.rows = rows
             # Scored-only shows nothing before the sync: the chart has
@@ -1588,8 +1602,9 @@ def _make_wired_loader(app_instance):
     instance._snapshot_lock = threading.Lock()
     instance._load_results = queue.Queue()
     instance._load_started_at = None
-    # The app reads its rows through the loader (loader.rows), the way
-    # the real __init__ attaches it; the real refresh_table needs this.
+    # The loader holds the rows the app's export and sync read
+    # (loader.rows), the way the real __init__ attaches it; the table
+    # gets its rows from the load handoff via set_rows, not from here.
     app_instance._loader = instance
     return instance
 
@@ -1606,6 +1621,8 @@ class LoaderFilterPersistenceTests(unittest.TestCase):
         instance.progress = Mock()
         instance.status = Mock()
         instance.refresh_table = Mock()
+        instance._table = Mock()
+        instance._table.refresh_table = instance.refresh_table
         instance.pack_filter = Mock()
         instance.type_filter = Mock()
         instance.diff_filter = Mock()
@@ -1638,11 +1655,8 @@ class LoaderFilterPersistenceTests(unittest.TestCase):
         instance.cache_var = Mock(get=Mock(return_value="cache"))
         instance.stats_var = Mock(get=Mock(return_value="stats"))
         instance.search_var = _ValueVar("distinctive-search-text")
-        instance.tree = Mock()
-        instance.tree.column.return_value = 100
-        instance.column_order = list(app.HEADERS)
         instance.column_visibility = {column: Mock(get=Mock(return_value=True)) for column in app.HEADERS}
-        instance.sort_keys = [("Pack", False)]
+        instance._table = _mock_table()
         instance.show_distribution_panel = Mock(get=Mock(return_value=False))
         instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
         instance.course_geometry = None
@@ -1772,21 +1786,22 @@ class LoadDeliversRowsTests(unittest.TestCase):
     @staticmethod
     def make_instance():
         instance = object.__new__(app.LibraryApp)
-        instance.tree = Mock()
-        instance.tree.insert.side_effect = ["item0", "item1"]
-        instance.tree.get_children.return_value = []
-        instance._render_generation = 1
-        instance.tree_item_rows = {}
-        instance.count_label = Mock()
-        instance._tree_tint = row_tints.SelectedRowTint(instance.tree)
         instance.root = Mock()
-        instance.distribution_panel = Mock()
         instance.search_var = _ValueVar("")
         instance.pack_var = _ValueVar("All packs")
         instance.type_var = _ValueVar("All types")
         instance.diff_var = _ValueVar("All difficulties")
         instance.scored_var = _ValueVar(False)
-        instance.sort_keys = []
+        instance.search_entry = Mock()
+        instance.pack_filter = Mock()
+        instance.type_filter = Mock()
+        instance.diff_filter = Mock()
+        instance._filter = app.LibraryFilter(
+            instance.search_var, instance.pack_var, instance.type_var,
+            instance.diff_var, instance.scored_var,
+            instance.search_entry, instance.pack_filter,
+            instance.type_filter, instance.diff_filter, instance.root)
+        instance.distribution_panel = Mock()
         instance.rows = [
             {"Title": "Song A", "Pack": "Pack1", "Type": "dance-single",
              "Difficulty": "Hard", "Grade": "AAA", "Meter": 10, "Time": 60},
@@ -1794,27 +1809,40 @@ class LoadDeliversRowsTests(unittest.TestCase):
              "Difficulty": "Challenge", "Grade": "", "Meter": 12,
              "Time": 90},
         ]
+        # A real table on a Mock tree, wired the way _build wires it:
+        # the table takes the filter and the panel's show_rows, and its
+        # refresh is subscribed to the filter. The seed carries no sort
+        # keys, so the rows land in filter order.
+        parent = Mock()
+        tree = Mock()
+        tree.insert.side_effect = ["item0", "item1"]
+        tree.get_children.return_value = []
+        tree.column.return_value = 100
+        column_visibility = {col: _ValueVar(True) for col in app.HEADERS}
+        group_visibility = {group: _ValueVar(False)
+                          for group in app.COLUMN_GROUPS}
+        seed = {"column_order": list(app.HEADERS), "column_widths": {},
+                "sort_keys": []}
+        with patch.object(table_module.ttk, "Treeview", return_value=tree), \
+                patch.object(table_module.ttk, "Scrollbar", return_value=Mock()):
+            table = LibraryTable(
+                parent, instance._filter, 1.0, column_visibility,
+                group_visibility, seed, Mock(), Mock(),
+                instance.distribution_panel.show_rows)
+        instance._table = table
+        # The rows are set before subscribing, so the setup itself does
+        # not refresh; the load's batch exit is the refresh the test pins.
+        instance._filter.set_rows(instance.rows)
+        instance._filter.subscribe(table.refresh_table)
+        table._rows = list(instance.rows)
         return instance
 
     def test_loaded_delivers_the_rows_through_the_real_refresh(self):
         instance = self.make_instance()
         instance.load_button = Mock()
         instance.progress = Mock()
-        instance.pack_filter = Mock()
-        instance.type_filter = Mock()
-        instance.diff_filter = Mock()
-        instance.search_entry = Mock()
         instance.status = Mock()
         instance.course_builder = None
-        instance._filter = app.LibraryFilter(
-            instance.search_var, instance.pack_var, instance.type_var,
-            instance.diff_var, instance.scored_var,
-            instance.search_entry, instance.pack_filter,
-            instance.type_filter, instance.diff_filter, instance.root)
-        # The rows are set before subscribing, so the setup itself does
-        # not refresh; the load's batch exit is the refresh the test pins.
-        instance._filter.set_rows(instance.rows)
-        instance._filter.subscribe(instance.refresh_table)
         loaded = _make_wired_loader(instance)
 
         # Deliver fresh copies, not the list the setup seeded: only a real
@@ -1822,18 +1850,22 @@ class LoadDeliversRowsTests(unittest.TestCase):
         # PR #167 review). The identity assertion below is the pin — the
         # titles and counts are the same either way.
         delivered = [dict(row) for row in instance.rows]
-        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
+        with patch.object(table_module, "ROW_INSERT_BUDGET_SECONDS", 60):
             loaded._loaded(delivered, 2)
 
         self.assertIs(instance._filter._rows, delivered)
-        self.assertEqual(instance.tree.insert.call_count, 2)
+        # The load path hands the rows to the table too (set_rows): the
+        # table's library_rows is what the Course Builder reads back, so
+        # a load that skipped it would open the builder on stale rows.
+        self.assertIs(instance._table.library_rows(), delivered)
+        self.assertEqual(instance._table.tree.insert.call_count, 2)
         title_index = list(app.HEADERS).index("Title")
         inserted = [kwargs["values"][title_index]
-                    for _args, kwargs in instance.tree.insert.call_args_list]
+                    for _args, kwargs in instance._table.tree.insert.call_args_list]
         self.assertEqual(inserted, ["Song A", "Song B"])
         instance.distribution_panel.show_rows.assert_called_once_with(
             delivered)
-        instance.count_label.set.assert_called_once_with(
+        instance._table.count_label.set.assert_called_once_with(
             "2 charts shown · 2 total")
 
 
@@ -1848,6 +1880,7 @@ class LoadBatchesFilterChangesTests(unittest.TestCase):
         instance.progress = Mock()
         instance.status = Mock()
         instance.refresh_table = Mock()
+        instance._table = Mock()
         instance.pack_filter = Mock()
         instance.type_filter = Mock()
         instance.diff_filter = Mock()

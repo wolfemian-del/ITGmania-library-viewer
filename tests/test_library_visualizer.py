@@ -12,8 +12,24 @@ import data_paths_dialog as dialog
 import distribution_panel as dp
 import library_data
 import library_visualizer as app
-import row_tints
 import theme
+
+
+def _mock_table(column_width=100):
+    """A Mock table whose layout_state reports the given layout.
+
+    The table owns column order, widths, and sort keys now, so the
+    save tests use this instead of setting them on the app; the
+    returned dict is mutable, so a test can mutate it in place (the
+    way a drag mutates the real table's column_order) and the next
+    save must carry the change.
+    """
+    table = Mock()
+    table.layout_state.return_value = {
+        "column_order": list(app.HEADERS),
+        "column_widths": {col: column_width for col in app.HEADERS},
+        "sort_keys": [["Pack", False]]}
+    return table
 
 
 class CourseGeometryAppTests(unittest.TestCase):
@@ -36,13 +52,10 @@ class CourseGeometryAppTests(unittest.TestCase):
     def make_saving_app(self, directory, course_geometry):
         instance = object.__new__(app.LibraryApp)
         instance.settings_path = Path(directory) / "settings.json"
-        instance.tree = Mock()
         instance.cache_var = Mock(get=Mock(return_value="/cache"))
         instance.stats_var = Mock(get=Mock(return_value="/stats.xml"))
-        instance.column_order = list(app.HEADERS)
         instance.column_visibility = {col: Mock(get=Mock(return_value=True)) for col in app.HEADERS}
-        instance.tree.column.return_value = 100
-        instance.sort_keys = [("Pack", False)]
+        instance._table = _mock_table()
         instance.show_distribution_panel = Mock(get=Mock(return_value=False))
         instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
         instance.pack_var = Mock(get=Mock(return_value="All packs"))
@@ -67,12 +80,15 @@ class CourseGeometryAppTests(unittest.TestCase):
             self.assertNotIn("course_geometry", data)
 
     def test_save_settings_stores_column_widths_in_canonical_units(self):
-        # The table reports physical pixels; at 150% a 195 px column is
-        # stored as 130, so it comes back the same at any scale (issue #51).
+        # _save_settings persists the widths layout_state reports, and
+        # the table reports them in canonical 100% units (issue #51) —
+        # a 130-wide layout is stored as 130 at any scale. The scaling
+        # itself is pinned in tests/test_library_table.py (LayoutStateTests),
+        # on a real table.
         with tempfile.TemporaryDirectory() as directory:
             instance = self.make_saving_app(directory, None)
-            instance._dpi_scale = 1.5
-            instance.tree.column.return_value = 195
+            instance._table.layout_state.return_value["column_widths"] = {
+                col: 130 for col in app.HEADERS}
             instance._save_settings()
             data = json.loads(instance.settings_path.read_text(encoding="utf-8"))
             self.assertTrue(data["column_widths"])
@@ -84,7 +100,8 @@ class CourseGeometryAppTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             instance = self.make_saving_app(directory, "1000x620+10+10")
             instance._save_settings()
-            instance.tree.column.return_value = 150  # an unrelated change forces a rewrite
+            instance._table.layout_state.return_value["column_widths"] = {
+                col: 150 for col in app.HEADERS}  # an unrelated change forces a rewrite
             instance._save_settings()
             data = json.loads(instance.settings_path.read_text(encoding="utf-8"))
             self.assertEqual(data["course_geometry"], "1000x620+10+10")
@@ -167,13 +184,10 @@ class AdvancedSearchGeometryAppTests(unittest.TestCase):
     def make_saving_app(self, directory, advanced_search_geometry):
         instance = object.__new__(app.LibraryApp)
         instance.settings_path = Path(directory) / "settings.json"
-        instance.tree = Mock()
         instance.cache_var = Mock(get=Mock(return_value="/cache"))
         instance.stats_var = Mock(get=Mock(return_value="/stats.xml"))
-        instance.column_order = list(app.HEADERS)
         instance.column_visibility = {col: Mock(get=Mock(return_value=True)) for col in app.HEADERS}
-        instance.tree.column.return_value = 100
-        instance.sort_keys = [("Pack", False)]
+        instance._table = _mock_table()
         instance.show_distribution_panel = Mock(get=Mock(return_value=False))
         instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
         instance.pack_var = Mock(get=Mock(return_value="All packs"))
@@ -294,11 +308,8 @@ class LibrarySnapshotTests(unittest.TestCase):
             instance = self.make_app(root / "settings.json", root / "Cache", root / "Stats.xml")
             instance._settings_store = library_data.SettingsStore(root / "settings.json")
             instance._settings_store.load()
-            instance.tree = Mock()
-            instance.tree.column.return_value = 100
-            instance.column_order = list(app.HEADERS)
             instance.column_visibility = {col: Mock(get=Mock(return_value=True)) for col in app.HEADERS}
-            instance.sort_keys = [("Pack", False)]
+            instance._table = _mock_table()
             instance.show_distribution_panel = Mock(get=Mock(return_value=True))
             instance.distribution_metric = Mock(get=Mock(return_value="Difficulty"))
 
@@ -345,83 +356,9 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance.refresh_table.assert_called_once()
 
 
-class FakeVariable:
-    """Stands in for a Tk BooleanVar so column logic can be tested without a window."""
-
-    def __init__(self, value=False):
-        self.value = value
-
-    def get(self):
-        return self.value
-
-    def set(self, value):
-        self.value = value
-
-
-class ColumnGroupTests(unittest.TestCase):
-    @staticmethod
-    def make_app(visible_columns):
-        instance = object.__new__(app.LibraryApp)
-        instance.column_order = list(app.HEADERS)
-        instance.column_visibility = {col: FakeVariable(col in visible_columns) for col in app.HEADERS}
-        instance.group_visibility = {group: FakeVariable() for group in app.COLUMN_GROUPS}
-        instance.default_column_widths = {}
-        instance.tree = Mock()
-        instance._save_settings = Mock()
-        instance._sync_group_checks()
-        return instance
-
-    @staticmethod
-    def shown(instance):
-        return {col for col, var in instance.column_visibility.items() if var.get()}
-
-    def test_every_column_is_in_exactly_one_group(self):
-        grouped = [column for columns in app.COLUMN_GROUPS.values() for column in columns]
-        self.assertEqual(sorted(grouped), sorted(app.HEADERS))
-
-    def test_groups_are_listed_in_menu_order(self):
-        self.assertEqual(list(app.COLUMN_GROUPS),
-                         ["Song & chart", "Score", "Tap judgments", "Chart counts", "Tech counts"])
-
-    def test_default_columns_are_song_and_chart_plus_score(self):
-        # Issue #49: Subtitle is the one exception — in "Song & chart" but
-        # hidden by default, while its group-mates default to shown.
-        expected = {*app.COLUMN_GROUPS["Song & chart"], *app.COLUMN_GROUPS["Score"]} - {"Subtitle"}
-        self.assertEqual(set(app.DEFAULT_VISIBLE_COLUMNS), expected)
-        self.assertNotIn("Subtitle", app.DEFAULT_VISIBLE_COLUMNS)
-        self.assertIn("Subtitle", app.COLUMN_GROUPS["Song & chart"])
-        self.assertTrue({"Title", "Artist", "Pack"} <= set(app.DEFAULT_VISIBLE_COLUMNS))
-
-    def test_group_check_is_on_only_when_the_whole_group_is_shown(self):
-        instance = self.make_app(app.DEFAULT_VISIBLE_COLUMNS)
-        self.assertTrue(instance.group_visibility["Score"].get())
-        self.assertFalse(instance.group_visibility["Tap judgments"].get())
-        instance.column_visibility["Grade"].set(False)
-        instance._column_visibility_changed("Grade")
-        self.assertFalse(instance.group_visibility["Score"].get())
-
-    def test_group_switch_shows_then_hides_a_whole_group_with_one_save(self):
-        instance = self.make_app(app.DEFAULT_VISIBLE_COLUMNS)
-        instance.group_visibility["Tap judgments"].set(True)  # what Tk does before calling the command
-        instance._group_visibility_changed("Tap judgments")
-        self.assertTrue(set(app.TAP_FIELDS) <= self.shown(instance))
-        instance.tree.configure.assert_called_once()
-        instance._save_settings.assert_called_once()
-
-        instance.group_visibility["Tap judgments"].set(False)
-        instance._group_visibility_changed("Tap judgments")
-        self.assertFalse(set(app.TAP_FIELDS) & self.shown(instance))
-        self.assertEqual(set(instance.tree.configure.call_args.kwargs["displaycolumns"]),
-                         set(app.DEFAULT_VISIBLE_COLUMNS))
-
-    def test_group_switch_cannot_hide_the_last_visible_columns(self):
-        instance = self.make_app(app.COLUMN_GROUPS["Score"])
-        instance.group_visibility["Score"].set(False)
-        instance._group_visibility_changed("Score")
-        self.assertEqual(self.shown(instance), set(app.COLUMN_GROUPS["Score"]))
-        self.assertTrue(instance.group_visibility["Score"].get())
-        instance.tree.configure.assert_not_called()
-        instance._save_settings.assert_not_called()
+class LiveSavedColumnOrderTests(unittest.TestCase):
+    """A saved column order from before Subtitle existed (issue #49):
+    live Tk, so these stay here — the windows-ui job runs this file."""
 
     def test_saved_order_without_subtitle_places_it_after_title(self):
         """Issue #49, Finding A: a saved column order from before Subtitle
@@ -441,9 +378,9 @@ class ColumnGroupTests(unittest.TestCase):
                 with patch.object(app.LibraryApp, "_settings_file_path",
                                  staticmethod(lambda: settings_path)):
                     application = app.LibraryApp(root)
-                self.assertEqual(application.column_order[0], "Title")
-                self.assertEqual(application.column_order[1], "Subtitle")
-                self.assertEqual(application.column_order[2:], saved[1:])
+                self.assertEqual(application._table.column_order[0], "Title")
+                self.assertEqual(application._table.column_order[1], "Subtitle")
+                self.assertEqual(application._table.column_order[2:], saved[1:])
         finally:
             root.destroy()
 
@@ -464,340 +401,9 @@ class ColumnGroupTests(unittest.TestCase):
                 with patch.object(app.LibraryApp, "_settings_file_path",
                                  staticmethod(lambda: settings_path)):
                     application = app.LibraryApp(root)
-                self.assertEqual(application.column_order, saved)
+                self.assertEqual(application._table.column_order, saved)
         finally:
             root.destroy()
-
-    def test_reset_column_layout_restores_the_default_columns(self):
-        instance = self.make_app(app.HEADERS)
-        instance.column_order = list(reversed(app.HEADERS))
-        instance.reset_column_layout()
-        self.assertEqual(self.shown(instance), set(app.DEFAULT_VISIBLE_COLUMNS))
-        self.assertEqual(instance.column_order, list(app.HEADERS))
-        self.assertEqual(instance.tree.configure.call_args.kwargs["displaycolumns"],
-                         [col for col in app.HEADERS if col in app.DEFAULT_VISIBLE_COLUMNS])
-        self.assertFalse(instance.group_visibility["Tech counts"].get())
-        # "Song & chart" reads unchecked after a reset: Subtitle belongs to
-        # the group but starts hidden (issue #49), so the group is never
-        # fully shown by default.
-        self.assertFalse(instance.group_visibility["Song & chart"].get())
-
-
-class ColumnDragTests(unittest.TestCase):
-    """Column drag reorder and the displayed-column helpers: which column a
-    heading position names, the screen span of a displayed column, and the
-    drag that reorders the columns and saves."""
-
-    COLUMNS = ["Title", "Artist", "Pack"]
-
-    @staticmethod
-    def make_app():
-        instance = object.__new__(app.LibraryApp)
-        instance.column_order = list(ColumnDragTests.COLUMNS)
-        instance.column_visibility = {
-            col: FakeVariable(True) for col in app.HEADERS}
-        instance.default_column_widths = {}
-        instance.tree = Mock()
-        instance.tree.identify_region.return_value = "heading"
-        # Each displayed column owns a 100px span: #1 is 0-99, #2 is
-        # 100-199, #3 is 200-299.
-        instance.tree.identify_column.side_effect = (
-            lambda x: "#1" if x < 100 else ("#2" if x < 200 else "#3"))
-        instance.tree.winfo_width.return_value = 300
-        instance._save_settings = Mock()
-        instance._dragged_column = None
-        instance._drag_start_x = None
-        return instance
-
-    @staticmethod
-    def event(x, y=10):
-        event = Mock()
-        event.x = x
-        event.y = y
-        return event
-
-    def test_displayed_column_at_returns_the_visible_column(self):
-        instance = self.make_app()
-        self.assertEqual(instance._displayed_column_at(150, 10), "Artist")
-
-    def test_displayed_column_at_returns_none_outside_the_heading(self):
-        instance = self.make_app()
-        instance.tree.identify_region.return_value = "cell"
-        self.assertIsNone(instance._displayed_column_at(150, 10))
-
-    def test_displayed_column_at_returns_none_for_an_unknown_column_id(self):
-        instance = self.make_app()
-        instance.tree.identify_column.side_effect = None
-        instance.tree.identify_column.return_value = "abc"
-        self.assertIsNone(instance._displayed_column_at(150, 10))
-
-    def test_displayed_column_at_returns_none_when_the_index_is_out_of_range(self):
-        instance = self.make_app()
-        instance.tree.identify_column.side_effect = None
-        instance.tree.identify_column.return_value = "#9"
-        self.assertIsNone(instance._displayed_column_at(150, 10))
-
-    def test_displayed_column_bounds_span_the_columns_screen_range(self):
-        instance = self.make_app()
-        self.assertEqual(instance._displayed_column_bounds(0), (0, 100))
-        self.assertEqual(instance._displayed_column_bounds(1), (100, 200))
-        self.assertEqual(instance._displayed_column_bounds(2), (200, 300))
-
-    def test_displayed_column_bounds_returns_none_with_no_match(self):
-        instance = self.make_app()
-        instance.tree.identify_column.side_effect = None
-        instance.tree.identify_column.return_value = "#9"
-        self.assertIsNone(instance._displayed_column_bounds(0))
-
-    def test_drag_start_records_the_column_and_position(self):
-        instance = self.make_app()
-
-        instance._column_drag_start(self.event(50))
-
-        self.assertEqual(instance._dragged_column, "Title")
-        self.assertEqual(instance._drag_start_x, 50)
-
-    def test_drag_start_outside_the_heading_clears_the_drag(self):
-        instance = self.make_app()
-        instance.tree.identify_region.return_value = "cell"
-
-        instance._column_drag_start(self.event(50))
-
-        self.assertIsNone(instance._dragged_column)
-        self.assertIsNone(instance._drag_start_x)
-
-    def test_drag_end_without_a_drag_does_nothing(self):
-        instance = self.make_app()
-
-        result = instance._column_drag_end(self.event(250))
-
-        self.assertIsNone(result)
-        instance.tree.configure.assert_not_called()
-        instance._save_settings.assert_not_called()
-
-    def test_drag_end_below_the_movement_threshold_does_nothing(self):
-        instance = self.make_app()
-        instance._dragged_column = "Title"
-        instance._drag_start_x = 50
-
-        result = instance._column_drag_end(self.event(53))
-
-        self.assertIsNone(result)
-        self.assertEqual(instance.column_order, self.COLUMNS)
-        instance._save_settings.assert_not_called()
-
-    def test_drag_end_on_the_same_column_does_nothing(self):
-        instance = self.make_app()
-        instance._dragged_column = "Title"
-        instance._drag_start_x = 50
-
-        result = instance._column_drag_end(self.event(55))
-
-        self.assertIsNone(result)
-        self.assertEqual(instance.column_order, self.COLUMNS)
-        instance._save_settings.assert_not_called()
-
-    def test_drag_end_on_no_column_does_nothing(self):
-        instance = self.make_app()
-        instance._dragged_column = "Title"
-        instance._drag_start_x = 50
-        instance.tree.identify_column.side_effect = None
-        instance.tree.identify_column.return_value = "#9"
-
-        result = instance._column_drag_end(self.event(250))
-
-        self.assertIsNone(result)
-        self.assertEqual(instance.column_order, self.COLUMNS)
-        instance._save_settings.assert_not_called()
-
-    def test_drag_right_past_the_midpoint_moves_the_column_after_its_target(self):
-        instance = self.make_app()
-        instance._dragged_column = "Title"
-        instance._drag_start_x = 50
-
-        result = instance._column_drag_end(self.event(250))
-
-        self.assertEqual(result, "break")
-        self.assertEqual(instance.column_order, ["Artist", "Pack", "Title"])
-        instance.tree.configure.assert_called_once_with(
-            displaycolumns=["Artist", "Pack", "Title"])
-        instance._save_settings.assert_called_once()
-
-    def test_drag_right_before_the_midpoint_moves_the_column_before_its_target(self):
-        instance = self.make_app()
-        instance._dragged_column = "Title"
-        instance._drag_start_x = 50
-
-        result = instance._column_drag_end(self.event(210))
-
-        self.assertEqual(result, "break")
-        self.assertEqual(instance.column_order, ["Artist", "Title", "Pack"])
-        instance.tree.configure.assert_called_once_with(
-            displaycolumns=["Artist", "Title", "Pack"])
-        instance._save_settings.assert_called_once()
-
-    def test_drag_left_moves_the_column_before_its_target(self):
-        instance = self.make_app()
-        instance._dragged_column = "Pack"
-        instance._drag_start_x = 250
-
-        result = instance._column_drag_end(self.event(50))
-
-        self.assertEqual(result, "break")
-        self.assertEqual(instance.column_order, ["Title", "Pack", "Artist"])
-        instance.tree.configure.assert_called_once_with(
-            displaycolumns=["Title", "Pack", "Artist"])
-        instance._save_settings.assert_called_once()
-
-
-class RowTintTests(unittest.TestCase):
-    # The tag rule, the tag setup, and the selection bookkeeping themselves are
-    # tested in test_row_tints.py; this class keeps the table-side wiring honest.
-    def test_insert_batch_tags_rows_by_difficulty_and_selection(self):
-        instance = object.__new__(app.LibraryApp)
-        instance.tree = Mock()
-        instance._render_generation = 1
-        instance.tree_item_rows = {}
-        instance.count_label = Mock()
-        instance._tree_tint = row_tints.SelectedRowTint(instance.tree)
-        instance.root = Mock()
-        instance.tree.insert.side_effect = ["item0", "item1", "item2"]
-        instance.search_var = _ValueVar("")
-        instance._filter = app.LibraryFilter(
-            instance.search_var, _ValueVar("All packs"), _ValueVar("All types"),
-            _ValueVar("All difficulties"), _ValueVar(False),
-            Mock(), Mock(), Mock(), Mock(), instance.root)
-
-        rows = [
-            {"Title": "Song A", "Difficulty": "Challenge", "Time": 120},
-            {"Title": "Song B", "Difficulty": "Hard", "Time": 90},
-            {"Title": "Song C", "Difficulty": "CustomUnknown", "Time": 60},
-        ]
-        # Song B is pre-selected
-        instance._loader = Mock(rows=rows)
-        instance._insert_batch(rows, 0, 1, selected_rows={id(rows[1])})
-
-        self.assertEqual(instance.tree.insert.call_count, 3)
-        # Song A: unselected Challenge
-        args0, kwargs0 = instance.tree.insert.call_args_list[0]
-        self.assertEqual(kwargs0.get("tags"), ("diff_Challenge",))
-        # Song B: selected Hard has selected_row tag
-        args1, kwargs1 = instance.tree.insert.call_args_list[1]
-        self.assertEqual(kwargs1.get("tags"), ("diff_Hard", "selected_row"))
-        # Song C: a difficulty name that is not in the theme gets the gray unknown tag
-        args2, kwargs2 = instance.tree.insert.call_args_list[2]
-        self.assertEqual(kwargs2.get("tags"), (row_tints.UNKNOWN_DIFFICULTY_TAG,))
-        # Only the pre-selected row is remembered as selected
-        self.assertEqual(instance._tree_tint.items, {"item1"})
-        instance.tree.selection_add.assert_called_once_with("item1")
-
-
-class SelectedRowsForCourseTests(unittest.TestCase):
-    def test_selected_rows_for_course_returns_rows_in_selection_order_and_skips_unknown_ids(self):
-        # The one seam between the table and the course builder: the dialog's queue is
-        # fed from here, so a break here would open the dialog empty.
-        instance = object.__new__(app.LibraryApp)
-        rows = {"item1": {"Title": "A"}, "item2": {"Title": "B"}}
-        instance.tree = Mock()
-        instance.tree.selection.return_value = ["item2", "gone", "item1"]
-        instance.tree_item_rows = rows
-
-        self.assertEqual(instance._selected_rows_for_course(), [rows["item2"], rows["item1"]])
-
-
-class LibraryRowsForCourseTests(unittest.TestCase):
-    def test_library_rows_for_course_returns_the_loaded_rows(self):
-        # The course builder's save-time ambiguity check compares its queue against
-        # this list, so it must be the app's current rows, not a snapshot copy.
-        instance = object.__new__(app.LibraryApp)
-        instance._loader = Mock(rows=[{"Title": "A"}, {"Title": "B"}])
-
-        self.assertIs(instance._library_rows_for_course(), instance._loader.rows)
-
-class InsertBatchProgressTests(unittest.TestCase):
-    """_insert_batch fills the table in time-boxed batches, and the count
-    label tells the truth while it does (startup polish)."""
-
-    @staticmethod
-    def make_instance(row_count=3):
-        instance = object.__new__(app.LibraryApp)
-        instance.tree = Mock()
-        instance.tree.insert.side_effect = [f"item{i}" for i in range(row_count)]
-        instance._render_generation = 1
-        instance.tree_item_rows = {}
-        instance.count_label = Mock()
-        instance._tree_tint = row_tints.SelectedRowTint(instance.tree)
-        instance.root = Mock()
-        rows = [{"Title": f"Song {i}", "Difficulty": "Hard", "Time": 60} for i in range(row_count)]
-        instance._loader = Mock(rows=rows)
-        instance.search_var = _ValueVar("")
-        instance._filter = app.LibraryFilter(
-            instance.search_var, _ValueVar("All packs"), _ValueVar("All types"),
-            _ValueVar("All difficulties"), _ValueVar(False),
-            Mock(), Mock(), Mock(), Mock(), instance.root)
-        return instance, rows
-
-    def test_a_zero_budget_inserts_one_row_and_reports_progress(self):
-        instance, rows = self.make_instance()
-        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 0):
-            instance._insert_batch(rows, 0, 1)
-        self.assertEqual(instance.tree.insert.call_count, 1)
-        instance.count_label.set.assert_called_once_with("Loading 1 of 3 charts…")
-        instance.root.after.assert_called_once()
-        # The scheduled continuation finishes the job and sets the final totals.
-        continuation = instance.root.after.call_args.args[1]
-        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
-            continuation()
-        self.assertEqual(instance.tree.insert.call_count, 3)
-        instance.count_label.set.assert_called_with("3 charts shown · 3 total")
-
-    def test_a_generous_budget_inserts_everything_in_one_batch(self):
-        instance, rows = self.make_instance()
-        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
-            instance._insert_batch(rows, 0, 1)
-        self.assertEqual(instance.tree.insert.call_count, 3)
-        instance.count_label.set.assert_called_once_with("3 charts shown · 3 total")
-        instance.root.after.assert_not_called()
-
-    def test_non_finite_time_values_insert_as_blank_instead_of_crashing(self):
-        # Issue #123: a snapshot row whose Time is "nan" or "1e999" used to
-        # raise inside _insert_batch; now the cell is blank and the batch lands.
-        instance, _rows = self.make_instance()
-        instance._loader.rows = [
-            {"Title": "Song A", "Difficulty": "Hard", "Time": "nan"},
-            {"Title": "Song B", "Difficulty": "Hard", "Time": "1e999"},
-            {"Title": "Song C", "Difficulty": "Hard", "Time": 120},
-        ]
-        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
-            instance._insert_batch(instance._loader.rows, 0, 1)
-        self.assertEqual(instance.tree.insert.call_count, 3)
-        time_index = list(app.HEADERS).index("Time")
-        inserted = [kwargs["values"][time_index]
-                    for _args, kwargs in instance.tree.insert.call_args_list]
-        self.assertEqual(inserted, ["", "", "2:00"])
-
-    def test_count_line_names_an_unreadable_filter_value(self):
-        instance, rows = self.make_instance()
-        instance.search_var.set("meter:abc")
-        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
-            instance._insert_batch(rows, 0, 1)
-        instance.count_label.set.assert_called_once_with(
-            "3 charts shown · 3 total — Can't read the value in meter:abc")
-
-    def test_count_line_names_an_unreadable_grade_value(self):
-        instance, rows = self.make_instance()
-        instance.search_var.set("grade:banana")
-        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
-            instance._insert_batch(rows, 0, 1)
-        instance.count_label.set.assert_called_once_with(
-            "3 charts shown · 3 total — Can't read the value in grade:banana")
-
-    def test_count_line_stays_plain_for_a_readable_filter(self):
-        instance, rows = self.make_instance()
-        instance.search_var.set("meter:11")
-        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
-            instance._insert_batch(rows, 0, 1)
-        instance.count_label.set.assert_called_once_with("3 charts shown · 3 total")
 
 
 class _ValueVar:
@@ -869,11 +475,8 @@ class FilterPersistenceTests(unittest.TestCase):
         instance.cache_var = Mock(get=Mock(return_value="cache"))
         instance.stats_var = Mock(get=Mock(return_value="stats"))
         instance.search_var = _ValueVar("distinctive-search-text")
-        instance.tree = Mock()
-        instance.tree.column.return_value = 100
-        instance.column_order = list(app.HEADERS)
         instance.column_visibility = {column: Mock(get=Mock(return_value=True)) for column in app.HEADERS}
-        instance.sort_keys = [("Pack", False)]
+        instance._table = _mock_table()
         instance.show_distribution_panel = Mock(get=Mock(return_value=False))
         instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
         instance.course_geometry = None
@@ -914,63 +517,6 @@ class FilterPersistenceTests(unittest.TestCase):
 
 
 
-class RefreshDeliversRowsTests(unittest.TestCase):
-    """refresh_table delivers the filtered rows to the table and the panel:
-    the wiring a load (and later set_rows) must preserve, so a forgotten
-    refresh leaves the table visibly empty instead of silently stale."""
-
-    @staticmethod
-    def make_instance():
-        instance = object.__new__(app.LibraryApp)
-        instance.tree = Mock()
-        instance.tree.insert.side_effect = ["item0", "item1"]
-        instance.tree.get_children.return_value = []
-        instance._render_generation = 1
-        instance.tree_item_rows = {}
-        instance.count_label = Mock()
-        instance._tree_tint = row_tints.SelectedRowTint(instance.tree)
-        instance.root = Mock()
-        instance.distribution_panel = Mock()
-        instance.search_var = _ValueVar("")
-        instance.pack_var = _ValueVar("All packs")
-        instance.type_var = _ValueVar("All types")
-        instance.diff_var = _ValueVar("All difficulties")
-        instance.scored_var = _ValueVar(False)
-        instance.search_entry = Mock()
-        instance.pack_filter = Mock()
-        instance.type_filter = Mock()
-        instance.diff_filter = Mock()
-        instance.sort_keys = []
-        instance._loader = Mock(rows=[
-            {"Title": "Song A", "Pack": "Pack1", "Type": "dance-single",
-             "Difficulty": "Hard", "Grade": "AAA", "Meter": 10, "Time": 60},
-            {"Title": "Song B", "Pack": "Pack2", "Type": "dance-double",
-             "Difficulty": "Challenge", "Grade": "", "Meter": 12,
-             "Time": 90},
-        ])
-        instance._filter = app.LibraryFilter(
-            instance.search_var, instance.pack_var, instance.type_var,
-            instance.diff_var, instance.scored_var,
-            instance.search_entry, instance.pack_filter,
-            instance.type_filter, instance.diff_filter, instance.root)
-        instance._filter.set_rows(instance._loader.rows)
-        instance._filter.subscribe(instance.refresh_table)
-        return instance
-
-    def test_refresh_table_inserts_the_rows_and_pushes_them_to_the_panel(self):
-        instance = self.make_instance()
-        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
-            instance.refresh_table()
-
-        self.assertEqual(instance.tree.insert.call_count, 2)
-        title_index = list(app.HEADERS).index("Title")
-        inserted = [kwargs["values"][title_index]
-                    for _args, kwargs in instance.tree.insert.call_args_list]
-        self.assertEqual(inserted, ["Song A", "Song B"])
-        instance.distribution_panel.show_rows.assert_called_once_with(
-            instance._loader.rows)
-        instance.count_label.set.assert_called_once_with(
-            "2 charts shown · 2 total")
 
 
 
@@ -1103,7 +649,7 @@ class LiveDiscardedSettingsTests(unittest.TestCase):
         application = app.LibraryApp(root)
         # The snapshot load owns the status line while it runs.
         self.assertEqual(application.status.get(), "Loading saved library…")
-        self.pump_until(root, lambda: len(application.tree.get_children()) >= 3)
+        self.pump_until(root, lambda: len(application._table.tree.get_children()) >= 3)
         self.assertTrue(application.status.get().startswith("Showing saved library snapshot"))
         self.assertIn("Settings file could not be read", application.status.get())
 
@@ -1148,12 +694,12 @@ class LiveStartupSnapshotTests(unittest.TestCase):
         self.assertEqual(application.status.get(), "Loading saved library…")
         # Pump the event loop until the deferred load lands and the rows fill in.
         deadline = time.monotonic() + 10
-        while len(application.tree.get_children()) < 3 and time.monotonic() < deadline:
+        while len(application._table.tree.get_children()) < 3 and time.monotonic() < deadline:
             root.update()
             time.sleep(0.02)
         self.assertEqual(len(application._loader.rows), 3)
         self.assertTrue(application.status.get().startswith("Showing saved library snapshot"))
-        self.assertEqual(len(application.tree.get_children()), 3)
+        self.assertEqual(len(application._table.tree.get_children()), 3)
 
     def test_moved_cache_folder_is_noted_on_the_status_line(self):
         if app.tk is None:
@@ -1189,7 +735,7 @@ class LiveStartupSnapshotTests(unittest.TestCase):
 
         application = app.LibraryApp(root)
         deadline = time.monotonic() + 10
-        while len(application.tree.get_children()) < 3 and time.monotonic() < deadline:
+        while len(application._table.tree.get_children()) < 3 and time.monotonic() < deadline:
             root.update()
             time.sleep(0.02)
         self.assertEqual(len(application._loader.rows), 3)
@@ -1502,7 +1048,7 @@ class LiveFilterPersistenceTests(unittest.TestCase):
         self.assertEqual(application.diff_var.get(), "Challenge")
 
         self.pump_until(root, lambda: len(application._loader.rows) == 4)
-        self.pump_until(root, lambda: len(application.tree.get_children()) >= 1)
+        self.pump_until(root, lambda: len(application._table.tree.get_children()) >= 1)
         for _ in range(10):
             root.update()
 
@@ -1511,7 +1057,7 @@ class LiveFilterPersistenceTests(unittest.TestCase):
         self.assertEqual(application.pack_var.get(), "P2")
         self.assertEqual(application.type_var.get(), "dance-single")
         self.assertEqual(application.diff_var.get(), "Challenge")
-        self.assertEqual(len(application.tree.get_children()), 1)
+        self.assertEqual(len(application._table.tree.get_children()), 1)
 
     def test_non_string_saved_filters_fall_back_at_startup(self):
         settings_path = self.prepare_library(
@@ -1532,7 +1078,7 @@ class LiveFilterPersistenceTests(unittest.TestCase):
         )
         root = self.make_root()
         application = self.construct(root, settings_path)
-        self.pump_until(root, lambda: len(application.tree.get_children()) >= 2)
+        self.pump_until(root, lambda: len(application._table.tree.get_children()) >= 2)
 
         def pump(turns=5):
             for _ in range(turns):
@@ -1687,22 +1233,22 @@ class LiveSelectAllTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         application = app.LibraryApp(root)
-        self.pump_until(root, lambda: len(application.tree.get_children()) == 3)
-        children = application.tree.get_children()
+        self.pump_until(root, lambda: len(application._table.tree.get_children()) == 3)
+        children = application._table.tree.get_children()
         self.assertEqual(len(children), 3)
-        self.assertEqual(application.tree.selection(), ())
+        self.assertEqual(application._table.tree.selection(), ())
 
-        application.tree.focus_force()
+        application._table.tree.focus_force()
         for _ in range(5):
             root.update()
-        application.tree.event_generate("<Control-a>", when="now")
+        application._table.tree.event_generate("<Control-a>", when="now")
         # The selection itself lands synchronously in the handler; the
         # tint follows through the <<TreeviewSelect>> event, so pump
         # until the tracker has caught up.
-        self.pump_until(root, lambda: application._tree_tint.items == set(children))
+        self.pump_until(root, lambda: application._table._tree_tint.items == set(children))
 
-        self.assertEqual(set(application.tree.selection()), set(children))
-        self.assertEqual(application._tree_tint.items, set(children))
+        self.assertEqual(set(application._table.tree.selection()), set(children))
+        self.assertEqual(application._table._tree_tint.items, set(children))
 
 
 class CourseReloadNotificationTests(unittest.TestCase):
@@ -1712,6 +1258,7 @@ class CourseReloadNotificationTests(unittest.TestCase):
         instance.load_button = Mock()
         instance.progress = Mock()
         instance._filter = MagicMock()
+        instance._table = Mock()
         instance.pack_filter = Mock()
         instance.type_filter = Mock()
         instance.diff_filter = Mock()
@@ -1865,11 +1412,11 @@ class DialogKeyBindingTests(unittest.TestCase):
     def test_select_all_rows_selects_exactly_the_displayed_rows(self):
         # Issue #36's headless pin: the handler selects the tree's
         # current children — the filtered set — in one selection_set.
-        instance = object.__new__(app.LibraryApp)
-        instance.tree = Mock()
-        instance.tree.get_children.return_value = ("row1", "row2", "row3")
-        instance._select_all_rows()
-        instance.tree.selection_set.assert_called_once_with(("row1", "row2", "row3"))
+        table = object.__new__(app.LibraryTable)
+        table.tree = Mock()
+        table.tree.get_children.return_value = ("row1", "row2", "row3")
+        table._select_all_rows()
+        table.tree.selection_set.assert_called_once_with(("row1", "row2", "row3"))
 
     def test_live_app_constructs_the_advanced_search_component_with_its_search_variable(self):
         # Proposal 0004's wiring guard: all five constructor inputs are required, so a
@@ -1956,13 +1503,10 @@ class PerformanceAndExportTests(unittest.TestCase):
             settings_path = Path(directory) / "settings.json"
             instance = object.__new__(app.LibraryApp)
             instance.settings_path = settings_path
-            instance.tree = Mock()
             instance.cache_var = Mock(get=Mock(return_value="/cache"))
             instance.stats_var = Mock(get=Mock(return_value="/stats.xml"))
-            instance.column_order = list(app.HEADERS)
             instance.column_visibility = {col: Mock(get=Mock(return_value=True)) for col in app.HEADERS}
-            instance.tree.column.return_value = 100
-            instance.sort_keys = [("Pack", False)]
+            instance._table = _mock_table()
             instance.show_distribution_panel = Mock(get=Mock(return_value=False))
             instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
             instance.pack_var = Mock(get=Mock(return_value="All packs"))
@@ -1985,7 +1529,8 @@ class PerformanceAndExportTests(unittest.TestCase):
             self.assertEqual(settings_path.stat().st_mtime_ns, first_mtime)
 
             # Changing a column width causes it to save
-            instance.tree.column.return_value = 150
+            instance._table.layout_state.return_value["column_widths"] = {
+                col: 150 for col in app.HEADERS}
             instance._save_settings()
             data = json.loads(settings_path.read_text(encoding="utf-8"))
             self.assertEqual(data["column_widths"]["Pack"], 150)
@@ -2000,13 +1545,10 @@ class PerformanceAndExportTests(unittest.TestCase):
             settings_path = Path(directory) / "settings.json"
             instance = object.__new__(app.LibraryApp)
             instance.settings_path = settings_path
-            instance.tree = Mock()
             instance.cache_var = Mock(get=Mock(return_value="/cache"))
             instance.stats_var = Mock(get=Mock(return_value="/stats.xml"))
-            instance.column_order = list(app.HEADERS)
             instance.column_visibility = {col: Mock(get=Mock(return_value=True)) for col in app.HEADERS}
-            instance.tree.column.return_value = 100
-            instance.sort_keys = [("Pack", False)]
+            instance._table = _mock_table()
             instance.show_distribution_panel = Mock(get=Mock(return_value=False))
             instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
             instance.pack_var = Mock(get=Mock(return_value="All packs"))
@@ -2030,13 +1572,10 @@ class PerformanceAndExportTests(unittest.TestCase):
             settings_path = Path(directory) / "settings.json"
             instance = object.__new__(app.LibraryApp)
             instance.settings_path = settings_path
-            instance.tree = Mock()
             instance.cache_var = Mock(get=Mock(return_value="/cache"))
             instance.stats_var = Mock(get=Mock(return_value="/stats.xml"))
-            instance.column_order = list(app.HEADERS)
             instance.column_visibility = {col: Mock(get=Mock(return_value=True)) for col in app.HEADERS}
-            instance.tree.column.return_value = 100
-            instance.sort_keys = [("Pack", False)]
+            instance._table = _mock_table()
             instance.show_distribution_panel = Mock(get=Mock(return_value=False))
             instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
             instance.pack_var = Mock(get=Mock(return_value="All packs"))
@@ -2054,12 +1593,13 @@ class PerformanceAndExportTests(unittest.TestCase):
 
             # The column drag handler mutates column_order in place (remove/insert) and then saves;
             # the new order must reach disk even though nothing was reassigned.
-            instance.column_order.remove("Meter")
-            instance.column_order.insert(0, "Meter")
+            order = instance._table.layout_state.return_value["column_order"]
+            order.remove("Meter")
+            order.insert(0, "Meter")
             instance._save_settings()
 
             data = json.loads(settings_path.read_text(encoding="utf-8"))
-            self.assertEqual(data["column_order"], instance.column_order)
+            self.assertEqual(data["column_order"], order)
             self.assertEqual(data["column_order"][0], "Meter")
 
     def test_export_csv_handles_unwritable_file_error(self):
@@ -2105,81 +1645,6 @@ class PerformanceAndExportTests(unittest.TestCase):
             self.assertIn("Exported 1 charts", instance.status.set.call_args[0][0])
 
 
-class RebindingHazardTests(unittest.TestCase):
-    """The sort/column rebinding hazard (proposal 0009, Claude's review):
-    sort_by rebinds self.sort_keys and reset_column_layout rebinds
-    self.column_order, so the state _save_settings persists must be the
-    table's own state after the gesture — a shared-input design would go
-    stale here. These pins say what reaches disk."""
-
-    @staticmethod
-    def make_save_instance(settings_path):
-        instance = object.__new__(app.LibraryApp)
-        instance.settings_path = settings_path
-        instance.tree = Mock()
-        instance.tree.column.return_value = 100
-        instance.cache_var = Mock(get=Mock(return_value="/cache"))
-        instance.stats_var = Mock(get=Mock(return_value="/stats.xml"))
-        instance.column_order = list(app.HEADERS)
-        instance.column_visibility = {
-            col: Mock(get=Mock(return_value=True)) for col in app.HEADERS}
-        instance.group_visibility = {
-            group: FakeVariable() for group in app.COLUMN_GROUPS}
-        instance.default_column_widths = {
-            col: 100 for col in app.HEADERS}
-        instance.sort_keys = [("Pack", False)]
-        instance.show_distribution_panel = Mock(
-            get=Mock(return_value=False))
-        instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
-        instance.pack_var = Mock(get=Mock(return_value="All packs"))
-        instance.type_var = Mock(get=Mock(return_value="All types"))
-        instance.diff_var = Mock(get=Mock(return_value="All difficulties"))
-        instance.course_geometry = None
-        instance.advanced_search_geometry = None
-        instance._settings_store = library_data.SettingsStore(settings_path)
-        instance._settings_store.load()
-        instance.status = Mock()
-        return instance
-
-    @staticmethod
-    def saved(settings_path):
-        return json.loads(settings_path.read_text(encoding="utf-8"))
-
-    def test_sort_by_a_new_column_persists_the_new_sort(self):
-        with tempfile.TemporaryDirectory() as directory:
-            settings_path = Path(directory) / "settings.json"
-            instance = self.make_save_instance(settings_path)
-            instance.refresh_table = Mock()
-
-            instance.sort_by("Title")
-
-            instance.refresh_table.assert_called_once_with(
-                preserve_selection=True)
-            self.assertEqual(self.saved(settings_path)["sort_keys"],
-                             [["Title", False]])
-
-    def test_sort_by_the_current_first_column_toggles_and_persists(self):
-        with tempfile.TemporaryDirectory() as directory:
-            settings_path = Path(directory) / "settings.json"
-            instance = self.make_save_instance(settings_path)
-            instance.sort_keys = [("Title", False)]
-            instance.refresh_table = Mock()
-
-            instance.sort_by("Title")
-
-            self.assertEqual(self.saved(settings_path)["sort_keys"],
-                             [["Title", True]])
-
-    def test_reset_column_layout_persists_the_restored_order(self):
-        with tempfile.TemporaryDirectory() as directory:
-            settings_path = Path(directory) / "settings.json"
-            instance = self.make_save_instance(settings_path)
-            instance.column_order = list(reversed(app.HEADERS))
-
-            instance.reset_column_layout()
-
-            self.assertEqual(self.saved(settings_path)["column_order"],
-                             list(app.HEADERS))
 
 
 class LibraryAppExitTests(unittest.TestCase):
@@ -2257,7 +1722,7 @@ class LiveDpiScaleTests(unittest.TestCase):
             self.assertEqual(root.minsize(),
                              (library_data.scale_pixels(theme.WINDOW_MIN_SIZE[0], factor),
                               library_data.scale_pixels(theme.WINDOW_MIN_SIZE[1], factor)))
-            self.assertEqual(application.tree.column("Title", "width"),
+            self.assertEqual(application._table.tree.column("Title", "width"),
                              library_data.scale_pixels(130, factor))
         finally:
             root.destroy()

@@ -37,6 +37,29 @@ RADAR_COUNT_FIELDS = {
     "taps": "Taps/Holds",
 }
 TAP_FIELDS = ("W1", "W2", "W3", "W4", "W5", "Miss")
+
+HEADERS = ("Title", "Subtitle", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart", "Score",
+           "Grade", "Best %", "Plays", "Last played", "Peak NPS", "Taps/Holds", "Jumps",
+           "Holds", "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4", "W5",
+           "Miss", "Max combo", *TECH_FIELDS)
+NUMERIC_COLUMNS = {"Meter", "Time", "Score", "Best %", "Plays", "Peak NPS", "Taps/Holds", "Jumps",
+                   "Holds", "Rolls", "Mines", "Hands", "Lifts", "W1", "W2", "W3", "W4",
+                   "W5", "Miss", "Max combo", *TECH_FIELDS}
+# The groups shown under View > Columns, in menu order. Every column in HEADERS belongs to exactly one group.
+COLUMN_GROUPS = {
+    "Song & chart": ("Title", "Subtitle", "Artist", "Pack", "Type", "Difficulty", "Meter", "Time", "BPM", "Chart"),
+    "Score": ("Score", "Grade", "Best %", "Plays", "Last played", "Max combo"),
+    "Tap judgments": TAP_FIELDS,
+    "Chart counts": ("Peak NPS", "Taps/Holds", "Jumps", "Holds", "Rolls", "Mines", "Hands", "Lifts"),
+    "Tech counts": TECH_FIELDS,
+}
+# Groups whose columns are shown on a fresh install and after "Reset column layout".
+DEFAULT_VISIBLE_GROUPS = ("Song & chart", "Score")
+# Subtitle is the one exception to the rule that every column of a default
+# group starts shown: it belongs to "Song & chart" but starts hidden
+# (issue #49, option B), opt-in via View -> Columns.
+DEFAULT_VISIBLE_COLUMNS = frozenset(
+    column for group in DEFAULT_VISIBLE_GROUPS for column in COLUMN_GROUPS[group]) - {"Subtitle"}
 GRADE_NAMES = {
     "Tier01": "★★★★", "Tier02": "★★★", "Tier03": "★★", "Tier04": "★",
     "Tier05": "S+", "Tier06": "S", "Tier07": "S-", "Tier08": "A+",
@@ -51,11 +74,16 @@ COURSE_UNSAFE_CHARS = (";", ":", "\r", "\n")
 
 __all__ = [
     "CHART_FILTER_FIELDS",
+    "COLUMN_GROUPS",
     "COURSE_UNSAFE_CHARS",
+    "DEFAULT_VISIBLE_COLUMNS",
+    "DEFAULT_VISIBLE_GROUPS",
     "DIFFICULTY_ORDER",
     "GRADE_NAMES",
     "GRADE_OPTIONS",
+    "HEADERS",
     "LIBRARY_CACHE_SCHEMA_VERSION",
+    "NUMERIC_COLUMNS",
     "NUMERIC_SEARCH_FIELDS",
     "RADAR_COUNT_FIELDS",
     "RADAR_FIELDS",
