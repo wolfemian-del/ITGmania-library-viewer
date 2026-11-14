@@ -43,6 +43,7 @@ class _ValueVar:
     def __init__(self, value, on_set=None):
         self.value = value
         self.on_set = on_set
+        self._traces = []
 
     def get(self):
         return self.value
@@ -51,6 +52,13 @@ class _ValueVar:
         self.value = value
         if self.on_set is not None:
             self.on_set()
+        for callback in self._traces:
+            callback()
+
+    def trace_add(self, mode, callback):
+        """Record a write-trace callback, like tk.Variable.trace_add; set() fires it."""
+        self._traces.append(callback)
+        return f"trace-{len(self._traces)}"
 
 
 class LibrarySnapshotTests(unittest.TestCase):
@@ -924,6 +932,58 @@ class ScoresSyncTests(unittest.TestCase):
             self.assertEqual(kwargs["generation"], 1)
             self.assertTrue(kwargs["refreshed_at"])
 
+    def test_sync_keeps_the_filter_on_the_loaders_rows(self):
+        """Claude, PR #167 review, finding 1 (option A): the sync path
+        relies on the filter and the loader holding the same rows list
+        (Resolution 3). A real merge_scores plus the real
+        _on_library_changed(rows, True) must leave the filter's rows
+        identical to the loader's, and the scored-only filter must see
+        the chart the sync just scored."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir, stats_file = self._write_song(root)
+            # No scores yet: the chart parses unscored.
+            stats_file.write_text("<Stats/>", encoding="utf-8")
+            rows, _ = library_data.parse_cache_file(
+                cache_dir / "song.cache",
+                library_data.stats_index(stats_file))
+            self.assertEqual(rows[0]["Grade"], "")
+            self._fresh_stats(stats_file)
+            # A bare app with a real filter, wired to a loader holding
+            # the same rows — the load path's set_rows put them there.
+            instance = LoadDeliversRowsTests.make_instance()
+            instance.load_button = Mock()
+            instance.progress = Mock()
+            instance.pack_filter = Mock()
+            instance.type_filter = Mock()
+            instance.diff_filter = Mock()
+            instance.search_entry = Mock()
+            instance.status = Mock()
+            instance.course_builder = None
+            instance.tree.selection.return_value = []
+            instance._filter = app.LibraryFilter(
+                instance.search_var, instance.pack_var, instance.type_var,
+                instance.diff_var, instance.scored_var,
+                instance.search_entry, instance.pack_filter,
+                instance.type_filter, instance.diff_filter, instance.root)
+            instance._filter.set_rows(rows)
+            instance._filter.subscribe(instance.refresh_table)
+            loaded = _make_wired_loader(instance)
+            loaded.rows = rows
+            # Scored-only shows nothing before the sync: the chart has
+            # no grade yet.
+            instance.scored_var.set(True)
+            self.assertEqual(instance._filter.filter_rows(), [])
+            # The real merge, then the real sync branch of the handoff.
+            changed = library_data.merge_scores(
+                rows, library_data.stats_index(stats_file))
+            self.assertEqual(changed, 1)
+            instance._on_library_changed(rows, True)
+            # The filter still holds the loader's list, and the
+            # scored-only filter now sees the chart the sync scored.
+            self.assertIs(instance._filter._rows, loaded.rows)
+            self.assertEqual(instance._filter.filter_rows(), rows)
+
     def test_sync_worker_superseded_does_not_save_or_deliver(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1549,14 +1609,21 @@ class LoaderFilterPersistenceTests(unittest.TestCase):
         instance.pack_filter = Mock()
         instance.type_filter = Mock()
         instance.diff_filter = Mock()
-        instance._batched_filter_changes = app.LibraryApp._batched_filter_changes.__get__(instance)
-        instance._batching_filter_changes = False
-        instance._refresh_unless_batching = app.LibraryApp._refresh_unless_batching.__get__(instance)
-        # Tk would run the write traces on each set; simulate them the way
-        # the long-standing _loaded pinning test does.
-        instance.pack_var = _ValueVar(pack, on_set=instance._refresh_unless_batching)
-        instance.type_var = _ValueVar(type_, on_set=instance._refresh_unless_batching)
-        instance.diff_var = _ValueVar(difficulty, on_set=instance._refresh_unless_batching)
+        instance.search_entry = Mock()
+        instance.root = Mock()
+        instance.search_var = _ValueVar("")
+        instance.pack_var = _ValueVar(pack)
+        instance.type_var = _ValueVar(type_)
+        instance.diff_var = _ValueVar(difficulty)
+        instance.scored_var = _ValueVar(False)
+        # The real filter, built from the app's variables the way _build
+        # builds it; it installs the variable traces itself.
+        instance._filter = app.LibraryFilter(
+            instance.search_var, instance.pack_var, instance.type_var,
+            instance.diff_var, instance.scored_var,
+            instance.search_entry, instance.pack_filter,
+            instance.type_filter, instance.diff_filter, instance.root)
+        instance._filter.subscribe(instance.refresh_table)
         instance.course_builder = None
         return instance
 
@@ -1628,6 +1695,10 @@ class LoaderFilterPersistenceTests(unittest.TestCase):
         instance.refresh_table.assert_called_once()
 
     def test_successive_loads_keep_a_selection_then_fall_back(self):
+        """ChatGPT-6, PR #167 follow-up: a successor load that skipped
+        the filter's row handoff (while still resetting the dropdown
+        choices) passed this test, because it only checked dropdown
+        persistence. Each load must put its own rows in the filter."""
         instance = self.make_loaded_instance()
         loaded = _make_wired_loader(instance)
         first = self.rows(("Pack1", "dance-single", "Hard"), ("Pack2", "dance-single", "Hard"))
@@ -1637,10 +1708,12 @@ class LoaderFilterPersistenceTests(unittest.TestCase):
         second = self.rows(("Pack2", "dance-single", "Hard"), ("Pack3", "dance-single", "Hard"))
         loaded._loaded(second, len(second), from_cache=True, refreshed_at="2026-01-01T00:00:00")
         self.assertEqual(instance.pack_var.get(), "Pack2")
+        self.assertIs(instance._filter._rows, second)
 
         third = self.rows(("Pack3", "dance-single", "Hard"))
         loaded._loaded(third, len(third), from_cache=True, refreshed_at="2026-01-01T00:00:00")
         self.assertEqual(instance.pack_var.get(), "All packs")
+        self.assertIs(instance._filter._rows, third)
 
     def test_fallback_replaces_the_stored_value_on_the_next_save(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1652,8 +1725,7 @@ class LoaderFilterPersistenceTests(unittest.TestCase):
             instance.settings_path = settings_path
             instance._settings_store = library_data.SettingsStore(settings_path)
             seeded = instance._settings_store.load()
-            instance.pack_var = _ValueVar(seeded.get("filter_pack", "All packs"),
-                                          on_set=instance._refresh_unless_batching)
+            instance.pack_var.set(seeded.get("filter_pack", "All packs"))
             rows = self.rows(("Pack1", "dance-single", "Hard"))
             loaded = _make_wired_loader(instance)
             loaded._loaded(rows, len(rows), from_cache=True, refreshed_at="2026-01-01T00:00:00")
@@ -1731,24 +1803,36 @@ class LoadDeliversRowsTests(unittest.TestCase):
         instance.pack_filter = Mock()
         instance.type_filter = Mock()
         instance.diff_filter = Mock()
+        instance.search_entry = Mock()
         instance.status = Mock()
         instance.course_builder = None
-        instance._batched_filter_changes = (
-            app.LibraryApp._batched_filter_changes.__get__(instance))
-        instance._batching_filter_changes = False
-        instance._search_refresh_after_id = None
+        instance._filter = app.LibraryFilter(
+            instance.search_var, instance.pack_var, instance.type_var,
+            instance.diff_var, instance.scored_var,
+            instance.search_entry, instance.pack_filter,
+            instance.type_filter, instance.diff_filter, instance.root)
+        # The rows are set before subscribing, so the setup itself does
+        # not refresh; the load's batch exit is the refresh the test pins.
+        instance._filter.set_rows(instance.rows)
+        instance._filter.subscribe(instance.refresh_table)
         loaded = _make_wired_loader(instance)
 
+        # Deliver fresh copies, not the list the setup seeded: only a real
+        # set_rows in the load path puts these rows in the filter (GLM,
+        # PR #167 review). The identity assertion below is the pin — the
+        # titles and counts are the same either way.
+        delivered = [dict(row) for row in instance.rows]
         with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
-            loaded._loaded(instance.rows, 2)
+            loaded._loaded(delivered, 2)
 
+        self.assertIs(instance._filter._rows, delivered)
         self.assertEqual(instance.tree.insert.call_count, 2)
         title_index = list(app.HEADERS).index("Title")
         inserted = [kwargs["values"][title_index]
                     for _args, kwargs in instance.tree.insert.call_args_list]
         self.assertEqual(inserted, ["Song A", "Song B"])
         instance.distribution_panel.show_rows.assert_called_once_with(
-            instance.rows)
+            delivered)
         instance.count_label.set.assert_called_once_with(
             "2 charts shown · 2 total")
 
@@ -1770,15 +1854,23 @@ class LoadBatchesFilterChangesTests(unittest.TestCase):
         instance.pack_var = Mock()
         instance.type_var = Mock()
         instance.diff_var = Mock()
-        instance._batched_filter_changes = app.LibraryApp._batched_filter_changes.__get__(instance)
-        instance._batching_filter_changes = False
+        instance.search_var = Mock()
+        instance.scored_var = Mock()
+        instance.search_entry = Mock()
+        instance.root = Mock()
+        instance._filter = app.LibraryFilter(
+            instance.search_var, instance.pack_var, instance.type_var,
+            instance.diff_var, instance.scored_var,
+            instance.search_entry, instance.pack_filter,
+            instance.type_filter, instance.diff_filter, instance.root)
+        instance._filter.subscribe(instance.refresh_table)
         instance.course_builder = None  # declared in __init__ since the split; this fake predates it
         # Tk would run the write traces on each set; simulate them the way
         # the long-standing _loaded pinning test does.
-        instance._refresh_unless_batching = app.LibraryApp._refresh_unless_batching.__get__(instance)
-        instance.diff_var.set.side_effect = lambda *args: instance._refresh_unless_batching()
-        instance.pack_var.set.side_effect = lambda *args: instance._refresh_unless_batching()
-        instance.type_var.set.side_effect = lambda *args: instance._refresh_unless_batching()
+        refresh = instance._filter._refresh_unless_batching
+        instance.diff_var.set.side_effect = lambda *args: refresh()
+        instance.pack_var.set.side_effect = lambda *args: refresh()
+        instance.type_var.set.side_effect = lambda *args: refresh()
         loaded = _make_wired_loader(instance)
 
         rows = [

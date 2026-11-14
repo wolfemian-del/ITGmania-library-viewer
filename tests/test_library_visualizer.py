@@ -316,12 +316,25 @@ class LibrarySnapshotTests(unittest.TestCase):
         instance.search_var.get.return_value = 'pack:"In The Groove" diff:Challenge meter:10'
         instance.search_entry = Mock()
         instance.refresh_table = Mock()
+        instance.pack_var = Mock()
+        instance.type_var = Mock()
+        instance.scored_var = Mock()
+        instance.pack_filter = Mock()
+        instance.type_filter = Mock()
+        instance.diff_filter = Mock()
+        instance.root = Mock()
+        instance._filter = app.LibraryFilter(
+            instance.search_var, instance.pack_var, instance.type_var,
+            instance.diff_var, instance.scored_var,
+            instance.search_entry, instance.pack_filter,
+            instance.type_filter, instance.diff_filter, instance.root)
+        instance._filter.subscribe(instance.refresh_table)
         # The panel component, wired to the app the way _build wires it; the Clear
         # itself is the component's since the split (proposal 0005, step 3).
         panel = object.__new__(dp.DistributionPanel)
         panel.diff_var = instance.diff_var
         panel.search_var = instance.search_var
-        panel._apply_chart_filter = instance.apply_chart_filter
+        panel._apply_chart_filter = instance._filter.apply_chart_filter
         instance.distribution_panel = panel
 
         panel.clear_chart_filter()
@@ -649,6 +662,11 @@ class RowTintTests(unittest.TestCase):
         instance._tree_tint = row_tints.SelectedRowTint(instance.tree)
         instance.root = Mock()
         instance.tree.insert.side_effect = ["item0", "item1", "item2"]
+        instance.search_var = _ValueVar("")
+        instance._filter = app.LibraryFilter(
+            instance.search_var, _ValueVar("All packs"), _ValueVar("All types"),
+            _ValueVar("All difficulties"), _ValueVar(False),
+            Mock(), Mock(), Mock(), Mock(), instance.root)
 
         rows = [
             {"Title": "Song A", "Difficulty": "Challenge", "Time": 120},
@@ -712,6 +730,11 @@ class InsertBatchProgressTests(unittest.TestCase):
         instance.root = Mock()
         rows = [{"Title": f"Song {i}", "Difficulty": "Hard", "Time": 60} for i in range(row_count)]
         instance._loader = Mock(rows=rows)
+        instance.search_var = _ValueVar("")
+        instance._filter = app.LibraryFilter(
+            instance.search_var, _ValueVar("All packs"), _ValueVar("All types"),
+            _ValueVar("All difficulties"), _ValueVar(False),
+            Mock(), Mock(), Mock(), Mock(), instance.root)
         return instance, rows
 
     def test_a_zero_budget_inserts_one_row_and_reports_progress(self):
@@ -755,8 +778,7 @@ class InsertBatchProgressTests(unittest.TestCase):
 
     def test_count_line_names_an_unreadable_filter_value(self):
         instance, rows = self.make_instance()
-        instance.search_var = Mock()
-        instance.search_var.get.return_value = "meter:abc"
+        instance.search_var.set("meter:abc")
         with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
             instance._insert_batch(rows, 0, 1)
         instance.count_label.set.assert_called_once_with(
@@ -764,8 +786,7 @@ class InsertBatchProgressTests(unittest.TestCase):
 
     def test_count_line_names_an_unreadable_grade_value(self):
         instance, rows = self.make_instance()
-        instance.search_var = Mock()
-        instance.search_var.get.return_value = "grade:banana"
+        instance.search_var.set("grade:banana")
         with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
             instance._insert_batch(rows, 0, 1)
         instance.count_label.set.assert_called_once_with(
@@ -773,8 +794,7 @@ class InsertBatchProgressTests(unittest.TestCase):
 
     def test_count_line_stays_plain_for_a_readable_filter(self):
         instance, rows = self.make_instance()
-        instance.search_var = Mock()
-        instance.search_var.get.return_value = "meter:11"
+        instance.search_var.set("meter:11")
         with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
             instance._insert_batch(rows, 0, 1)
         instance.count_label.set.assert_called_once_with("3 charts shown · 3 total")
@@ -787,6 +807,7 @@ class _ValueVar:
     def __init__(self, value, on_set=None):
         self.value = value
         self.on_set = on_set
+        self._traces = []
 
     def get(self):
         return self.value
@@ -795,6 +816,13 @@ class _ValueVar:
         self.value = value
         if self.on_set is not None:
             self.on_set()
+        for callback in self._traces:
+            callback()
+
+    def trace_add(self, mode, callback):
+        """Record a write-trace callback, like tk.Variable.trace_add; set() fires it."""
+        self._traces.append(callback)
+        return f"trace-{len(self._traces)}"
 
 
 class FilterPersistenceTests(unittest.TestCase):
@@ -812,14 +840,21 @@ class FilterPersistenceTests(unittest.TestCase):
         instance.pack_filter = Mock()
         instance.type_filter = Mock()
         instance.diff_filter = Mock()
-        instance._batched_filter_changes = app.LibraryApp._batched_filter_changes.__get__(instance)
-        instance._batching_filter_changes = False
-        instance._refresh_unless_batching = app.LibraryApp._refresh_unless_batching.__get__(instance)
-        # Tk would run the write traces on each set; simulate them the way
-        # the long-standing _loaded pinning test does.
-        instance.pack_var = _ValueVar(pack, on_set=instance._refresh_unless_batching)
-        instance.type_var = _ValueVar(type_, on_set=instance._refresh_unless_batching)
-        instance.diff_var = _ValueVar(difficulty, on_set=instance._refresh_unless_batching)
+        instance.search_entry = Mock()
+        instance.root = Mock()
+        instance.search_var = _ValueVar("")
+        instance.pack_var = _ValueVar(pack)
+        instance.type_var = _ValueVar(type_)
+        instance.diff_var = _ValueVar(difficulty)
+        instance.scored_var = _ValueVar(False)
+        # The real filter, built from the app's variables the way _build
+        # builds it; it installs the variable traces itself.
+        instance._filter = app.LibraryFilter(
+            instance.search_var, instance.pack_var, instance.type_var,
+            instance.diff_var, instance.scored_var,
+            instance.search_entry, instance.pack_filter,
+            instance.type_filter, instance.diff_filter, instance.root)
+        instance._filter.subscribe(instance.refresh_table)
         instance.course_builder = None
         return instance
 
@@ -866,9 +901,8 @@ class FilterPersistenceTests(unittest.TestCase):
             settings_path = Path(directory) / "settings.json"
             instance = self.make_loaded_instance()
             self.add_save_machinery(instance, settings_path)
-            instance.search_entry = Mock()
 
-            instance.apply_chart_filter(difficulty="Hard")
+            instance._filter.apply_chart_filter(difficulty="Hard")
             self.assertEqual(instance.diff_var.get(), "Hard")
             # The click alone writes nothing (proposal §3): the value
             # reaches disk only at the next save, here the unrelated one.
@@ -878,66 +912,6 @@ class FilterPersistenceTests(unittest.TestCase):
             saved = json.loads(settings_path.read_text(encoding="utf-8"))
         self.assertEqual(saved["filter_difficulty"], "Hard")
 
-
-class FilterVariableWiringTests(unittest.TestCase):
-    """_filter_rows reads the app's five filter variables: each variable
-    narrows the rows it returns, which is the wiring the LibraryFilter
-    move must preserve (the filter's variables are the app's variables)."""
-
-    @staticmethod
-    def make_instance():
-        instance = object.__new__(app.LibraryApp)
-        instance.search_var = _ValueVar("")
-        instance.pack_var = _ValueVar("All packs")
-        instance.type_var = _ValueVar("All types")
-        instance.diff_var = _ValueVar("All difficulties")
-        instance.scored_var = _ValueVar(False)
-        instance._loader = Mock(rows=[
-            {"Title": "Song A", "Pack": "Pack1", "Type": "dance-single",
-             "Difficulty": "Hard", "Grade": "AAA", "Meter": 10},
-            {"Title": "Song B", "Pack": "Pack2", "Type": "dance-double",
-             "Difficulty": "Challenge", "Grade": "", "Meter": 12},
-            {"Title": "Song C", "Pack": "Pack1", "Type": "dance-single",
-             "Difficulty": "Challenge", "Grade": "AA", "Meter": 11},
-        ])
-        return instance
-
-    @staticmethod
-    def titles(rows):
-        return [row["Title"] for row in rows]
-
-    def test_unfiltered_variables_return_every_row(self):
-        instance = self.make_instance()
-        self.assertEqual(self.titles(instance._filter_rows()),
-                         ["Song A", "Song B", "Song C"])
-
-    def test_pack_variable_narrows_the_rows(self):
-        instance = self.make_instance()
-        instance.pack_var.set("Pack1")
-        self.assertEqual(self.titles(instance._filter_rows()),
-                         ["Song A", "Song C"])
-
-    def test_type_variable_narrows_the_rows(self):
-        instance = self.make_instance()
-        instance.type_var.set("dance-double")
-        self.assertEqual(self.titles(instance._filter_rows()), ["Song B"])
-
-    def test_difficulty_variable_narrows_the_rows(self):
-        instance = self.make_instance()
-        instance.diff_var.set("Challenge")
-        self.assertEqual(self.titles(instance._filter_rows()),
-                         ["Song B", "Song C"])
-
-    def test_scored_variable_keeps_only_scored_rows(self):
-        instance = self.make_instance()
-        instance.scored_var.set(True)
-        self.assertEqual(self.titles(instance._filter_rows()),
-                         ["Song A", "Song C"])
-
-    def test_search_text_narrows_the_rows(self):
-        instance = self.make_instance()
-        instance.search_var.set("song b")
-        self.assertEqual(self.titles(instance._filter_rows()), ["Song B"])
 
 
 class RefreshDeliversRowsTests(unittest.TestCase):
@@ -962,6 +936,10 @@ class RefreshDeliversRowsTests(unittest.TestCase):
         instance.type_var = _ValueVar("All types")
         instance.diff_var = _ValueVar("All difficulties")
         instance.scored_var = _ValueVar(False)
+        instance.search_entry = Mock()
+        instance.pack_filter = Mock()
+        instance.type_filter = Mock()
+        instance.diff_filter = Mock()
         instance.sort_keys = []
         instance._loader = Mock(rows=[
             {"Title": "Song A", "Pack": "Pack1", "Type": "dance-single",
@@ -970,6 +948,13 @@ class RefreshDeliversRowsTests(unittest.TestCase):
              "Difficulty": "Challenge", "Grade": "", "Meter": 12,
              "Time": 90},
         ])
+        instance._filter = app.LibraryFilter(
+            instance.search_var, instance.pack_var, instance.type_var,
+            instance.diff_var, instance.scored_var,
+            instance.search_entry, instance.pack_filter,
+            instance.type_filter, instance.diff_filter, instance.root)
+        instance._filter.set_rows(instance._loader.rows)
+        instance._filter.subscribe(instance.refresh_table)
         return instance
 
     def test_refresh_table_inserts_the_rows_and_pushes_them_to_the_panel(self):
@@ -1605,6 +1590,46 @@ class LiveFilterPersistenceTests(unittest.TestCase):
         self.assertTrue(relaunched.status.get().startswith("Showing saved library snapshot"))
 
 
+class LiveFilterWiringTests(unittest.TestCase):
+    """The Step 5 wiring guard, live (GLM, PR #167 review): the headless
+    guard builds the filter from its own variables, so only a real app
+    proves _build wired the filter to the app's variables and the panel
+    to the filter."""
+
+    def test_the_filter_and_panel_are_wired_to_the_apps_variables(self):
+        if app.tk is None:
+            self.skipTest("Tkinter is not installed")
+        try:
+            root = app.tk.Tk()
+        except app.tk.TclError:
+            self.skipTest("No display available for Tk")
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                settings_path = Path(directory) / "settings.json"
+                settings_path.write_text("{}", encoding="utf-8")
+                with patch.object(app.LibraryApp, "_settings_file_path",
+                                 staticmethod(lambda: settings_path)):
+                    application = app.LibraryApp(root)
+                self.assertIs(application._filter.search_var,
+                              application.search_var)
+                self.assertIs(application._filter.pack_var,
+                              application.pack_var)
+                self.assertIs(application._filter.type_var,
+                              application.type_var)
+                self.assertIs(application._filter.diff_var,
+                              application.diff_var)
+                self.assertIs(application._filter.scored_var,
+                              application.scored_var)
+                self.assertIs(
+                    application.distribution_panel._apply_chart_filter.__self__,
+                    application._filter)
+                self.assertIs(
+                    application.distribution_panel._filter_rows.__self__,
+                    application._filter)
+        finally:
+            root.destroy()
+
+
 class LiveSelectAllTests(unittest.TestCase):
     """Ctrl+A in the results table in a real window (issue #36): the key
     event on the focused tree selects every displayed row, and the
@@ -1686,7 +1711,7 @@ class CourseReloadNotificationTests(unittest.TestCase):
         instance = object.__new__(app.LibraryApp)
         instance.load_button = Mock()
         instance.progress = Mock()
-        instance._batched_filter_changes = MagicMock()
+        instance._filter = MagicMock()
         instance.pack_filter = Mock()
         instance.type_filter = Mock()
         instance.diff_filter = Mock()
@@ -1807,7 +1832,7 @@ class DialogKeyBindingTests(unittest.TestCase):
 
     def test_main_escape_clears_search_only_when_no_dialog_is_open(self):
         instance = object.__new__(app.LibraryApp)
-        instance.clear_search = Mock()
+        instance._filter = Mock()
         open_window = Mock()
         open_window.winfo_exists.return_value = True
         closed_window = Mock()
@@ -1819,22 +1844,23 @@ class DialogKeyBindingTests(unittest.TestCase):
         instance.course_builder = Mock()
         instance.course_builder.window = closed_window
         instance._on_main_escape()
-        instance.clear_search.assert_called_once()  # no dialog open: Escape clears the search
+        # No dialog open: Escape clears the search.
+        instance._filter.clear_search.assert_called_once()
 
-        instance.clear_search.reset_mock()
+        instance._filter.clear_search.reset_mock()
         instance.course_builder.window = open_window
         instance._on_main_escape()
-        instance.clear_search.assert_not_called()  # Build course open
+        instance._filter.clear_search.assert_not_called()  # Build course open
 
         instance.course_builder.window = None
         instance.advanced_search.window = open_window
         instance._on_main_escape()
-        instance.clear_search.assert_not_called()  # Advanced Search open
+        instance._filter.clear_search.assert_not_called()  # Advanced Search open
 
         instance.advanced_search.window = None
         instance.about_window = open_window
         instance._on_main_escape()
-        instance.clear_search.assert_not_called()  # About open
+        instance._filter.clear_search.assert_not_called()  # About open
 
     def test_select_all_rows_selects_exactly_the_displayed_rows(self):
         # Issue #36's headless pin: the handler selects the tree's

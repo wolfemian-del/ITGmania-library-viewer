@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import csv
 import sys
 import time
@@ -24,12 +23,12 @@ import theme
 from advanced_search import AdvancedSearch
 from course_builder import CourseBuilder
 from data_paths_dialog import DataPathsDialog
+from library_filter import LibraryFilter
 from library_loader import LibraryLoader
 from distribution_panel import DistributionPanel
 from library_data import (
     TAP_FIELDS,
     TECH_FIELDS,
-    CHART_FILTER_FIELDS,
     LIBRARY_CACHE_SCHEMA_VERSION,
     SettingsStore,
     SnapshotStore,
@@ -41,18 +40,14 @@ from library_data import (
     declare_dpi_awareness,
     difficulty_sort_key,
     dpi_scale_factor,
-    find_unreadable_directives,
     first_existing_directory,
     format_duration,
     grade_sort_key,
-    match_chart_query,
     number,
-    parse_search_query,
     scale_geometry,
     scale_pixels,
 )
 
-SEARCH_DEBOUNCE_MS = 200
 # How long one batch of table-row inserts may run before yielding to the event
 # loop (see _insert_batch): long enough to fill quickly, short enough that the
 # window stays responsive while a big library streams in.
@@ -82,8 +77,6 @@ DEFAULT_VISIBLE_COLUMNS = frozenset(
 
 class LibraryApp:
     # Defaults for state that is only set later, so every instance has these attributes.
-    _search_refresh_after_id = None
-    _batching_filter_changes = False
     # The display scale factor (1.0 at 100% DPI): bare instances in tests
     # have no window to measure, so they read canonical units as-is.
     _dpi_scale = 1.0
@@ -126,7 +119,6 @@ class LibraryApp:
         saved_difficulty = self.saved_settings.get("filter_difficulty")
         self.diff_var = tk.StringVar(value=saved_difficulty if isinstance(saved_difficulty, str) else "All difficulties")
         self.scored_var = tk.BooleanVar(value=False)
-        self._search_refresh_after_id = None
         saved_order = self.saved_settings.get("column_order", [])
         if not isinstance(saved_order, list):
             saved_order = []
@@ -193,6 +185,10 @@ class LibraryApp:
         # Widgets and variables created by _build(); None until then:
         self.status = None
         self.search_entry = None
+        self._filter = None  # the filter pipeline, built in _build once the search bar exists
+        # Defensive only: the loader is built below, before the filter's
+        # traces are installed, so this can never be read while None.
+        self._loader = None  # the load/sync engine, built below in __init__
         self.pack_filter = None
         self.type_filter = None
         self.diff_filter = None
@@ -244,9 +240,6 @@ class LibraryApp:
             self._report_discarded_settings,
             "cache_dir" in saved or "stats_file" in saved)
         self._report_discarded_settings()
-        self.search_var.trace_add("write", lambda *_: self._schedule_search_refresh())
-        for var in (self.pack_var, self.type_var, self.diff_var, self.scored_var):
-            var.trace_add("write", lambda *_: self._refresh_unless_batching())
         for var in (self.cache_var, self.stats_var):
             var.trace_add("write", lambda *_: self._loader._source_paths_changed())
         self.root.after(75, self._loader._poll_load_results)
@@ -325,21 +318,6 @@ class LibraryApp:
                                               saved_geometry=self.advanced_search_geometry,
                                               report_geometry=self._advanced_search_geometry_changed,
                                               dpi_scale=self._dpi_scale)
-        # The distribution panel component (distribution_panel.py): it owns the chart panel
-        # beside the table. The four variables stay the app's own (the View menu binds one,
-        # the settings save reads two), row pulls go through _filter_rows, and the panel's
-        # click/Clear changes come back through apply_chart_filter so they batch into one
-        # refresh. Its widgets are built by build_panel, below, once their parent exists.
-        self.distribution_panel = DistributionPanel(
-            button_factory=self._button,
-            search_var=self.search_var,
-            diff_var=self.diff_var,
-            show_distribution_panel=self.show_distribution_panel,
-            distribution_metric=self.distribution_metric,
-            filter_rows=self._filter_rows,
-            apply_chart_filter=self.apply_chart_filter,
-            save_settings=self._save_settings,
-            dpi_scale=self._dpi_scale)
         # The main window's X button goes through the same exit path as File → Exit (issue #87).
         self.root.protocol("WM_DELETE_WINDOW", self._close_app)
         bar = tk.Frame(self.root, bg=theme.BG_WINDOW, padx=scale_pixels(18, self._dpi_scale), pady=scale_pixels(12, self._dpi_scale))
@@ -365,6 +343,29 @@ class LibraryApp:
         self.load_button.pack(side="left", padx=scale_pixels(4, self._dpi_scale))
         self._button(bar, "Export CSV", self.export_csv).pack(side="left", padx=scale_pixels(4, self._dpi_scale))
         self._button(bar, "Build course…", self.course_builder.open_dialog).pack(side="left", padx=scale_pixels(4, self._dpi_scale))
+        # The filter pipeline (proposal 0009 Step 5): constructed once the search bar
+        # widgets it takes exist. It installs the variable traces itself; the app
+        # subscribes the table refresh to its change notification.
+        self._filter = LibraryFilter(
+            self.search_var, self.pack_var, self.type_var, self.diff_var, self.scored_var,
+            self.search_entry, self.pack_filter, self.type_filter, self.diff_filter, self.root)
+        self._filter.subscribe(self.refresh_table)
+        # The distribution panel component (distribution_panel.py): it owns the chart panel
+        # beside the table. The four variables stay the app's own (the View menu binds one,
+        # the settings save reads two), row pulls go through the filter, and the panel's
+        # click/Clear changes come back through the filter's apply_chart_filter so they
+        # batch into one refresh. Its widgets are built by build_panel, below, once their
+        # parent exists.
+        self.distribution_panel = DistributionPanel(
+            button_factory=self._button,
+            search_var=self.search_var,
+            diff_var=self.diff_var,
+            show_distribution_panel=self.show_distribution_panel,
+            distribution_metric=self.distribution_metric,
+            filter_rows=self._filter.filter_rows,
+            apply_chart_filter=self._filter.apply_chart_filter,
+            save_settings=self._save_settings,
+            dpi_scale=self._dpi_scale)
         # The label is the component's to set: build_panel (below) puts the saved state's
         # ◀/▶ text on the button, and the component rewrites it on every visibility change.
         self.dist_button = self._button(bar, "", self.distribution_panel.toggle)
@@ -466,9 +467,10 @@ class LibraryApp:
         self._file_menu = file_menu  # the sync entry is disabled while a scan runs (issue #147)
 
         edit_menu = tk.Menu(menubar, tearoff=False)
-        edit_menu.add_command(label="Find", accelerator="Ctrl+F", command=self.focus_search)
+        edit_menu.add_command(label="Find", accelerator="Ctrl+F", command=self._filter.focus_search)
         edit_menu.add_command(label="Advanced search…", accelerator="Ctrl+Shift+F", command=self.advanced_search.open_dialog)
-        edit_menu.add_command(label="Clear search", accelerator="Esc", command=self.clear_search)
+        edit_menu.add_command(label="Clear search", accelerator="Esc",
+                              command=self._filter.clear_search)
         menubar.add_cascade(label="Edit", menu=edit_menu)
 
         view_menu = tk.Menu(menubar, tearoff=False)
@@ -502,8 +504,8 @@ class LibraryApp:
         help_menu.add_command(label="About ITGmania Library Visualizer…", command=self.open_about)
         menubar.add_cascade(label="Help", menu=help_menu)
         self.root.configure(menu=menubar)
-        self.root.bind("<Control-f>", lambda _event: self.focus_search())
-        self.root.bind("<Control-F>", lambda _event: self.focus_search())
+        self.root.bind("<Control-f>", lambda _event: self._filter.focus_search())
+        self.root.bind("<Control-F>", lambda _event: self._filter.focus_search())
         self.root.bind("<Control-Shift-f>", lambda _event: self.advanced_search.open_dialog())
         self.root.bind("<Control-Shift-F>", lambda _event: self.advanced_search.open_dialog())
         self.root.bind("<Escape>", self._on_main_escape)
@@ -587,14 +589,6 @@ class LibraryApp:
         except OSError as exc:
             self.status.set(f"Could not save settings: {exc}")
 
-    def focus_search(self):
-        self.search_entry.focus_set()
-        self.search_entry.selection_range(0, "end")
-
-    def clear_search(self):
-        self.search_var.set("")
-        self.search_entry.focus_set()
-
     def _selected_rows_for_course(self):
         """The chart rows currently selected in the main table (for the course builder)."""
         return [row for item in self.tree.selection()
@@ -616,43 +610,7 @@ class LibraryApp:
         # Escape in a dialog is handled by the dialog. This covers focus left in the main window while a
         # dialog is open, where Escape should not silently wipe the search bar.
         if not self._dialog_is_open():
-            self.clear_search()
-
-    def _refresh_unless_batching(self):
-        if not self._batching_filter_changes:
-            self.refresh_table()
-
-    @contextlib.contextmanager
-    def _batched_filter_changes(self):
-        """Change several filter variables, then refresh the table once.
-
-        Each filter variable refreshes the table by itself when it changes (the search box after a
-        short delay), so one chart click that sets two of them would rebuild the table and the chart
-        several times. Inside this block those automatic refreshes are skipped, and one refresh runs
-        when the block ends.
-        """
-        self._batching_filter_changes = True
-        try:
-            yield
-        finally:
-            self._batching_filter_changes = False
-        if self._search_refresh_after_id is not None:
-            self.root.after_cancel(self._search_refresh_after_id)
-            self._search_refresh_after_id = None
-        self.refresh_table()
-
-    def _schedule_search_refresh(self):
-        """Refresh the table once the user pauses typing in the search box."""
-        if self._batching_filter_changes:
-            return
-        if self._search_refresh_after_id is not None:
-            self.root.after_cancel(self._search_refresh_after_id)
-        self._search_refresh_after_id = self.root.after(
-            SEARCH_DEBOUNCE_MS, self._run_search_refresh)
-
-    def _run_search_refresh(self):
-        self._search_refresh_after_id = None
-        self.refresh_table()
+            self._filter.clear_search()
 
     def _column_visibility_changed(self, changed_column):
         visible = [column for column in self.column_order if self.column_visibility[column].get()]
@@ -789,28 +747,22 @@ class LibraryApp:
 
         preserve_selection distinguishes a sync from a load: a sync
         re-scores the same rows, so only the table refreshes (keeping
-        the selection); a load brings fresh rows, so the dropdowns
-        reset (batched, so the table refreshes exactly once) and the
-        Course Builder is told the library changed.
+        the selection); a load brings fresh rows, so the filter takes
+        them and the dropdowns reset (batched, so the table refreshes
+        exactly once) and the Course Builder is told the library
+        changed.
         """
         if preserve_selection:
+            # Invariant: the filter and the loader share one rows list.
+            # A sync re-scores that list in place (merge_scores never
+            # replaces it), so there is nothing to re-set — only the
+            # refresh, keeping the selection. If the sync ever built a
+            # fresh list, the filter would keep showing the old scores.
             self.refresh_table(preserve_selection=True)
             return
-        with self._batched_filter_changes():
-            for combo, var, label, key in ((self.pack_filter, self.pack_var, "All packs", "Pack"),
-                                           (self.type_filter, self.type_var, "All types", "Type")):
-                values = [label] + sorted({str(r[key]) for r in rows if r[key]}, key=str.casefold)
-                combo.configure(values=values)
-                if var.get() not in values:
-                    var.set(label)
-            difficulties = sorted(
-                {str(row["Difficulty"]) for row in rows if row["Difficulty"]},
-                key=difficulty_sort_key,
-            )
-            difficulty_values = ["All difficulties"] + difficulties
-            self.diff_filter.configure(values=difficulty_values)
-            if self.diff_var.get() not in difficulty_values:
-                self.diff_var.set("All difficulties")
+        with self._filter.batch():
+            self._filter.set_rows(rows)
+            self._filter.set_choices(rows)
         if self.course_builder is not None:
             # A fresh library may no longer match a course queue built from the old
             # one; the builder asks the user what to do with it (issue #82).
@@ -831,37 +783,6 @@ class LibraryApp:
             return
         file_menu.entryconfigure("Sync scores from Stats.xml", state=state)
 
-    def _filter_rows(self, ignore_metric=None):
-        """Return the rows that pass the pack, type, difficulty, scored and search filters.
-
-        ignore_metric ("Meter", "Difficulty" or "BPM") leaves out that chart's own filter, both the
-        search directive and, for Difficulty, the dropdown. The distribution chart uses this to keep
-        showing every bar after you click one.
-        """
-        query_text = self.search_var.get().strip()
-        criteria = parse_search_query(query_text) if query_text else None
-        ignored_field = CHART_FILTER_FIELDS.get(ignore_metric)
-        if criteria and ignored_field:
-            criteria = {**criteria, "directives": [
-                directive for directive in criteria["directives"] if directive[0] != ignored_field]}
-        pack, chart_type, diff = self.pack_var.get(), self.type_var.get(), self.diff_var.get()
-        if ignore_metric == "Difficulty":
-            diff = "All difficulties"
-        rows = []
-        for row in self._loader.rows:
-            if pack != "All packs" and row["Pack"] != pack:
-                continue
-            if chart_type != "All types" and row["Type"] != chart_type:
-                continue
-            if diff != "All difficulties" and row["Difficulty"] != diff:
-                continue
-            if self.scored_var.get() and not row["Grade"]:
-                continue
-            if criteria and not match_chart_query(row, criteria):
-                continue
-            rows.append(row)
-        return rows
-
     def refresh_table(self, preserve_selection=False):
         if self.tree is None:
             return
@@ -874,7 +795,7 @@ class LibraryApp:
         self._render_generation += 1
         generation = self._render_generation
         self._update_sort_headings()
-        visible = self._filter_rows()
+        visible = self._filter.filter_rows()
         for column, descending in reversed(self.sort_keys):
             present = [row for row in visible if row.get(column) not in (None, "")]
             missing = [row for row in visible if row.get(column) in (None, "")]
@@ -941,39 +862,10 @@ class LibraryApp:
             self.root.after(1, lambda: self._insert_batch(rows, stop, generation, selected_rows))
         else:
             count_text = f"{len(rows):,} charts shown · {len(self._loader.rows):,} total"
-            hint = self._unreadable_search_hint()
+            hint = self._filter.search_hint()
             if hint:
                 count_text += f" — {hint}"
             self.count_label.set(count_text)
-
-    def _unreadable_search_hint(self) -> str:
-        """Hint naming the first unreadable search directive, or "" when none.
-
-        Bare instances in tests have no search_var; the real app always does.
-        """
-        search_var = getattr(self, "search_var", None)
-        if search_var is None:
-            return ""
-        unreadable = find_unreadable_directives(search_var.get())
-        return f"Can't read the value in {unreadable[0]}" if unreadable else ""
-
-    def apply_chart_filter(self, difficulty=None, query=None):
-        """Apply a distribution chart's filter change as one batched update (proposal 0005).
-
-        The distribution panel computes the new values and calls this; a value left
-        as None is not written, so the writes are exactly the ones the chart action
-        calls for. Applying a change ends with the search cursor at the end of the
-        box, as a chart click or Clear always has; a call with nothing to change
-        neither refreshes nor nudges.
-        """
-        if difficulty is None and query is None:
-            return
-        with self._batched_filter_changes():
-            if difficulty is not None:
-                self.diff_var.set(difficulty)
-            if query is not None:
-                self.search_var.set(query)
-        self.search_entry.icursor("end")
 
     def _select_all_rows(self, _event=None):
         """Ctrl+A in the table (issue #36): select every displayed row.
