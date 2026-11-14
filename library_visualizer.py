@@ -27,6 +27,7 @@ import row_tints
 import theme
 from advanced_search import AdvancedSearch
 from course_builder import CourseBuilder
+from data_paths_dialog import DataPathsDialog
 from distribution_panel import DistributionPanel
 from library_data import (
     TAP_FIELDS,
@@ -98,16 +99,6 @@ class LibraryApp:
     # The display scale factor (1.0 at 100% DPI): bare instances in tests
     # have no window to measure, so they read canonical units as-is.
     _dpi_scale = 1.0
-
-    # The Data paths dialog's note texts (UI redesign): the first-run note is
-    # the sketch's wording; the dead-paths sentence is a Muse proposal, to be
-    # settled in the build review.
-    _DATA_PATHS_FIRST_RUN_NOTE = ("We couldn't find your ITGmania folders automatically — "
-                                  "point the app at them once and it will remember.")
-    _DATA_PATHS_DEAD_NOTE = ("Your saved paths no longer exist — "
-                             "point the app at them again and it will remember.")
-    _DATA_PATHS_DIFFER_NOTE = ("These paths differ from the library on screen — "
-                               "Load / refresh to rebuild it.")
 
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -246,13 +237,18 @@ class LibraryApp:
         self.about_window = None
         self.course_builder = None
         self.distribution_panel = None
-        # The Data paths dialog (UI redesign): the window and its note line
-        # while it is open, and whether the first-run popup has already shown
-        # this session (it never reappears after being dismissed).
-        self._data_paths_window = None
-        self._data_paths_note = None
-        self._data_paths_form = None
-        self._data_paths_popup_shown = False
+        # The Data paths dialog (UI redesign, proposal 0009 Step 3): the
+        # component owns its window and note line. It is built first; its
+        # load_callback and paths_match_loaded are late-bound lambdas (the
+        # proposal 0005 precedent) so they resolve to the loader's methods
+        # once the loader exists (Step 4).
+        self._data_paths_dialog = DataPathsDialog(
+            self.root, self.cache_var, self.stats_var,
+            load_callback=lambda: self.load_data(),
+            save_settings=self._save_settings,
+            button_factory=self._button, entry_factory=self._entry,
+            dpi_scale=self._dpi_scale,
+            paths_match_loaded=lambda: self._current_paths_match_loaded())
         self._style()
         self._build()
         self._report_discarded_settings()
@@ -589,8 +585,7 @@ class LibraryApp:
         # (the conditional note), not only on the status line behind the modal.
         # At first run there is no snapshot loaded, so the early return above
         # leaves the dialog's first-run note alone.
-        self._set_data_paths_note(
-            "" if self._current_paths_match_loaded() else self._DATA_PATHS_DIFFER_NOTE)
+        self._data_paths_dialog.set_note(self._data_paths_dialog.paths_changed())
 
     def _current_paths_match_loaded(self):
         """Whether the current paths match the loaded snapshot's sources.
@@ -902,16 +897,6 @@ class LibraryApp:
                    if self.tree.identify_column(x) == display_id]
         return (matches[0], matches[-1] + 1) if matches else None
 
-    def _path_row(self, parent, label, variable, command):
-        row = tk.Frame(parent, bg=theme.BG_PANEL)
-        row.pack(fill="x", pady=scale_pixels(3, self._dpi_scale))
-        tk.Label(row, text=label, width=17, anchor="w", bg=theme.BG_PANEL, fg=theme.TEXT_FIELD_LABEL,
-                 font=theme.FONT_BODY).pack(side="left")
-        entry = self._entry(row, "", variable)
-        entry.pack(side="left", fill="x", expand=True, padx=scale_pixels(8, self._dpi_scale))
-        self._button(row, "Browse…", command).pack(side="left")
-        return entry
-
     @staticmethod
     def _entry(parent, placeholder, variable):
         entry = tk.Entry(parent, textvariable=variable, bg=theme.BG_INPUT, fg=theme.TEXT_PRIMARY, insertbackground=theme.CURSOR,
@@ -936,150 +921,29 @@ class LibraryApp:
                          padx=scale_pixels(theme.BUTTON_PADX, self._dpi_scale), pady=scale_pixels(theme.BUTTON_PADY, self._dpi_scale),
                          font=theme.FONT_BODY_BOLD, cursor="hand2")
 
-    def choose_cache(self):
-        path = filedialog.askdirectory(title="Select the ITGmania Cache/Songs folder")
-        if path:
-            self.cache_var.set(path)
-            self._save_settings()
-
-    def choose_stats(self):
-        path = filedialog.askopenfilename(title="Select player Stats.xml", filetypes=[("Stats.xml", "Stats.xml"),
-                                                                                       ("XML files", "*.xml"),
-                                                                                       ("All files", "*.*")])
-        if path:
-            self.stats_var.set(path)
-            self._save_settings()
-
     def open_data_paths_dialog(self, note=None):
-        """Open the Data paths dialog — the one place the two paths are edited.
+        """Open the Data paths dialog (proposal 0009 Step 3).
 
-        Modal: a local grab keeps the main window unusable until the dialog is
-        dismissed (Cancel, the X button, or Escape), so the app never sits
-        behind an unanswered first-run question. The dialog does not remember
-        its geometry: it is a fixed small form, sized for two path rows.
+        A thin delegation to the DataPathsDialog component, which owns the
+        dialog. Kept so the File menu and the loader paths that open it do
+        not change.
         """
-        if self._data_paths_window is not None and self._data_paths_window.winfo_exists():
-            self._data_paths_window.lift()
-            self._data_paths_window.focus_force()
-            return
-        window = tk.Toplevel(self.root)
-        self._data_paths_window = window
-        window.title("Where is your library?")
-        window.geometry(scale_geometry("560x260", self._dpi_scale))
-        window.resizable(False, False)
-        window.configure(bg=theme.BG_WINDOW)
-        window.transient(self.root)
-
-        form = tk.Frame(window, bg=theme.BG_WINDOW, padx=scale_pixels(18, self._dpi_scale))
-        form.pack(fill="x")
-        self._data_paths_form = form
-        # The note explains why the dialog opened (first run, dead saved
-        # paths, invalid paths at Load, paths differing from the snapshot).
-        # It is empty when opened from the menu with nothing to explain.
-        # When no note is given, show the differ note if a snapshot is loaded
-        # and the paths have already moved away from it.
-        if note is None:
-            note = "" if self._current_paths_match_loaded() else self._DATA_PATHS_DIFFER_NOTE
-        self._data_paths_note = tk.Label(
-            window, text="", wraplength=scale_pixels(520, self._dpi_scale), anchor="w", justify="left",
-            fg=theme.TEXT_MUTED, bg=theme.BG_WINDOW, font=theme.FONT_BODY)
-        self._set_data_paths_note(note or "")
-
-        cache_entry = self._path_row(form, "Cache / Songs", self.cache_var, self.choose_cache)
-        stats_entry = self._path_row(form, "Player Stats.xml", self.stats_var, self.choose_stats)
-
-        btn_row = tk.Frame(window, bg=theme.BG_WINDOW, padx=scale_pixels(18, self._dpi_scale))
-        btn_row.pack(fill="x", pady=(scale_pixels(14, self._dpi_scale), scale_pixels(16, self._dpi_scale)))
-        self._button(btn_row, "Load library", self._data_paths_load, primary=True).pack(side="right")
-        self._button(btn_row, "Cancel", self._close_data_paths_dialog).pack(side="right", padx=(0, scale_pixels(8, self._dpi_scale)))
-
-        window.protocol("WM_DELETE_WINDOW", self._close_data_paths_dialog)
-        window.bind("<Escape>", lambda _event: self._close_data_paths_dialog() or "break")
-        # A new window does not always take keyboard focus (seen on Windows); without it Escape
-        # would go to the main window instead of closing this one.
-        window.grab_set()
-        # Focus the entry that needs an answer: the invalid side, or the cache
-        # entry when both are missing or both are fine.
-        cache_ok = bool(self.cache_var.get()) and Path(self.cache_var.get()).is_dir()
-        stats_ok = bool(self.stats_var.get()) and Path(self.stats_var.get()).is_file()
-        target = stats_entry if cache_ok and not stats_ok else cache_entry
-        target.focus_force()
-
-    def _set_data_paths_note(self, text):
-        """Show the Data paths dialog's note line, or hide it when empty.
-
-        Nothing happens when the dialog is closed: the note label exists only
-        while it is open.
-        """
-        note = getattr(self, "_data_paths_note", None)
-        if note is None:
-            return
-        note.configure(text=text)
-        if text:
-            # The note sits above the path rows even when it appears later (a
-            # path edited while the dialog is open).
-            form = getattr(self, "_data_paths_form", None)
-            if form is not None:
-                note.pack(anchor="w", padx=scale_pixels(18, self._dpi_scale), pady=(scale_pixels(14, self._dpi_scale), scale_pixels(2, self._dpi_scale)), before=form)
-            else:
-                note.pack(anchor="w", padx=scale_pixels(18, self._dpi_scale), pady=(scale_pixels(14, self._dpi_scale), scale_pixels(2, self._dpi_scale)))
-        else:
-            note.pack_forget()
-
-    def _close_data_paths_dialog(self):
-        """Dismiss the Data paths dialog without loading."""
-        window = getattr(self, "_data_paths_window", None)
-        if window is not None and window.winfo_exists():
-            if window.grab_status():
-                window.grab_release()
-            window.destroy()
-        self._data_paths_window = None
-        self._data_paths_note = None
-        self._data_paths_form = None
-
-    def _data_paths_load(self):
-        """Load the library from the dialog's paths, or name what is wrong.
-
-        With an invalid path the dialog stays open and the note says which
-        side is wrong, instead of closing onto a Load that would only open
-        the dialog again.
-        """
-        cache, stats = Path(self.cache_var.get()), Path(self.stats_var.get())
-        if not cache.is_dir() or not stats.is_file():
-            self._set_data_paths_note(invalid_paths_note(cache, stats))
-            return
-        self._close_data_paths_dialog()
-        self.load_data()
+        self._data_paths_dialog.open(note)
 
     def _maybe_show_first_run_paths_dialog(self):
         """Open the Data paths dialog once at startup when there is nothing to show.
 
-        Only when no snapshot restored and the two current paths are not both
-        usable. A user with a valid snapshot never sees it (the moved-folders
-        status note covers dead paths there instead), and it never reappears
-        in the same session after being dismissed. Bare test instances without
-        path state return silently.
+        A thin delegation to the DataPathsDialog component: the two facts the
+        dialog cannot derive from its inputs arrive as arguments — whether a
+        snapshot is loaded, and whether saved settings contained path keys.
         """
-        if getattr(self, "_data_paths_popup_shown", False):
+        dialog = getattr(self, "_data_paths_dialog", None)
+        if dialog is None:
             return
-        if getattr(self, "loaded_source_paths", None) is not None:
-            return
-        cache_var = getattr(self, "cache_var", None)
-        stats_var = getattr(self, "stats_var", None)
-        if cache_var is None or stats_var is None:
-            return
-        cache_ok = bool(cache_var.get()) and Path(cache_var.get()).is_dir()
-        stats_ok = bool(stats_var.get()) and Path(stats_var.get()).is_file()
-        if cache_ok and stats_ok:
-            return
-        self._data_paths_popup_shown = True
-        # Saved settings that point at dead folders get the dead-paths note;
-        # anything else is a first run (or a partial guess).
+        snapshot_loaded = getattr(self, "loaded_source_paths", None) is not None
         saved = getattr(self, "saved_settings", None) or {}
-        note = (self._DATA_PATHS_DEAD_NOTE
-                if "cache_dir" in saved or "stats_file" in saved
-                else self._DATA_PATHS_FIRST_RUN_NOTE)
-        self.open_data_paths_dialog(note=note)
+        had_saved_paths = "cache_dir" in saved or "stats_file" in saved
+        dialog.maybe_show_first_run(snapshot_loaded, had_saved_paths)
 
     def _set_sync_menu_state(self, state):
         """Enable or disable the File -> Sync scores entry (issue #147).
