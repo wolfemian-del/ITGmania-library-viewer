@@ -1327,6 +1327,39 @@ class RefreshDeliversRowsTests(unittest.TestCase):
         instance.count_label.set.assert_called_once_with(
             "2 charts shown · 2 total")
 
+    def test_loaded_delivers_the_rows_through_the_real_refresh(self):
+        # Codex (PR #163 review): the direct refresh_table pin above
+        # would still pass if the load completion path stopped
+        # refreshing the table. Call _loaded with the real refresh
+        # wired up, so the _loaded -> _batched_filter_changes ->
+        # refresh_table handoff is pinned end to end.
+        instance = self.make_instance()
+        instance.load_button = Mock()
+        instance._set_sync_menu_state = Mock()
+        instance.progress = Mock()
+        instance.pack_filter = Mock()
+        instance.type_filter = Mock()
+        instance.diff_filter = Mock()
+        instance.status = Mock()
+        instance.course_builder = None
+        instance._batched_filter_changes = (
+            app.LibraryApp._batched_filter_changes.__get__(instance))
+        instance._batching_filter_changes = False
+        instance._search_refresh_after_id = None
+
+        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
+            instance._loaded(instance.rows, 2)
+
+        self.assertEqual(instance.tree.insert.call_count, 2)
+        title_index = list(app.HEADERS).index("Title")
+        inserted = [kwargs["values"][title_index]
+                    for _args, kwargs in instance.tree.insert.call_args_list]
+        self.assertEqual(inserted, ["Song A", "Song B"])
+        instance.distribution_panel.show_rows.assert_called_once_with(
+            instance.rows)
+        instance.count_label.set.assert_called_once_with(
+            "2 charts shown · 2 total")
+
 
 class InitialSnapshotTests(unittest.TestCase):
     """The deferred startup load (startup polish): _load_initial_snapshot is
