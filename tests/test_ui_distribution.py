@@ -112,7 +112,7 @@ class DistributionUITests(unittest.TestCase):
             self.assertEqual(application.dist_button.cget("text"), "Distribution ◀")
 
             # Test updating with sample rows
-            application.rows = [
+            application._loader.rows = [
                 {"Meter": 10, "Difficulty": "Hard", "bpm_max": 150, "Pack": "Test", "Type": "dance-single", "Grade": "Tier05"},
                 {"Meter": 11, "Difficulty": "Challenge", "bpm_max": 180, "Pack": "Test", "Type": "dance-single", "Grade": "Tier06"},
             ]
@@ -308,7 +308,7 @@ class FullDistributionTests(unittest.TestCase):
     @classmethod
     def make_app(cls, query="", diff="All difficulties", metric="Meter", pack="All packs"):
         instance = object.__new__(app.LibraryApp)
-        instance.rows = list(cls.ROWS)
+        instance._loader = Mock(rows=list(cls.ROWS))
         instance.pack_var = Mock(get=Mock(return_value=pack))
         instance.type_var = Mock(get=Mock(return_value="All types"))
         instance.diff_var = Mock(get=Mock(return_value=diff))
@@ -455,7 +455,7 @@ class FullDistributionTests(unittest.TestCase):
         instance = self.make_app(metric="Meter")
         panel = instance.distribution_panel
         # 22 charts of meter 10, one of 11 and one of 12: the long bar sets the chart's width.
-        instance.rows = list(self.ROWS[:1]) * 20 + list(self.ROWS)
+        instance._loader.rows = list(self.ROWS[:1]) * 20 + list(self.ROWS)
         bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(3)]
         panel.dist_ax.barh.return_value = bars
         with patch.object(dp, "MATPLOTLIB_AVAILABLE", True):
@@ -515,7 +515,7 @@ class FullDistributionTests(unittest.TestCase):
     def test_empty_state_draws_the_message_and_no_bars(self):
         instance = self.make_app()
         panel = instance.distribution_panel
-        instance.rows = []
+        instance._loader.rows = []
         with patch.object(dp, "MATPLOTLIB_AVAILABLE", True):
             panel.show_rows([])
         panel.dist_ax.text.assert_called_once()
@@ -537,7 +537,7 @@ class FullDistributionTests(unittest.TestCase):
             # Empty the library underneath the panel, and make the row pull return
             # nothing too: a redraw that recalculated its rows (instead of using the
             # stored ones) would now find nothing either way.
-            instance.rows = []
+            instance._loader.rows = []
             panel._filter_rows = Mock(return_value=[])
             instance.distribution_metric.get.return_value = "Difficulty"
             panel._on_distribution_metric_changed()
@@ -591,7 +591,8 @@ class FullDistributionTests(unittest.TestCase):
     def test_a_difficulty_name_the_table_does_not_know_gets_the_unknown_colour(self):
         instance = self.make_app(metric="Difficulty")
         panel = instance.distribution_panel
-        instance.rows = [dict(self.ROWS[0], Difficulty="Quirky"), dict(self.ROWS[1], Difficulty="Hard")]
+        instance._loader.rows = [dict(self.ROWS[0], Difficulty="Quirky"),
+                               dict(self.ROWS[1], Difficulty="Hard")]
         bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(7)]
         panel.dist_ax.barh.return_value = bars
         with patch.object(dp, "MATPLOTLIB_AVAILABLE", True):
@@ -888,7 +889,7 @@ class RealChartClickTests(unittest.TestCase):
         row = {"Difficulty": "Hard", "Pack": "P", "Type": "dance-single", "Grade": "",
                "bpm_min": 130.0, "bpm_max": 130.0}
         # One chart each of meter 12 and 11, thirty of meter 10: a very short bar next to a long one.
-        self.instance.rows = ([dict(row, Meter=12), dict(row, Meter=11)]
+        self.instance._loader.rows = ([dict(row, Meter=12), dict(row, Meter=11)]
                               + [dict(row, Meter=10) for _ in range(30)])
         figure = Figure(figsize=(3.0, 4.0), dpi=100)
         self.panel.dist_fig, self.panel.dist_ax = figure, figure.add_subplot(111)
@@ -1018,7 +1019,7 @@ class LiveDistributionStartupTests(LiveWindowCase):
 
         application = self.make_live_app({"show_distribution": True})
         panel = application.distribution_panel
-        application.rows = [
+        application._loader.rows = [
             {"Meter": 10, "Difficulty": "Hard", "bpm_max": 150.0, "Pack": "Test", "Type": "dance-single", "Grade": ""},
             {"Meter": 11, "Difficulty": "Challenge", "bpm_max": 180.0, "Pack": "Test", "Type": "dance-single", "Grade": ""},
         ]
