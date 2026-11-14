@@ -713,6 +713,173 @@ class ColumnGroupTests(unittest.TestCase):
         self.assertFalse(instance.group_visibility["Song & chart"].get())
 
 
+class ColumnDragTests(unittest.TestCase):
+    """Column drag reorder and the displayed-column helpers: which column a
+    heading position names, the screen span of a displayed column, and the
+    drag that reorders the columns and saves."""
+
+    COLUMNS = ["Title", "Artist", "Pack"]
+
+    @staticmethod
+    def make_app():
+        instance = object.__new__(app.LibraryApp)
+        instance.column_order = list(ColumnDragTests.COLUMNS)
+        instance.column_visibility = {
+            col: FakeVariable(True) for col in app.HEADERS}
+        instance.default_column_widths = {}
+        instance.tree = Mock()
+        instance.tree.identify_region.return_value = "heading"
+        # Each displayed column owns a 100px span: #1 is 0-99, #2 is
+        # 100-199, #3 is 200-299.
+        instance.tree.identify_column.side_effect = (
+            lambda x: "#1" if x < 100 else ("#2" if x < 200 else "#3"))
+        instance.tree.winfo_width.return_value = 300
+        instance._save_settings = Mock()
+        instance._dragged_column = None
+        instance._drag_start_x = None
+        return instance
+
+    @staticmethod
+    def event(x, y=10):
+        event = Mock()
+        event.x = x
+        event.y = y
+        return event
+
+    def test_displayed_column_at_returns_the_visible_column(self):
+        instance = self.make_app()
+        self.assertEqual(instance._displayed_column_at(150, 10), "Artist")
+
+    def test_displayed_column_at_returns_none_outside_the_heading(self):
+        instance = self.make_app()
+        instance.tree.identify_region.return_value = "cell"
+        self.assertIsNone(instance._displayed_column_at(150, 10))
+
+    def test_displayed_column_at_returns_none_for_an_unknown_column_id(self):
+        instance = self.make_app()
+        instance.tree.identify_column.side_effect = None
+        instance.tree.identify_column.return_value = "abc"
+        self.assertIsNone(instance._displayed_column_at(150, 10))
+
+    def test_displayed_column_at_returns_none_when_the_index_is_out_of_range(self):
+        instance = self.make_app()
+        instance.tree.identify_column.side_effect = None
+        instance.tree.identify_column.return_value = "#9"
+        self.assertIsNone(instance._displayed_column_at(150, 10))
+
+    def test_displayed_column_bounds_span_the_columns_screen_range(self):
+        instance = self.make_app()
+        self.assertEqual(instance._displayed_column_bounds(0), (0, 100))
+        self.assertEqual(instance._displayed_column_bounds(1), (100, 200))
+        self.assertEqual(instance._displayed_column_bounds(2), (200, 300))
+
+    def test_displayed_column_bounds_returns_none_with_no_match(self):
+        instance = self.make_app()
+        instance.tree.identify_column.side_effect = None
+        instance.tree.identify_column.return_value = "#9"
+        self.assertIsNone(instance._displayed_column_bounds(0))
+
+    def test_drag_start_records_the_column_and_position(self):
+        instance = self.make_app()
+
+        instance._column_drag_start(self.event(50))
+
+        self.assertEqual(instance._dragged_column, "Title")
+        self.assertEqual(instance._drag_start_x, 50)
+
+    def test_drag_start_outside_the_heading_clears_the_drag(self):
+        instance = self.make_app()
+        instance.tree.identify_region.return_value = "cell"
+
+        instance._column_drag_start(self.event(50))
+
+        self.assertIsNone(instance._dragged_column)
+        self.assertIsNone(instance._drag_start_x)
+
+    def test_drag_end_without_a_drag_does_nothing(self):
+        instance = self.make_app()
+
+        result = instance._column_drag_end(self.event(250))
+
+        self.assertIsNone(result)
+        instance.tree.configure.assert_not_called()
+        instance._save_settings.assert_not_called()
+
+    def test_drag_end_below_the_movement_threshold_does_nothing(self):
+        instance = self.make_app()
+        instance._dragged_column = "Title"
+        instance._drag_start_x = 50
+
+        result = instance._column_drag_end(self.event(53))
+
+        self.assertIsNone(result)
+        self.assertEqual(instance.column_order, self.COLUMNS)
+        instance._save_settings.assert_not_called()
+
+    def test_drag_end_on_the_same_column_does_nothing(self):
+        instance = self.make_app()
+        instance._dragged_column = "Title"
+        instance._drag_start_x = 50
+
+        result = instance._column_drag_end(self.event(55))
+
+        self.assertIsNone(result)
+        self.assertEqual(instance.column_order, self.COLUMNS)
+        instance._save_settings.assert_not_called()
+
+    def test_drag_end_on_no_column_does_nothing(self):
+        instance = self.make_app()
+        instance._dragged_column = "Title"
+        instance._drag_start_x = 50
+        instance.tree.identify_column.side_effect = None
+        instance.tree.identify_column.return_value = "#9"
+
+        result = instance._column_drag_end(self.event(250))
+
+        self.assertIsNone(result)
+        self.assertEqual(instance.column_order, self.COLUMNS)
+        instance._save_settings.assert_not_called()
+
+    def test_drag_right_past_the_midpoint_moves_the_column_after_its_target(self):
+        instance = self.make_app()
+        instance._dragged_column = "Title"
+        instance._drag_start_x = 50
+
+        result = instance._column_drag_end(self.event(250))
+
+        self.assertEqual(result, "break")
+        self.assertEqual(instance.column_order, ["Artist", "Pack", "Title"])
+        instance.tree.configure.assert_called_once_with(
+            displaycolumns=["Artist", "Pack", "Title"])
+        instance._save_settings.assert_called_once()
+
+    def test_drag_right_before_the_midpoint_moves_the_column_before_its_target(self):
+        instance = self.make_app()
+        instance._dragged_column = "Title"
+        instance._drag_start_x = 50
+
+        result = instance._column_drag_end(self.event(210))
+
+        self.assertEqual(result, "break")
+        self.assertEqual(instance.column_order, ["Artist", "Title", "Pack"])
+        instance.tree.configure.assert_called_once_with(
+            displaycolumns=["Artist", "Title", "Pack"])
+        instance._save_settings.assert_called_once()
+
+    def test_drag_left_moves_the_column_before_its_target(self):
+        instance = self.make_app()
+        instance._dragged_column = "Pack"
+        instance._drag_start_x = 250
+
+        result = instance._column_drag_end(self.event(50))
+
+        self.assertEqual(result, "break")
+        self.assertEqual(instance.column_order, ["Title", "Pack", "Artist"])
+        instance.tree.configure.assert_called_once_with(
+            displaycolumns=["Title", "Pack", "Artist"])
+        instance._save_settings.assert_called_once()
+
+
 class RowTintTests(unittest.TestCase):
     # The tag rule, the tag setup, and the selection bookkeeping themselves are
     # tested in test_row_tints.py; this class keeps the table-side wiring honest.
@@ -1052,6 +1219,115 @@ class FilterPersistenceTests(unittest.TestCase):
             instance.refresh_table.assert_called_once()
 
 
+class FilterVariableWiringTests(unittest.TestCase):
+    """_filter_rows reads the app's five filter variables: each variable
+    narrows the rows it returns, which is the wiring the LibraryFilter
+    move must preserve (the filter's variables are the app's variables)."""
+
+    @staticmethod
+    def make_instance():
+        instance = object.__new__(app.LibraryApp)
+        instance.search_var = _ValueVar("")
+        instance.pack_var = _ValueVar("All packs")
+        instance.type_var = _ValueVar("All types")
+        instance.diff_var = _ValueVar("All difficulties")
+        instance.scored_var = _ValueVar(False)
+        instance.rows = [
+            {"Title": "Song A", "Pack": "Pack1", "Type": "dance-single",
+             "Difficulty": "Hard", "Grade": "AAA", "Meter": 10},
+            {"Title": "Song B", "Pack": "Pack2", "Type": "dance-double",
+             "Difficulty": "Challenge", "Grade": "", "Meter": 12},
+            {"Title": "Song C", "Pack": "Pack1", "Type": "dance-single",
+             "Difficulty": "Challenge", "Grade": "AA", "Meter": 11},
+        ]
+        return instance
+
+    @staticmethod
+    def titles(rows):
+        return [row["Title"] for row in rows]
+
+    def test_unfiltered_variables_return_every_row(self):
+        instance = self.make_instance()
+        self.assertEqual(self.titles(instance._filter_rows()),
+                         ["Song A", "Song B", "Song C"])
+
+    def test_pack_variable_narrows_the_rows(self):
+        instance = self.make_instance()
+        instance.pack_var.set("Pack1")
+        self.assertEqual(self.titles(instance._filter_rows()),
+                         ["Song A", "Song C"])
+
+    def test_type_variable_narrows_the_rows(self):
+        instance = self.make_instance()
+        instance.type_var.set("dance-double")
+        self.assertEqual(self.titles(instance._filter_rows()), ["Song B"])
+
+    def test_difficulty_variable_narrows_the_rows(self):
+        instance = self.make_instance()
+        instance.diff_var.set("Challenge")
+        self.assertEqual(self.titles(instance._filter_rows()),
+                         ["Song B", "Song C"])
+
+    def test_scored_variable_keeps_only_scored_rows(self):
+        instance = self.make_instance()
+        instance.scored_var.set(True)
+        self.assertEqual(self.titles(instance._filter_rows()),
+                         ["Song A", "Song C"])
+
+    def test_search_text_narrows_the_rows(self):
+        instance = self.make_instance()
+        instance.search_var.set("song b")
+        self.assertEqual(self.titles(instance._filter_rows()), ["Song B"])
+
+
+class RefreshDeliversRowsTests(unittest.TestCase):
+    """refresh_table delivers the filtered rows to the table and the panel:
+    the wiring a load (and later set_rows) must preserve, so a forgotten
+    refresh leaves the table visibly empty instead of silently stale."""
+
+    @staticmethod
+    def make_instance():
+        instance = object.__new__(app.LibraryApp)
+        instance.tree = Mock()
+        instance.tree.insert.side_effect = ["item0", "item1"]
+        instance.tree.get_children.return_value = []
+        instance._render_generation = 1
+        instance.tree_item_rows = {}
+        instance.count_label = Mock()
+        instance._tree_tint = row_tints.SelectedRowTint(instance.tree)
+        instance.root = Mock()
+        instance.distribution_panel = Mock()
+        instance.search_var = _ValueVar("")
+        instance.pack_var = _ValueVar("All packs")
+        instance.type_var = _ValueVar("All types")
+        instance.diff_var = _ValueVar("All difficulties")
+        instance.scored_var = _ValueVar(False)
+        instance.sort_keys = []
+        instance.rows = [
+            {"Title": "Song A", "Pack": "Pack1", "Type": "dance-single",
+             "Difficulty": "Hard", "Grade": "AAA", "Meter": 10, "Time": 60},
+            {"Title": "Song B", "Pack": "Pack2", "Type": "dance-double",
+             "Difficulty": "Challenge", "Grade": "", "Meter": 12,
+             "Time": 90},
+        ]
+        return instance
+
+    def test_refresh_table_inserts_the_rows_and_pushes_them_to_the_panel(self):
+        instance = self.make_instance()
+        with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
+            instance.refresh_table()
+
+        self.assertEqual(instance.tree.insert.call_count, 2)
+        title_index = list(app.HEADERS).index("Title")
+        inserted = [kwargs["values"][title_index]
+                    for _args, kwargs in instance.tree.insert.call_args_list]
+        self.assertEqual(inserted, ["Song A", "Song B"])
+        instance.distribution_panel.show_rows.assert_called_once_with(
+            instance.rows)
+        instance.count_label.set.assert_called_once_with(
+            "2 charts shown · 2 total")
+
+
 class InitialSnapshotTests(unittest.TestCase):
     """The deferred startup load (startup polish): _load_initial_snapshot is
     the after() callback __init__ schedules so the window paints first."""
@@ -1154,6 +1430,132 @@ class DataPathsPopupTests(unittest.TestCase):
     def test_bare_instance_without_path_state_returns_silently(self):
         instance = object.__new__(app.LibraryApp)
         instance._maybe_show_first_run_paths_dialog()  # no error, no dialog
+
+
+class DataPathsNoteTests(unittest.TestCase):
+    """The Data paths dialog's note line (_set_data_paths_note): it shows
+    the note above the path rows when there is one, hides the label when
+    there is not, and does nothing when the dialog is closed."""
+
+    @staticmethod
+    def make_instance(note=None, form=None):
+        instance = object.__new__(app.LibraryApp)
+        if note is not None:
+            instance._data_paths_note = note
+        if form is not None:
+            instance._data_paths_form = form
+        return instance
+
+    def test_no_dialog_open_is_a_no_op(self):
+        instance = self.make_instance()
+        instance._set_data_paths_note("anything")  # no error, no label
+
+    def test_non_empty_note_is_shown_above_the_form(self):
+        note, form = Mock(), Mock()
+        instance = self.make_instance(note, form)
+
+        instance._set_data_paths_note("The cache folder was not found.")
+
+        note.configure.assert_called_once_with(
+            text="The cache folder was not found.")
+        note.pack.assert_called_once()
+        self.assertIs(note.pack.call_args.kwargs["before"], form)
+        note.pack_forget.assert_not_called()
+
+    def test_empty_note_hides_the_label(self):
+        note = Mock()
+        instance = self.make_instance(note, Mock())
+
+        instance._set_data_paths_note("")
+
+        note.configure.assert_called_once_with(text="")
+        note.pack_forget.assert_called_once()
+        note.pack.assert_not_called()
+
+
+class SourcePathsChangedTests(unittest.TestCase):
+    """The loader's _current_paths_match_loaded and _source_paths_changed:
+    whether the selected paths match the loaded snapshot's sources, and the
+    status line and dialog note that report the answer."""
+
+    @staticmethod
+    def make_instance(cache, stats, loaded=None, rows=(), refreshed_at=""):
+        instance = object.__new__(app.LibraryApp)
+        instance.loaded_source_paths = loaded
+        instance.cache_var = Mock()
+        instance.cache_var.get.return_value = cache
+        instance.stats_var = Mock()
+        instance.stats_var.get.return_value = stats
+        instance.rows = list(rows)
+        instance.last_refreshed_at = refreshed_at
+        instance.status = Mock()
+        instance._set_data_paths_note = Mock()
+        return instance
+
+    def test_no_loaded_snapshot_reports_match(self):
+        instance = self.make_instance("/cache", "/stats.xml")
+        self.assertTrue(instance._current_paths_match_loaded())
+
+    def test_matching_paths_report_match(self):
+        instance = self.make_instance(
+            "/cache", "/stats.xml", loaded=("/cache", "/stats.xml"))
+        self.assertTrue(instance._current_paths_match_loaded())
+
+    def test_spelling_difference_still_matches(self):
+        # _normalized_source_path runs abspath: a "." component in the
+        # selected path is the same folder as the saved one. [CODE]
+        instance = self.make_instance(
+            "/cache/.", "/stats.xml", loaded=("/cache", "/stats.xml"))
+        self.assertTrue(instance._current_paths_match_loaded())
+
+    def test_different_cache_path_reports_mismatch(self):
+        instance = self.make_instance(
+            "/other", "/stats.xml", loaded=("/cache", "/stats.xml"))
+        self.assertFalse(instance._current_paths_match_loaded())
+
+    def test_different_stats_path_reports_mismatch(self):
+        instance = self.make_instance(
+            "/cache", "/other.xml", loaded=("/cache", "/stats.xml"))
+        self.assertFalse(instance._current_paths_match_loaded())
+
+    def test_missing_path_variables_report_match(self):
+        # A bare instance without path state reports True the same way.
+        instance = object.__new__(app.LibraryApp)
+        instance.loaded_source_paths = ("/cache", "/stats.xml")
+        self.assertTrue(instance._current_paths_match_loaded())
+
+    def test_no_loaded_snapshot_leaves_status_and_note_alone(self):
+        instance = self.make_instance("/cache", "/stats.xml")
+
+        instance._source_paths_changed()
+
+        instance.status.set.assert_not_called()
+        instance._set_data_paths_note.assert_not_called()
+
+    def test_matching_paths_show_the_snapshot_line_and_clear_the_note(self):
+        instance = self.make_instance(
+            "/cache", "/stats.xml", loaded=("/cache", "/stats.xml"),
+            rows=[{}, {}, {}])
+
+        instance._source_paths_changed()
+
+        instance.status.set.assert_called_once_with(
+            "Showing saved library snapshot · 3 charts · "
+            "last refreshed unknown.")
+        instance._set_data_paths_note.assert_called_once_with("")
+
+    def test_differing_paths_show_the_moved_paths_line_and_the_differ_note(self):
+        instance = self.make_instance(
+            "/other", "/stats.xml", loaded=("/cache", "/stats.xml"),
+            rows=[{}])
+
+        instance._source_paths_changed()
+
+        instance.status.set.assert_called_once_with(
+            "Displayed library uses different data paths. Click Load / "
+            "refresh to show the selected sources.")
+        instance._set_data_paths_note.assert_called_once_with(
+            app.LibraryApp._DATA_PATHS_DIFFER_NOTE)
 
 
 class InvalidPathsNoteTests(unittest.TestCase):
@@ -2204,6 +2606,76 @@ class RefreshGenerationTests(unittest.TestCase):
             self.assertEqual(mock_thread.call_args.kwargs["args"][2], 1)
 
 
+class WorkerWiringTests(unittest.TestCase):
+    """load_data and sync_scores hand off to the app's own workers, with the
+    current generation captured on the main thread: the wiring the
+    LibraryLoader move must preserve."""
+
+    def test_load_data_hands_the_scan_to_the_apps_load_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache"
+            cache_dir.mkdir()
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>", encoding="utf-8")
+
+            instance = object.__new__(app.LibraryApp)
+            instance.cache_var = Mock()
+            instance.cache_var.get.return_value = str(cache_dir)
+            instance.stats_var = Mock()
+            instance.stats_var.get.return_value = str(stats_file)
+            instance._save_settings = Mock()
+            instance.progress = Mock()
+            instance.status = Mock()
+            instance.load_button = Mock()
+            instance._load_generation = 0
+
+            with patch.object(app.threading, "Thread") as mock_thread:
+                instance.load_data()
+
+            self.assertEqual(instance._load_generation, 1)
+            mock_thread.assert_called_once()
+            target = mock_thread.call_args.kwargs["target"]
+            self.assertIs(target.__self__, instance)
+            self.assertIs(target.__func__,
+                          app.LibraryApp._load_worker)
+            self.assertEqual(mock_thread.call_args.kwargs["args"],
+                             (cache_dir, stats_file, 1))
+
+    def test_sync_scores_hands_the_sync_to_the_apps_sync_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache"
+            cache_dir.mkdir()
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>", encoding="utf-8")
+
+            instance = object.__new__(app.LibraryApp)
+            instance._scan_in_flight = False
+            instance._sync_in_flight = False
+            instance._load_generation = 1
+            instance.rows = [{"Title": "Song"}]
+            instance.cache_var = Mock()
+            instance.cache_var.get.return_value = str(cache_dir)
+            instance.stats_var = Mock()
+            instance.stats_var.get.return_value = str(stats_file)
+            instance.progress = Mock()
+            instance.status = Mock()
+            instance._file_menu = Mock()
+
+            with patch.object(app.threading, "Thread") as mock_thread:
+                instance.sync_scores()
+
+            self.assertTrue(instance._sync_in_flight)
+            mock_thread.assert_called_once()
+            target = mock_thread.call_args.kwargs["target"]
+            self.assertIs(target.__self__, instance)
+            self.assertIs(target.__func__,
+                          app.LibraryApp._sync_scores_worker)
+            self.assertEqual(mock_thread.call_args.kwargs["args"],
+                             (cache_dir, stats_file, instance.rows, 1))
+
+
 class ScoresSyncTests(unittest.TestCase):
     """The scores-only sync (issue #147): re-read Stats.xml, no cache re-parse."""
 
@@ -3239,6 +3711,83 @@ class PerformanceAndExportTests(unittest.TestCase):
             self.assertIn("Subtitle", content)
             self.assertIn("(Sunset Mix)", content)
             self.assertIn("Exported 1 charts", instance.status.set.call_args[0][0])
+
+
+class RebindingHazardTests(unittest.TestCase):
+    """The sort/column rebinding hazard (proposal 0009, Claude's review):
+    sort_by rebinds self.sort_keys and reset_column_layout rebinds
+    self.column_order, so the state _save_settings persists must be the
+    table's own state after the gesture — a shared-input design would go
+    stale here. These pins say what reaches disk."""
+
+    @staticmethod
+    def make_save_instance(settings_path):
+        instance = object.__new__(app.LibraryApp)
+        instance.settings_path = settings_path
+        instance.tree = Mock()
+        instance.tree.column.return_value = 100
+        instance.cache_var = Mock(get=Mock(return_value="/cache"))
+        instance.stats_var = Mock(get=Mock(return_value="/stats.xml"))
+        instance.column_order = list(app.HEADERS)
+        instance.column_visibility = {
+            col: Mock(get=Mock(return_value=True)) for col in app.HEADERS}
+        instance.group_visibility = {
+            group: FakeVariable() for group in app.COLUMN_GROUPS}
+        instance.default_column_widths = {
+            col: 100 for col in app.HEADERS}
+        instance.sort_keys = [("Pack", False)]
+        instance.show_distribution_panel = Mock(
+            get=Mock(return_value=False))
+        instance.distribution_metric = Mock(get=Mock(return_value="Meter"))
+        instance.pack_var = Mock(get=Mock(return_value="All packs"))
+        instance.type_var = Mock(get=Mock(return_value="All types"))
+        instance.diff_var = Mock(get=Mock(return_value="All difficulties"))
+        instance.course_geometry = None
+        instance.advanced_search_geometry = None
+        instance._settings_store = library_data.SettingsStore(settings_path)
+        instance._settings_store.load()
+        instance.status = Mock()
+        return instance
+
+    @staticmethod
+    def saved(settings_path):
+        return json.loads(settings_path.read_text(encoding="utf-8"))
+
+    def test_sort_by_a_new_column_persists_the_new_sort(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            instance = self.make_save_instance(settings_path)
+            instance.refresh_table = Mock()
+
+            instance.sort_by("Title")
+
+            instance.refresh_table.assert_called_once_with(
+                preserve_selection=True)
+            self.assertEqual(self.saved(settings_path)["sort_keys"],
+                             [["Title", False]])
+
+    def test_sort_by_the_current_first_column_toggles_and_persists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            instance = self.make_save_instance(settings_path)
+            instance.sort_keys = [("Title", False)]
+            instance.refresh_table = Mock()
+
+            instance.sort_by("Title")
+
+            self.assertEqual(self.saved(settings_path)["sort_keys"],
+                             [["Title", True]])
+
+    def test_reset_column_layout_persists_the_restored_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            instance = self.make_save_instance(settings_path)
+            instance.column_order = list(reversed(app.HEADERS))
+
+            instance.reset_column_layout()
+
+            self.assertEqual(self.saved(settings_path)["column_order"],
+                             list(app.HEADERS))
 
 
 class LibraryAppExitTests(unittest.TestCase):
