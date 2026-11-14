@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
+import data_paths_dialog as dialog
 import distribution_panel as dp
 import library_data
 import library_visualizer as app
@@ -1394,116 +1395,9 @@ class InitialSnapshotTests(unittest.TestCase):
         instance.progress.stop.assert_called_once_with()
 
 
-class DataPathsPopupTests(unittest.TestCase):
-    """The first-run Data paths popup (UI redesign): _maybe_show_first_run_paths_dialog
-    opens it once at startup only when no snapshot restored and the paths are
-    not both usable, with the note naming the situation."""
-
-    @staticmethod
-    def make_instance(cache_dir, stats_file, saved_settings=None, loaded_source_paths=None):
-        instance = object.__new__(app.LibraryApp)
-        instance._data_paths_popup_shown = False
-        instance.loaded_source_paths = loaded_source_paths
-        instance.cache_var = Mock()
-        instance.cache_var.get.return_value = str(cache_dir)
-        instance.stats_var = Mock()
-        instance.stats_var.get.return_value = str(stats_file)
-        instance.saved_settings = saved_settings if saved_settings is not None else {}
-        instance.open_data_paths_dialog = Mock()
-        return instance
-
-    def test_first_run_opens_with_the_first_run_note(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            instance = self.make_instance(root / "Cache" / "Songs", root / "Stats.xml")
-            instance._maybe_show_first_run_paths_dialog()
-        instance.open_data_paths_dialog.assert_called_once_with(
-            note=app.LibraryApp._DATA_PATHS_FIRST_RUN_NOTE)
-
-    def test_dead_saved_paths_get_the_dead_note(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = root / "Cache" / "Songs", root / "Stats.xml"
-            instance = self.make_instance(
-                cache_dir, stats_file, saved_settings={"cache_dir": str(cache_dir)})
-            instance._maybe_show_first_run_paths_dialog()
-        instance.open_data_paths_dialog.assert_called_once_with(
-            note=app.LibraryApp._DATA_PATHS_DEAD_NOTE)
-
-    def test_no_popup_when_a_snapshot_restored(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir, stats_file = root / "Cache" / "Songs", root / "Stats.xml"
-            instance = self.make_instance(
-                cache_dir, stats_file,
-                saved_settings={"cache_dir": str(cache_dir)},
-                loaded_source_paths=(str(cache_dir), str(stats_file)))
-            instance._maybe_show_first_run_paths_dialog()
-        instance.open_data_paths_dialog.assert_not_called()
-
-    def test_no_popup_when_both_paths_are_usable(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            cache_dir = root / "Cache" / "Songs"
-            cache_dir.mkdir(parents=True)
-            stats_file = root / "Stats.xml"
-            stats_file.write_text("<Stats/>")
-            instance = self.make_instance(cache_dir, stats_file)
-            instance._maybe_show_first_run_paths_dialog()
-        instance.open_data_paths_dialog.assert_not_called()
-
-    def test_popup_shows_only_once_per_session(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            instance = self.make_instance(root / "Cache" / "Songs", root / "Stats.xml")
-            instance._maybe_show_first_run_paths_dialog()
-            instance._maybe_show_first_run_paths_dialog()
-        instance.open_data_paths_dialog.assert_called_once()
-
-    def test_bare_instance_without_path_state_returns_silently(self):
-        instance = object.__new__(app.LibraryApp)
-        instance._maybe_show_first_run_paths_dialog()  # no error, no dialog
 
 
-class DataPathsNoteTests(unittest.TestCase):
-    """The Data paths dialog's note line (_set_data_paths_note): it shows
-    the note above the path rows when there is one, hides the label when
-    there is not, and does nothing when the dialog is closed."""
 
-    @staticmethod
-    def make_instance(note=None, form=None):
-        instance = object.__new__(app.LibraryApp)
-        if note is not None:
-            instance._data_paths_note = note
-        if form is not None:
-            instance._data_paths_form = form
-        return instance
-
-    def test_no_dialog_open_is_a_no_op(self):
-        instance = self.make_instance()
-        instance._set_data_paths_note("anything")  # no error, no label
-
-    def test_non_empty_note_is_shown_above_the_form(self):
-        note, form = Mock(), Mock()
-        instance = self.make_instance(note, form)
-
-        instance._set_data_paths_note("The cache folder was not found.")
-
-        note.configure.assert_called_once_with(
-            text="The cache folder was not found.")
-        note.pack.assert_called_once()
-        self.assertIs(note.pack.call_args.kwargs["before"], form)
-        note.pack_forget.assert_not_called()
-
-    def test_empty_note_hides_the_label(self):
-        note = Mock()
-        instance = self.make_instance(note, Mock())
-
-        instance._set_data_paths_note("")
-
-        note.configure.assert_called_once_with(text="")
-        note.pack_forget.assert_called_once()
-        note.pack.assert_not_called()
 
 
 class SourcePathsChangedTests(unittest.TestCase):
@@ -1522,7 +1416,16 @@ class SourcePathsChangedTests(unittest.TestCase):
         instance.rows = list(rows)
         instance.last_refreshed_at = refreshed_at
         instance.status = Mock()
-        instance._set_data_paths_note = Mock()
+        # A real dialog so paths_changed() computes the note from the app's
+        # _current_paths_match_loaded; set_note is mocked to record the call
+        # (the dialog was never opened, so a real set_note would be a no-op).
+        instance._data_paths_dialog = dialog.DataPathsDialog(
+            parent=Mock(), cache_var=instance.cache_var,
+            stats_var=instance.stats_var, load_callback=Mock(),
+            save_settings=Mock(), button_factory=Mock(), entry_factory=Mock(),
+            dpi_scale=1.0,
+            paths_match_loaded=lambda: instance._current_paths_match_loaded())
+        instance._data_paths_dialog.set_note = Mock()
         return instance
 
     def test_no_loaded_snapshot_reports_match(self):
@@ -1563,7 +1466,7 @@ class SourcePathsChangedTests(unittest.TestCase):
         instance._source_paths_changed()
 
         instance.status.set.assert_not_called()
-        instance._set_data_paths_note.assert_not_called()
+        instance._data_paths_dialog.set_note.assert_not_called()
 
     def test_matching_paths_show_the_snapshot_line_and_clear_the_note(self):
         instance = self.make_instance(
@@ -1575,7 +1478,7 @@ class SourcePathsChangedTests(unittest.TestCase):
         instance.status.set.assert_called_once_with(
             "Showing saved library snapshot · 3 charts · "
             "last refreshed unknown.")
-        instance._set_data_paths_note.assert_called_once_with("")
+        instance._data_paths_dialog.set_note.assert_called_once_with("")
 
     def test_differing_paths_show_the_moved_paths_line_and_the_differ_note(self):
         instance = self.make_instance(
@@ -1587,11 +1490,20 @@ class SourcePathsChangedTests(unittest.TestCase):
         instance.status.set.assert_called_once_with(
             "Displayed library uses different data paths. Click Load / "
             "refresh to show the selected sources.")
-        instance._set_data_paths_note.assert_called_once_with(
-            app.LibraryApp._DATA_PATHS_DIFFER_NOTE)
+        instance._data_paths_dialog.set_note.assert_called_once_with(
+            dialog.DataPathsDialog._DATA_PATHS_DIFFER_NOTE)
 
 
 
+
+
+class FirstRunPopupWrapperTests(unittest.TestCase):
+    """The app-side _maybe_show_first_run_paths_dialog wrapper returns
+    silently on a bare instance (no dialog constructed yet)."""
+
+    def test_bare_instance_without_path_state_returns_silently(self):
+        instance = object.__new__(app.LibraryApp)
+        instance._maybe_show_first_run_paths_dialog()  # no error, no dialog
 
 
 class _StubStatus:
@@ -1944,12 +1856,12 @@ class LiveDataPathsDialogTests(unittest.TestCase):
                   if file_menu.type(i) != "separator"]
         self.assertIn("Data paths…", labels)
         application.open_data_paths_dialog()
-        window = application._data_paths_window
+        window = application._data_paths_dialog._data_paths_window
         self.assertTrue(window.winfo_exists())
         self.assertEqual(window.title(), "Where is your library?")
         self.find_button(window, "Cancel").invoke()
         self.assertFalse(window.winfo_exists())
-        self.assertIsNone(application._data_paths_window)
+        self.assertIsNone(application._data_paths_dialog._data_paths_window)
 
     def test_dialog_is_modal_and_dismisses_with_escape(self):
         root = self.make_root()
@@ -1959,7 +1871,7 @@ class LiveDataPathsDialogTests(unittest.TestCase):
         cache_dir.mkdir(parents=True)
         application = app.LibraryApp(root)
         application.open_data_paths_dialog()
-        window = application._data_paths_window
+        window = application._data_paths_dialog._data_paths_window
         self.assertEqual(window.grab_status(), "local")
         # A generated key event needs a mapped window: wait until the dialog
         # is viewable, then send Escape and let it land.
@@ -1969,17 +1881,17 @@ class LiveDataPathsDialogTests(unittest.TestCase):
             root.update()
             time.sleep(0.02)
         self.assertFalse(window.winfo_exists())
-        self.assertIsNone(application._data_paths_window)
+        self.assertIsNone(application._data_paths_dialog._data_paths_window)
 
     def test_first_run_popup_opens_at_startup_and_does_not_reappear(self):
         root = self.make_root()
         self.make_settings(write_settings=False)
         application = app.LibraryApp(root)
-        self.pump_until(root, lambda: application._data_paths_window is not None
-                        and application._data_paths_window.winfo_exists())
-        window = application._data_paths_window
-        self.assertEqual(application._data_paths_note.cget("text"),
-                         app.LibraryApp._DATA_PATHS_FIRST_RUN_NOTE)
+        self.pump_until(root, lambda: application._data_paths_dialog._data_paths_window is not None
+                        and application._data_paths_dialog._data_paths_window.winfo_exists())
+        window = application._data_paths_dialog._data_paths_window
+        self.assertEqual(application._data_paths_dialog._data_paths_note.cget("text"),
+                         dialog.DataPathsDialog._DATA_PATHS_FIRST_RUN_NOTE)
         self.assertIn("No saved library yet.", application.status.get())
         self.find_button(window, "Cancel").invoke()
         self.assertFalse(window.winfo_exists())
@@ -1988,17 +1900,17 @@ class LiveDataPathsDialogTests(unittest.TestCase):
         while time.monotonic() < deadline:
             root.update()
             time.sleep(0.02)
-        self.assertIsNone(application._data_paths_window)
+        self.assertIsNone(application._data_paths_dialog._data_paths_window)
 
     def test_dead_saved_paths_popup_names_the_dead_paths(self):
         root = self.make_root()
         self.make_settings(write_settings=True)  # paths do not exist on disk
         application = app.LibraryApp(root)
-        self.pump_until(root, lambda: application._data_paths_window is not None
-                        and application._data_paths_window.winfo_exists())
-        self.assertEqual(application._data_paths_note.cget("text"),
-                         app.LibraryApp._DATA_PATHS_DEAD_NOTE)
-        self.find_button(application._data_paths_window, "Cancel").invoke()
+        self.pump_until(root, lambda: application._data_paths_dialog._data_paths_window is not None
+                        and application._data_paths_dialog._data_paths_window.winfo_exists())
+        self.assertEqual(application._data_paths_dialog._data_paths_note.cget("text"),
+                         dialog.DataPathsDialog._DATA_PATHS_DEAD_NOTE)
+        self.find_button(application._data_paths_dialog._data_paths_window, "Cancel").invoke()
 
     def test_load_with_invalid_paths_opens_the_dialog(self):
         root = self.make_root()
@@ -2007,9 +1919,9 @@ class LiveDataPathsDialogTests(unittest.TestCase):
         # No pumping: the deferred startup load has not run yet, so the
         # dialog here comes from Load, not from the first-run popup.
         application.load_data()
-        window = application._data_paths_window
+        window = application._data_paths_dialog._data_paths_window
         self.assertTrue(window.winfo_exists())
-        self.assertIn("cache folder", application._data_paths_note.cget("text"))
+        self.assertIn("cache folder", application._data_paths_dialog._data_paths_note.cget("text"))
         self.find_button(window, "Cancel").invoke()
         self.assertFalse(window.winfo_exists())
 
@@ -2019,7 +1931,7 @@ class LiveDataPathsDialogTests(unittest.TestCase):
         cache_dir.mkdir(parents=True)
         application = app.LibraryApp(root)
         application.open_data_paths_dialog()
-        window = application._data_paths_window
+        window = application._data_paths_dialog._data_paths_window
         self.find_button(window, "Load library").invoke()
         self.assertFalse(window.winfo_exists())
         self.assertEqual(application.status.get(), "Reading chart cache and player scores…")
@@ -2037,33 +1949,33 @@ class LiveDataPathsDialogTests(unittest.TestCase):
         self.pump_until(root, lambda: application.status.get().startswith(
             "Showing saved library snapshot"))
         application.open_data_paths_dialog()
-        self.assertEqual(application._data_paths_note.cget("text"), "")
+        self.assertEqual(application._data_paths_dialog._data_paths_note.cget("text"), "")
         application.cache_var.set("/somewhere/else")
-        self.assertEqual(application._data_paths_note.cget("text"),
-                         app.LibraryApp._DATA_PATHS_DIFFER_NOTE)
+        self.assertEqual(application._data_paths_dialog._data_paths_note.cget("text"),
+                         dialog.DataPathsDialog._DATA_PATHS_DIFFER_NOTE)
         application.cache_var.set(str(cache_dir))
-        self.assertEqual(application._data_paths_note.cget("text"), "")
+        self.assertEqual(application._data_paths_dialog._data_paths_note.cget("text"), "")
         # And when the dialog opens with the paths already moved, the differ
         # note is there from the start, not only after a later edit.
         application.cache_var.set("/somewhere/else")
-        self.find_button(application._data_paths_window, "Cancel").invoke()
+        self.find_button(application._data_paths_dialog._data_paths_window, "Cancel").invoke()
         application.open_data_paths_dialog()
-        self.assertEqual(application._data_paths_note.cget("text"),
-                         app.LibraryApp._DATA_PATHS_DIFFER_NOTE)
-        self.find_button(application._data_paths_window, "Cancel").invoke()
+        self.assertEqual(application._data_paths_dialog._data_paths_note.cget("text"),
+                         dialog.DataPathsDialog._DATA_PATHS_DIFFER_NOTE)
+        self.find_button(application._data_paths_dialog._data_paths_window, "Cancel").invoke()
 
     def test_dialog_load_button_with_invalid_paths_stays_open_and_names_them(self):
         root = self.make_root()
         self.make_settings(write_settings=True)  # paths do not exist on disk
         application = app.LibraryApp(root)
         application.open_data_paths_dialog()
-        window = application._data_paths_window
+        window = application._data_paths_dialog._data_paths_window
         self.find_button(window, "Load library").invoke()
         self.assertTrue(window.winfo_exists())
         # Only the cache is missing here (make_settings writes Stats.xml),
         # so the note names that side alone.
-        self.assertIn("cache folder", application._data_paths_note.cget("text"))
-        self.assertNotIn("Stats.xml", application._data_paths_note.cget("text"))
+        self.assertIn("cache folder", application._data_paths_dialog._data_paths_note.cget("text"))
+        self.assertNotIn("Stats.xml", application._data_paths_dialog._data_paths_note.cget("text"))
         self.find_button(window, "Cancel").invoke()
 
 
