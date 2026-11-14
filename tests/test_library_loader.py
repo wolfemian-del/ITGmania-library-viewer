@@ -1695,6 +1695,10 @@ class LoaderFilterPersistenceTests(unittest.TestCase):
         instance.refresh_table.assert_called_once()
 
     def test_successive_loads_keep_a_selection_then_fall_back(self):
+        """ChatGPT-6, PR #167 follow-up: a successor load that skipped
+        the filter's row handoff (while still resetting the dropdown
+        choices) passed this test, because it only checked dropdown
+        persistence. Each load must put its own rows in the filter."""
         instance = self.make_loaded_instance()
         loaded = _make_wired_loader(instance)
         first = self.rows(("Pack1", "dance-single", "Hard"), ("Pack2", "dance-single", "Hard"))
@@ -1704,10 +1708,12 @@ class LoaderFilterPersistenceTests(unittest.TestCase):
         second = self.rows(("Pack2", "dance-single", "Hard"), ("Pack3", "dance-single", "Hard"))
         loaded._loaded(second, len(second), from_cache=True, refreshed_at="2026-01-01T00:00:00")
         self.assertEqual(instance.pack_var.get(), "Pack2")
+        self.assertIs(instance._filter._rows, second)
 
         third = self.rows(("Pack3", "dance-single", "Hard"))
         loaded._loaded(third, len(third), from_cache=True, refreshed_at="2026-01-01T00:00:00")
         self.assertEqual(instance.pack_var.get(), "All packs")
+        self.assertIs(instance._filter._rows, third)
 
     def test_fallback_replaces_the_stored_value_on_the_next_save(self):
         with tempfile.TemporaryDirectory() as directory:
