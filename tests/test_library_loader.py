@@ -43,6 +43,7 @@ class _ValueVar:
     def __init__(self, value, on_set=None):
         self.value = value
         self.on_set = on_set
+        self._traces = []
 
     def get(self):
         return self.value
@@ -51,6 +52,13 @@ class _ValueVar:
         self.value = value
         if self.on_set is not None:
             self.on_set()
+        for callback in self._traces:
+            callback()
+
+    def trace_add(self, mode, callback):
+        """Record a write-trace callback, like tk.Variable.trace_add; set() fires it."""
+        self._traces.append(callback)
+        return f"trace-{len(self._traces)}"
 
 
 class LibrarySnapshotTests(unittest.TestCase):
@@ -1549,14 +1557,21 @@ class LoaderFilterPersistenceTests(unittest.TestCase):
         instance.pack_filter = Mock()
         instance.type_filter = Mock()
         instance.diff_filter = Mock()
-        instance._batched_filter_changes = app.LibraryApp._batched_filter_changes.__get__(instance)
-        instance._batching_filter_changes = False
-        instance._refresh_unless_batching = app.LibraryApp._refresh_unless_batching.__get__(instance)
-        # Tk would run the write traces on each set; simulate them the way
-        # the long-standing _loaded pinning test does.
-        instance.pack_var = _ValueVar(pack, on_set=instance._refresh_unless_batching)
-        instance.type_var = _ValueVar(type_, on_set=instance._refresh_unless_batching)
-        instance.diff_var = _ValueVar(difficulty, on_set=instance._refresh_unless_batching)
+        instance.search_entry = Mock()
+        instance.root = Mock()
+        instance.search_var = _ValueVar("")
+        instance.pack_var = _ValueVar(pack)
+        instance.type_var = _ValueVar(type_)
+        instance.diff_var = _ValueVar(difficulty)
+        instance.scored_var = _ValueVar(False)
+        # The real filter, built from the app's variables the way _build
+        # builds it; it installs the variable traces itself.
+        instance._filter = app.LibraryFilter(
+            instance.search_var, instance.pack_var, instance.type_var,
+            instance.diff_var, instance.scored_var,
+            instance.search_entry, instance.pack_filter,
+            instance.type_filter, instance.diff_filter, instance.root)
+        instance._filter.subscribe(instance.refresh_table)
         instance.course_builder = None
         return instance
 
@@ -1652,8 +1667,7 @@ class LoaderFilterPersistenceTests(unittest.TestCase):
             instance.settings_path = settings_path
             instance._settings_store = library_data.SettingsStore(settings_path)
             seeded = instance._settings_store.load()
-            instance.pack_var = _ValueVar(seeded.get("filter_pack", "All packs"),
-                                          on_set=instance._refresh_unless_batching)
+            instance.pack_var.set(seeded.get("filter_pack", "All packs"))
             rows = self.rows(("Pack1", "dance-single", "Hard"))
             loaded = _make_wired_loader(instance)
             loaded._loaded(rows, len(rows), from_cache=True, refreshed_at="2026-01-01T00:00:00")
@@ -1731,12 +1745,18 @@ class LoadDeliversRowsTests(unittest.TestCase):
         instance.pack_filter = Mock()
         instance.type_filter = Mock()
         instance.diff_filter = Mock()
+        instance.search_entry = Mock()
         instance.status = Mock()
         instance.course_builder = None
-        instance._batched_filter_changes = (
-            app.LibraryApp._batched_filter_changes.__get__(instance))
-        instance._batching_filter_changes = False
-        instance._search_refresh_after_id = None
+        instance._filter = app.LibraryFilter(
+            instance.search_var, instance.pack_var, instance.type_var,
+            instance.diff_var, instance.scored_var,
+            instance.search_entry, instance.pack_filter,
+            instance.type_filter, instance.diff_filter, instance.root)
+        # The rows are set before subscribing, so the setup itself does
+        # not refresh; the load's batch exit is the refresh the test pins.
+        instance._filter.set_rows(instance.rows)
+        instance._filter.subscribe(instance.refresh_table)
         loaded = _make_wired_loader(instance)
 
         with patch.object(app, "ROW_INSERT_BUDGET_SECONDS", 60):
@@ -1770,15 +1790,23 @@ class LoadBatchesFilterChangesTests(unittest.TestCase):
         instance.pack_var = Mock()
         instance.type_var = Mock()
         instance.diff_var = Mock()
-        instance._batched_filter_changes = app.LibraryApp._batched_filter_changes.__get__(instance)
-        instance._batching_filter_changes = False
+        instance.search_var = Mock()
+        instance.scored_var = Mock()
+        instance.search_entry = Mock()
+        instance.root = Mock()
+        instance._filter = app.LibraryFilter(
+            instance.search_var, instance.pack_var, instance.type_var,
+            instance.diff_var, instance.scored_var,
+            instance.search_entry, instance.pack_filter,
+            instance.type_filter, instance.diff_filter, instance.root)
+        instance._filter.subscribe(instance.refresh_table)
         instance.course_builder = None  # declared in __init__ since the split; this fake predates it
         # Tk would run the write traces on each set; simulate them the way
         # the long-standing _loaded pinning test does.
-        instance._refresh_unless_batching = app.LibraryApp._refresh_unless_batching.__get__(instance)
-        instance.diff_var.set.side_effect = lambda *args: instance._refresh_unless_batching()
-        instance.pack_var.set.side_effect = lambda *args: instance._refresh_unless_batching()
-        instance.type_var.set.side_effect = lambda *args: instance._refresh_unless_batching()
+        refresh = instance._filter._refresh_unless_batching
+        instance.diff_var.set.side_effect = lambda *args: refresh()
+        instance.pack_var.set.side_effect = lambda *args: refresh()
+        instance.type_var.set.side_effect = lambda *args: refresh()
         loaded = _make_wired_loader(instance)
 
         rows = [

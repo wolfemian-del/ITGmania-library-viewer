@@ -27,6 +27,19 @@ class DistributionUITests(unittest.TestCase):
         instance.diff_var.get.return_value = "All difficulties"
         instance.search_entry = Mock()
         instance.refresh_table = Mock()
+        instance.pack_var = Mock()
+        instance.type_var = Mock()
+        instance.scored_var = Mock()
+        instance.pack_filter = Mock()
+        instance.type_filter = Mock()
+        instance.diff_filter = Mock()
+        instance.root = Mock()
+        instance._filter = app.LibraryFilter(
+            instance.search_var, instance.pack_var, instance.type_var,
+            instance.diff_var, instance.scored_var,
+            instance.search_entry, instance.pack_filter,
+            instance.type_filter, instance.diff_filter, instance.root)
+        instance._filter.subscribe(instance.refresh_table)
         # The panel component, wired to the app the way _build wires it.
         panel = object.__new__(dp.DistributionPanel)
         panel._button = Mock()
@@ -35,7 +48,7 @@ class DistributionUITests(unittest.TestCase):
         panel.show_distribution_panel = instance.show_distribution_panel
         panel.distribution_metric = instance.distribution_metric
         panel._filter_rows = Mock(return_value=[])
-        panel._apply_chart_filter = instance.apply_chart_filter
+        panel._apply_chart_filter = instance._filter.apply_chart_filter
         panel._save_settings = Mock()
         panel.dist_button = Mock()
         panel.dist_panel = Mock()
@@ -116,6 +129,7 @@ class DistributionUITests(unittest.TestCase):
                 {"Meter": 10, "Difficulty": "Hard", "bpm_max": 150, "Pack": "Test", "Type": "dance-single", "Grade": "Tier05"},
                 {"Meter": 11, "Difficulty": "Challenge", "bpm_max": 180, "Pack": "Test", "Type": "dance-single", "Grade": "Tier06"},
             ]
+            application._filter.set_rows(application._loader.rows)
             application.refresh_table()
 
             # Test switching metric
@@ -316,18 +330,29 @@ class FullDistributionTests(unittest.TestCase):
         instance.search_var = Mock(get=Mock(return_value=query))
         instance.search_entry = Mock()
         instance.refresh_table = Mock()
+        instance.pack_filter = Mock()
+        instance.type_filter = Mock()
+        instance.diff_filter = Mock()
+        instance.root = Mock()
+        instance._filter = app.LibraryFilter(
+            instance.search_var, instance.pack_var, instance.type_var,
+            instance.diff_var, instance.scored_var,
+            instance.search_entry, instance.pack_filter,
+            instance.type_filter, instance.diff_filter, instance.root)
+        instance._filter.set_rows(list(cls.ROWS))
+        instance._filter.subscribe(instance.refresh_table)
         instance.distribution_metric = Mock(get=Mock(return_value=metric))
         instance.show_distribution_panel = Mock(get=Mock(return_value=True))
         # The panel component, wired to the app the way _build wires it: the pull is the
-        # app's own row filter, and filter changes go through the app's apply_chart_filter.
+        # filter's row filter, and filter changes go through the filter's apply_chart_filter.
         panel = object.__new__(dp.DistributionPanel)
         panel._button = Mock()
         panel.search_var = instance.search_var
         panel.diff_var = instance.diff_var
         panel.show_distribution_panel = instance.show_distribution_panel
         panel.distribution_metric = instance.distribution_metric
-        panel._filter_rows = instance._filter_rows
-        panel._apply_chart_filter = instance.apply_chart_filter
+        panel._filter_rows = instance._filter.filter_rows
+        panel._apply_chart_filter = instance._filter.apply_chart_filter
         panel._save_settings = Mock()
         panel.dist_button = Mock()
         panel.dist_panel = Mock()
@@ -347,7 +372,8 @@ class FullDistributionTests(unittest.TestCase):
     def test_filter_rows_can_skip_one_charts_own_filter(self):
         instance = self.make_app(query="meter:10 bpm:>=120 bpm:<140", diff="Hard")
         def meter_and_difficulty(ignore_metric=None):
-            return [(row["Meter"], row["Difficulty"]) for row in instance._filter_rows(ignore_metric)]
+            rows = instance._filter.filter_rows(ignore_metric)
+            return [(row["Meter"], row["Difficulty"]) for row in rows]
 
         # All filters: Hard, meter 10, BPM touching 120-139.
         self.assertEqual(meter_and_difficulty(), [(10, "Hard")])
@@ -359,7 +385,7 @@ class FullDistributionTests(unittest.TestCase):
     def test_meter_chart_shows_all_meters_while_meter_filter_is_active(self):
         instance = self.make_app(query="meter:11", metric="Meter")
         panel = instance.distribution_panel
-        visible = instance._filter_rows()
+        visible = instance._filter.filter_rows()
         self.assertEqual([row["Meter"] for row in visible], [11])
 
         bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(3)]
@@ -378,7 +404,7 @@ class FullDistributionTests(unittest.TestCase):
         # Difficulty chart with meter:10 active: all difficulties among meter-10 charts, not meter 11/12.
         instance = self.make_app(query="meter:10", diff="Hard", metric="Difficulty")
         panel = instance.distribution_panel
-        visible = instance._filter_rows()
+        visible = instance._filter.filter_rows()
         bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(6)]
         panel.dist_ax.barh.return_value = bars
         with patch.object(dp, "MATPLOTLIB_AVAILABLE", True):
@@ -395,7 +421,7 @@ class FullDistributionTests(unittest.TestCase):
         bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(6)]
         panel.dist_ax.barh.return_value = bars
         with patch.object(dp, "MATPLOTLIB_AVAILABLE", True):
-            panel.show_rows(instance._filter_rows())
+            panel.show_rows(instance._filter.filter_rows())
         return instance, {bar[2]: bar[3] for bar in panel._current_dist_bars}
 
     def test_rows_with_no_charts_are_not_clickable(self):
@@ -456,10 +482,11 @@ class FullDistributionTests(unittest.TestCase):
         panel = instance.distribution_panel
         # 22 charts of meter 10, one of 11 and one of 12: the long bar sets the chart's width.
         instance._loader.rows = list(self.ROWS[:1]) * 20 + list(self.ROWS)
+        instance._filter.set_rows(instance._loader.rows)
         bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(3)]
         panel.dist_ax.barh.return_value = bars
         with patch.object(dp, "MATPLOTLIB_AVAILABLE", True):
-            panel.show_rows(instance._filter_rows())
+            panel.show_rows(instance._filter.filter_rows())
         widths = {bar.label: bar.click_width for bar in panel._current_dist_bars}
         minimum = 22 * theme.CHART_AXIS_HEADROOM * theme.CHART_MIN_CLICK_FRACTION  # the chart is 22 * headroom units wide
         self.assertEqual(set(widths), {"12", "11", "10"})
@@ -499,7 +526,7 @@ class FullDistributionTests(unittest.TestCase):
         panel = instance.distribution_panel
         panel.dist_ax.barh.return_value = bars
         with patch.object(dp, "MATPLOTLIB_AVAILABLE", True):
-            panel.show_rows(instance._filter_rows())
+            panel.show_rows(instance._filter.filter_rows())
         panel.dist_banner_frame.pack.assert_called_once_with(
             fill="x", pady=(0, 6), before=panel.dist_chart_frame)
         panel.dist_banner_frame.pack_forget.assert_not_called()
@@ -508,7 +535,7 @@ class FullDistributionTests(unittest.TestCase):
         panel = instance.distribution_panel
         panel.dist_ax.barh.return_value = bars
         with patch.object(dp, "MATPLOTLIB_AVAILABLE", True):
-            panel.show_rows(instance._filter_rows())
+            panel.show_rows(instance._filter.filter_rows())
         panel.dist_banner_frame.pack_forget.assert_called_once_with()
         panel.dist_banner_frame.pack.assert_not_called()
 
@@ -531,7 +558,7 @@ class FullDistributionTests(unittest.TestCase):
         bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(6)]
         panel.dist_ax.barh.return_value = bars
         with patch.object(dp, "MATPLOTLIB_AVAILABLE", True):
-            panel.show_rows(instance._filter_rows())
+            panel.show_rows(instance._filter.filter_rows())
             self.assertEqual([bar[2] for bar in panel._current_dist_bars], ["12", "11", "10"])
 
             # Empty the library underneath the panel, and make the row pull return
@@ -571,7 +598,7 @@ class FullDistributionTests(unittest.TestCase):
         bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(3)]
         panel.dist_ax.barh.return_value = bars
         with patch.object(dp, "MATPLOTLIB_AVAILABLE", True):
-            panel.show_rows(instance._filter_rows())
+            panel.show_rows(instance._filter.filter_rows())
         self.assertEqual(panel.dist_ax.barh.call_args.kwargs["color"], [theme.ACCENT] * 3)
 
         # A row with no meter value lands in the "?" bar, which takes its own colour.
@@ -593,10 +620,11 @@ class FullDistributionTests(unittest.TestCase):
         panel = instance.distribution_panel
         instance._loader.rows = [dict(self.ROWS[0], Difficulty="Quirky"),
                                dict(self.ROWS[1], Difficulty="Hard")]
+        instance._filter.set_rows(instance._loader.rows)
         bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(7)]
         panel.dist_ax.barh.return_value = bars
         with patch.object(dp, "MATPLOTLIB_AVAILABLE", True):
-            panel.show_rows(instance._filter_rows())
+            panel.show_rows(instance._filter.filter_rows())
         labels = [bar.label for bar in panel._current_dist_bars]
         colours = panel.dist_ax.barh.call_args.kwargs["color"]
         self.assertEqual(colours[labels.index("Quirky")], theme.DIFFICULTY_COLOR_UNKNOWN)
@@ -609,7 +637,7 @@ class FullDistributionTests(unittest.TestCase):
         bars = [Mock(get_y=Mock(return_value=float(i)), get_height=Mock(return_value=0.68)) for i in range(3)]
         panel.dist_ax.barh.return_value = bars
         with patch.object(dp, "MATPLOTLIB_AVAILABLE", True):
-            panel.show_rows(instance._filter_rows())
+            panel.show_rows(instance._filter.filter_rows())
         panel.dist_canvas.draw_idle.assert_called_once_with()
 
     def test_rows_arriving_while_the_panel_is_hidden_are_stored_and_nothing_is_drawn(self):
@@ -749,6 +777,11 @@ class FakeVar:
         for trace in self.traces:
             trace()
 
+    def trace_add(self, mode, callback):
+        """Record a write-trace callback, like tk.Variable.trace_add."""
+        self.traces.append(callback)
+        return f"trace-{len(self.traces)}"
+
 
 class FakeRoot:
     """Stands in for the Tk root: after() queues a callback that run_pending() runs later."""
@@ -779,17 +812,27 @@ class ApplyChartFilterTests(unittest.TestCase):
         instance = object.__new__(app.LibraryApp)
         instance.root = FakeRoot()
         instance.search_var, instance.diff_var = FakeVar(query), FakeVar(diff)
+        instance.pack_var, instance.type_var = FakeVar("All packs"), FakeVar("All types")
+        instance.scored_var = FakeVar(False)
         instance.search_entry = Mock()
+        instance.pack_filter = Mock()
+        instance.type_filter = Mock()
+        instance.diff_filter = Mock()
         instance.refreshes = 0
         instance.refresh_table = lambda *args, **kwargs: setattr(instance, "refreshes", instance.refreshes + 1)
-        # The same wiring LibraryApp.__init__ does.
-        instance.search_var.traces.append(instance._schedule_search_refresh)
-        instance.diff_var.traces.append(instance._refresh_unless_batching)
+        # The real filter, built from the app's variables the way _build
+        # builds it; it installs the variable traces itself.
+        instance._filter = app.LibraryFilter(
+            instance.search_var, instance.pack_var, instance.type_var,
+            instance.diff_var, instance.scored_var,
+            instance.search_entry, instance.pack_filter,
+            instance.type_filter, instance.diff_filter, instance.root)
+        instance._filter.subscribe(instance.refresh_table)
         return instance
 
     def test_writing_both_refreshes_once_and_nudges_the_cursor(self):
         instance = self.make_app()
-        instance.apply_chart_filter(difficulty="Hard", query="meter:11")
+        instance._filter.apply_chart_filter(difficulty="Hard", query="meter:11")
         self.assertEqual(instance.diff_var.get(), "Hard")
         self.assertEqual(instance.search_var.get(), "meter:11")
         instance.root.run_pending()
@@ -798,14 +841,14 @@ class ApplyChartFilterTests(unittest.TestCase):
 
     def test_a_query_only_write_leaves_the_difficulty_alone(self):
         instance = self.make_app(diff="Hard")
-        instance.apply_chart_filter(query="Smiley")
+        instance._filter.apply_chart_filter(query="Smiley")
         self.assertEqual(instance.diff_var.get(), "Hard")
         self.assertEqual(instance.search_var.get(), "Smiley")
         instance.search_entry.icursor.assert_called_once_with("end")
 
     def test_nothing_to_change_neither_refreshes_nor_nudges(self):
         instance = self.make_app(query="Smiley", diff="Hard")
-        instance.apply_chart_filter()
+        instance._filter.apply_chart_filter()
         instance.root.run_pending()
         self.assertEqual((instance.diff_var.get(), instance.search_var.get()), ("Hard", "Smiley"))
         self.assertEqual(instance.refreshes, 0)
@@ -820,21 +863,31 @@ class SingleRefreshTests(unittest.TestCase):
         instance = object.__new__(app.LibraryApp)
         instance.root = FakeRoot()
         instance.search_var, instance.diff_var = FakeVar(query), FakeVar(diff)
+        instance.pack_var, instance.type_var = FakeVar("All packs"), FakeVar("All types")
+        instance.scored_var = FakeVar(False)
         instance.search_entry = Mock()
+        instance.pack_filter = Mock()
+        instance.type_filter = Mock()
+        instance.diff_filter = Mock()
         instance.distribution_metric = FakeVar(metric)
         instance.refreshes = 0
         instance.refresh_table = lambda *args, **kwargs: setattr(instance, "refreshes", instance.refreshes + 1)
-        # The same wiring LibraryApp.__init__ does.
-        instance.search_var.traces.append(instance._schedule_search_refresh)
-        instance.diff_var.traces.append(instance._refresh_unless_batching)
+        # The real filter, built from the app's variables the way _build
+        # builds it; it installs the variable traces itself.
+        instance._filter = app.LibraryFilter(
+            instance.search_var, instance.pack_var, instance.type_var,
+            instance.diff_var, instance.scored_var,
+            instance.search_entry, instance.pack_filter,
+            instance.type_filter, instance.diff_filter, instance.root)
+        instance._filter.subscribe(instance.refresh_table)
         # The panel component, wired to the app the way _build wires it.
         panel = object.__new__(dp.DistributionPanel)
         panel.search_var = instance.search_var
         panel.diff_var = instance.diff_var
         panel.show_distribution_panel = FakeVar(False)
         panel.distribution_metric = instance.distribution_metric
-        panel._filter_rows = instance._filter_rows
-        panel._apply_chart_filter = instance.apply_chart_filter
+        panel._filter_rows = instance._filter.filter_rows
+        panel._apply_chart_filter = instance._filter.apply_chart_filter
         panel._save_settings = Mock()
         panel._current_dist_bars = bars or [data.ChartBar(0.0, 1.0, "11", "11")]
         panel._last_visible_rows = []
@@ -891,11 +944,12 @@ class RealChartClickTests(unittest.TestCase):
         # One chart each of meter 12 and 11, thirty of meter 10: a very short bar next to a long one.
         self.instance._loader.rows = ([dict(row, Meter=12), dict(row, Meter=11)]
                               + [dict(row, Meter=10) for _ in range(30)])
+        self.instance._filter.set_rows(self.instance._loader.rows)
         figure = Figure(figsize=(3.0, 4.0), dpi=100)
         self.panel.dist_fig, self.panel.dist_ax = figure, figure.add_subplot(111)
         self.panel.dist_canvas = FigureCanvasAgg(figure)
         with patch.object(dp, "MATPLOTLIB_AVAILABLE", True):
-            self.panel.show_rows(self.instance._filter_rows())
+            self.panel.show_rows(self.instance._filter.filter_rows())
         self.panel.dist_canvas.draw()
         self.row_y = {bar.label: (bar.y_min + bar.y_max) / 2 for bar in self.panel._current_dist_bars}
 
@@ -1023,6 +1077,7 @@ class LiveDistributionStartupTests(LiveWindowCase):
             {"Meter": 10, "Difficulty": "Hard", "bpm_max": 150.0, "Pack": "Test", "Type": "dance-single", "Grade": ""},
             {"Meter": 11, "Difficulty": "Challenge", "bpm_max": 180.0, "Pack": "Test", "Type": "dance-single", "Grade": ""},
         ]
+        application._filter.set_rows(application._loader.rows)
         application.refresh_table()
         panel.dist_canvas.draw()
         bar = next(b for b in panel._current_dist_bars if b.label == "11")
