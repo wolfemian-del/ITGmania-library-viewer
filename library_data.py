@@ -94,8 +94,10 @@ __all__ = [
     "format_duration",
     "format_geometry",
     "format_new_course",
+    "format_refresh_time",
     "get_active_chart_filters",
     "grade_sort_key",
+    "invalid_paths_note",
     "looks_like_song_tree",
     "match_chart_query",
     "merge_scores",
@@ -205,6 +207,13 @@ def format_bpm_display(displaybpm: str | None, bpm_min, bpm_max) -> str:
     if bpm_min is None or bpm_max is None or bpm_min == "" or bpm_max == "":
         return ""
     return _format_bpm_pair(float(bpm_min), float(bpm_max))
+
+
+def format_refresh_time(value):
+    try:
+        return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        return "unknown"
 
 
 def _format_bpm_number(value: float) -> str:
@@ -561,6 +570,18 @@ def first_existing_directory(candidates) -> Path | None:
         if candidate.is_dir():
             return candidate
     return None
+
+
+def invalid_paths_note(cache, stats):
+    """The note naming whichever of the two paths cannot be used."""
+    cache_ok, stats_ok = cache.is_dir(), stats.is_file()
+    if cache_ok and stats_ok:
+        return ""
+    if not cache_ok and not stats_ok:
+        return "The cache folder and Stats.xml were not found. Choose new paths."
+    if not cache_ok:
+        return "The cache folder was not found. Choose a new Cache / Songs folder."
+    return "The Stats.xml file was not found. Choose a new Player Stats.xml."
 
 
 # The library snapshot (proposal 0008): SnapshotStore owns library_cache.json.

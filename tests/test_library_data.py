@@ -2460,6 +2460,63 @@ class NonFiniteFormatTests(unittest.TestCase):
                 self.assertEqual(rows[0]["BPM"], "")
 
 
+class FormatRefreshTimeTests(unittest.TestCase):
+    """format_refresh_time: an ISO timestamp in, a display string out."""
+
+    def test_naive_iso_renders_as_local_date_and_time(self):
+        # A naive timestamp is read as local time, so the wall time is
+        # unchanged by astimezone() whatever the timezone.
+        self.assertEqual(
+            data.format_refresh_time("2026-11-14T10:30:00"), "2026-11-14 10:30")
+
+    def test_date_only_renders_at_midnight(self):
+        self.assertEqual(
+            data.format_refresh_time("2026-11-14"), "2026-11-14 00:00")
+
+    def test_unparseable_is_unknown(self):
+        for value in (None, "", "not-a-date"):
+            with self.subTest(value=value):
+                self.assertEqual(data.format_refresh_time(value), "unknown")
+
+
+class InvalidPathsNoteTests(unittest.TestCase):
+    """The Data paths note naming whichever path cannot be used."""
+
+    def test_both_usable_is_empty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache" / "Songs"
+            cache_dir.mkdir(parents=True)
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>")
+            self.assertEqual(data.invalid_paths_note(cache_dir, stats_file), "")
+
+    def test_cache_only_names_the_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stats_file = root / "Stats.xml"
+            stats_file.write_text("<Stats/>")
+            note = data.invalid_paths_note(root / "Cache" / "Songs", stats_file)
+            self.assertIn("cache folder", note)
+            self.assertNotIn("Stats.xml", note)
+
+    def test_stats_only_names_stats(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "Cache" / "Songs"
+            cache_dir.mkdir(parents=True)
+            note = data.invalid_paths_note(cache_dir, root / "Stats.xml")
+            self.assertIn("Stats.xml", note)
+            self.assertNotIn("cache folder", note)
+
+    def test_both_missing_names_both(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            note = data.invalid_paths_note(root / "Cache" / "Songs", root / "Stats.xml")
+            self.assertIn("cache folder", note)
+            self.assertIn("Stats.xml", note)
+
+
 class DpiScaleTests(unittest.TestCase):
     """Display scaling (issue #51): the factor probe, pixel/geometry scaling, and the awareness call."""
 
