@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft — for review (Revision 2, 2026-11-14) |
+| **Status** | Accepted (2026-11-14) |
 | **Author** | Muse (Muse Spark 1.3) |
 | **Date** | 2026-11-13 |
 | **Base** | main `c3fb7e3` (after PR #158 merged; Ruff adopted, guards merged) |
@@ -11,6 +11,8 @@
 ---
 
 Revision 2 folds in Claude's review on head `83c40512` (PR #161) and adopts its recommendations, which the owner approved: the filter splits out as its own component (Q1 — four components, six PRs), and the handlers' engine half moves into the loader (Q2). It also folds in Claude's corrections: the sort/column rebinding hazard (the table owns `sort_keys`, `column_order`, and `column_widths` and exposes a `layout_state()` accessor), the `load_cached_data` no-snapshot refresh path (`on_nothing_loaded`), `_format_refresh_time` as a Step 2 extraction, `settings_store` staying in the shell, and `_set_sync_menu_state` staying in the app (the loader move is 19 methods, not 21). Q4 is decided: keep `refresh_table` through the move PRs (ChatGPT-6 and Claude, against GLM). Revision 1 folded in the ChatGPT-6, GLM, and Grok reviews (§2 corrections, the Loader owning the load-result state, the dialog dropping `combo_factory`, the table dropping `default_column_widths` and `tree_tint`).
+
+Accepted 2026-11-14. Reviewed by Claude, ChatGPT-6, Grok, and GLM (all on head `83c40512`, PR #161). Resolutions: Q1 — the filter splits out as its own component (Claude's recommendation, adopted by the owner; GLM dissented, preferring the filter inside the table); Q2 — the handlers' engine half moves into the loader (Claude's recommendation, adopted; GLM's middle ground noted); Q4 — keep `refresh_table` through the move PRs (ChatGPT-6 and Claude, against GLM). The rebinding hazard, the `load_cached_data` no-snapshot path, and the other corrections are folded into Revision 2. Note: PR #161 was merged before this formal acceptance; this change records the acceptance after the fact.
 
 In plain language: the main window class, `LibraryApp`, is the last big un-split piece of the app — one class with 74 methods that does the window, the table, the loading and syncing, and the dialogs. This proposal splits it into four standalone components, following the same pattern as the Course Builder, Advanced Search, and Distribution Panel: a Data Paths dialog, a background data engine (loading and syncing), a filter pipeline, and the table. Nothing the user sees changes. The filter is its own component because its inputs form a disjoint group from the table's, and because the three-component design has a constructor cycle between the table and the Distribution Panel that the split removes (§7, Q1).
 
